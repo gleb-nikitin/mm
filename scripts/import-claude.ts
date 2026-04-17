@@ -77,9 +77,18 @@ function decodeProjectDir(name: string): string {
 }
 
 function projectNameFromCwd(cwd: string | null | undefined): string {
+  // Display-friendly: last two path components (e.g. "code/mm").
   if (!cwd) return 'unknown';
   const parts = cwd.replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean);
   if (parts.length >= 2) return parts.slice(-2).join('/');
+  return parts[parts.length - 1] || 'unknown';
+}
+
+function projectSlugFromCwd(cwd: string | null | undefined): string {
+  // Storage-side slug: just the basename (e.g. "mm"). Used as the project
+  // column so raw/<source>/<project>/ stays tidy even for deep cwds.
+  if (!cwd) return 'unknown';
+  const parts = cwd.replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean);
   return parts[parts.length - 1] || 'unknown';
 }
 
@@ -289,18 +298,19 @@ async function main() {
       }
 
       const { title, body } = renderSession(session);
+      const projectSlug = projectSlugFromCwd(session.cwd);
       if (flags.dryRun) {
-        console.log(`  [dry-run] ${title} (${session.turns.length} turns)`);
+        console.log(`  [dry-run] ${title}  →  raw/claude/${projectSlug}/  (${session.turns.length} turns)`);
         imported++;
         continue;
       }
 
-      const res = addToBrain(body, title);
+      const res = addToBrain(body, title, { sourceType: 'claude', project: projectSlug });
       if (res.status === 'duplicate') {
         duplicate++;
       } else {
         imported++;
-        console.log(`  ✔ ${title}`);
+        console.log(`  ✔ ${title}  →  ${res.path}`);
       }
     }
   }

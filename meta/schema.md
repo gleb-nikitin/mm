@@ -4,11 +4,29 @@ This file defines how the brain is organized and how an agent should maintain it
 
 The brain has three layers:
 
-- `/raw/`: immutable source material
-- `/wiki/`: maintained knowledge pages
+- `/raw/`: immutable source material, organized as `raw/<source_type>/<project>/<file>.md`
+- `/wiki/`: maintained knowledge pages (flat, project-agnostic)
 - `/meta/`: navigation, rules, and operational logs
 
 The agent should treat markdown as the source of truth. SQLite is an index and job-state layer, not the canonical knowledge layer.
+
+## Raw-entry provenance
+
+Every raw entry is tagged with two orthogonal fields stored both in `raw_entries` (SQLite) and implied by the filesystem path:
+
+- **`source_type`** — the channel the material came from. Stable taxonomy:
+  - `claude` — Claude Code session transcripts
+  - `telegram` — Telegram chat exports
+  - `chains` — ac chain messages
+  - `docs` — project documentation
+  - `research` — research notes
+  - `knowledge` — curated knowledge-base entries
+  - `raw` — default for legacy / hand-added content
+- **`project`** — the domain slug, e.g. `mm`, `ac`, `claude-usage`. Proliferates.
+
+Filesystem layout mirrors these: `raw/<source_type>/<project>/<timestamp>.md`. Legacy flat files under `raw/*.md` are read as `source_type='raw'`, `project='unknown'`.
+
+Search and query endpoints accept optional `source_types` and `projects` filters; when either is set the wiki FTS arm is skipped and only raw-owned chunks participate (wiki pages are compiled truth and not scoped to a single project).
 
 ## Operating Rules
 

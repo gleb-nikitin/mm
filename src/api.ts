@@ -14,13 +14,26 @@ const HELP_MD = `# Brain API v0.7.3
 Endpoints:
 - \`/\`: Web UI (aurora theme).
 - \`/help\`: This markdown endpoint list.
-- \`/query?q=<question>\`: Ask a synthesis question.
+- \`/query?q=<question>[&source=a,b&project=x,y]\`: Ask a synthesis question, optionally scoped.
 - \`/validate?q=<claim>\`: Fact-check a specific claim.
 - \`/wiki/:slug\`: Read a specific wiki page.
 - \`/stats\`: High-level brain statistics.
-- \`/search?q=<query>\`: Hybrid search results.
-- \`/add\`: POST { content, title } or GET ?c=...&t=... to add raw snippets.
+- \`/search?q=<query>[&source=a,b&project=x,y]\`: Hybrid search, optionally scoped.
+- \`/add\`: POST { content, title, source_type?, project? } or GET ?c=...&t=...&source=...&project=...
+
+Scoping params:
+- \`source\`: comma-separated source_types (claude, telegram, chains, docs, research, knowledge).
+- \`project\`: comma-separated project slugs (mm, ac, ...).
+When either filter is set, wiki search is skipped — results come from raw-entry chunks only.
 `;
+
+function parseSearchOpts(url: URL) {
+  const splitCsv = (s: string | null) => s ? s.split(',').map(x => x.trim()).filter(Boolean) : [];
+  return {
+    sourceTypes: splitCsv(url.searchParams.get("source")),
+    projects:    splitCsv(url.searchParams.get("project")),
+  };
+}
 
 async function serveUiFile(relPath: string): Promise<Response> {
   const absPath = path.resolve(UI_DIR, '.' + relPath);
@@ -49,7 +62,7 @@ const server = Bun.serve({
     if (url.pathname === "/query") {
       const q = url.searchParams.get("q") || "";
       if (!q) return new Response("Missing 'q' parameter", { status: 400 });
-      const res = await queryBrain(q);
+      const res = await queryBrain(q, parseSearchOpts(url));
       return new Response(res.stdout || res.stderr, { headers: { "Content-Type": "text/markdown" } });
     }
 
@@ -84,12 +97,16 @@ const server = Bun.serve({
 
     if (url.pathname === "/search") {
       const q = url.searchParams.get("q") || "";
-      const results = await hybridSearch(q);
+      const opts = parseSearchOpts(url);
+      const results = await hybridSearch(q, 10, opts);
       let md = `# Search Results for "${q}"\n\n`;
       if (results.length === 0) md += "No results found.";
       else {
         results.forEach(r => {
-          md += `- [${r.source.toUpperCase()}] [[${r.slug || r.title}|${r.title}]] (score: ${r.score.toFixed(3)})\n`;
+          const provenance = r.source_type || r.project
+            ? ` {${r.source_type || '-'}/${r.project || '-'}}`
+            : '';
+          md += `- [${r.source.toUpperCase()}]${provenance} [[${r.slug || r.title}|${r.title}]] (score: ${r.score.toFixed(3)})\n`;
           md += `  > ${r.snippet.replace(/\n/g, ' ')}\n\n`;
         });
       }
@@ -99,16 +116,22 @@ const server = Bun.serve({
     if (url.pathname === "/add") {
       let content = "";
       let title = "";
+      let sourceType: string | undefined;
+      let project: string | undefined;
       if (req.method === "POST") {
         const body = await req.json() as any;
-        content = body.content;
-        title = body.title;
+        content    = body.content;
+        title      = body.title;
+        sourceType = body.source_type;
+        project    = body.project;
       } else {
-        content = url.searchParams.get("c") || "";
-        title = url.searchParams.get("t") || "";
+        content    = url.searchParams.get("c") || "";
+        title      = url.searchParams.get("t") || "";
+        sourceType = url.searchParams.get("source") || undefined;
+        project    = url.searchParams.get("project") || undefined;
       }
       if (!content) return new Response("Missing content", { status: 400 });
-      const res = addToBrain(content, title);
+      const res = addToBrain(content, title, { sourceType, project });
       if (res.status === 'duplicate') return new Response("⚠️ Duplicate content detected.", { status: 200 });
       return new Response(`✅ Saved as raw entry.`, { status: 200 });
     }

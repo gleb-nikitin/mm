@@ -49,7 +49,15 @@ export function initDb() {
   // v3: Chunks
   db.run(`CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_type TEXT NOT NULL CHECK(owner_type IN ('wiki', 'raw')), page_slug TEXT, raw_id INTEGER, chunk_type TEXT NOT NULL, text TEXT NOT NULL, embedding BLOB, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(page_slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE, FOREIGN KEY(raw_id) REFERENCES raw_entries(id) ON DELETE CASCADE, CHECK ((owner_type = 'wiki' AND page_slug IS NOT NULL AND raw_id IS NULL) OR (owner_type = 'raw' AND raw_id IS NOT NULL AND page_slug IS NULL)));`);
 
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 3)');
+  // v4: raw-entry provenance columns (source_type: channel, project: domain)
+  const rawCols = db.prepare(`PRAGMA table_info(raw_entries)`).all() as Array<{ name: string }>;
+  const colNames = new Set(rawCols.map(c => c.name));
+  if (!colNames.has('source_type')) db.run(`ALTER TABLE raw_entries ADD COLUMN source_type TEXT NOT NULL DEFAULT 'raw'`);
+  if (!colNames.has('project'))     db.run(`ALTER TABLE raw_entries ADD COLUMN project TEXT NOT NULL DEFAULT 'unknown'`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_raw_source_type ON raw_entries(source_type)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_raw_project     ON raw_entries(project)`);
+
+  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 4)');
 }
 
 // --- Common Logic ---
@@ -118,16 +126,53 @@ export type SearchResult = {
   score: number;
   snippet: string;
   source: 'wiki' | 'raw';
+  source_type?: string;
+  project?: string;
 };
 
-export async function hybridSearch(query: string, limit: number = 10): Promise<SearchResult[]> {
+export type SearchOpts = {
+  sourceTypes?: string[];
+  projects?: string[];
+};
+
+export async function hybridSearch(query: string, limit: number = 10, opts: SearchOpts = {}): Promise<SearchResult[]> {
+  const sourceTypes = opts.sourceTypes && opts.sourceTypes.length > 0 ? opts.sourceTypes : null;
+  const projects    = opts.projects    && opts.projects.length    > 0 ? opts.projects    : null;
+  const hasFilters  = sourceTypes !== null || projects !== null;
+
   const queryEmbedding = await embed(query);
-  const ftsResults = db.prepare(`SELECT slug, title, content, bm25(search_index) as rank FROM search_index WHERE search_index MATCH ? ORDER BY rank LIMIT 50`).all(`"${query}"`) as any[];
-  
+
+  // FTS runs over the wiki search_index only. Wiki pages are project-agnostic
+  // compiled truth, so hard source/project filters skip the wiki arm entirely.
+  const ftsResults: any[] = hasFilters
+    ? []
+    : db.prepare(`SELECT slug, title, content, bm25(search_index) as rank FROM search_index WHERE search_index MATCH ? ORDER BY rank LIMIT 50`).all(`"${query}"`) as any[];
+
   let vectorResults: any[] = [];
   if (queryEmbedding) {
     const queryBuffer = Buffer.from(queryEmbedding.buffer);
-    const chunks = db.prepare(`SELECT c.owner_type, c.page_slug, c.raw_id, c.chunk_type, c.text, c.embedding, COALESCE(w.title, r.title) as title FROM chunks c LEFT JOIN wiki_pages w ON c.page_slug = w.slug LEFT JOIN raw_entries r ON c.raw_id = r.id WHERE c.embedding IS NOT NULL`).all() as any[];
+    let sql = `SELECT c.owner_type, c.page_slug, c.raw_id, c.chunk_type, c.text, c.embedding,
+                      COALESCE(w.title, r.title) as title,
+                      r.source_type as source_type,
+                      r.project as project
+               FROM chunks c
+               LEFT JOIN wiki_pages w ON c.page_slug = w.slug
+               LEFT JOIN raw_entries r ON c.raw_id = r.id
+               WHERE c.embedding IS NOT NULL`;
+    const params: any[] = [];
+    if (hasFilters) {
+      // Filters imply source provenance — only raw-owned chunks can match.
+      sql += ` AND c.owner_type = 'raw'`;
+      if (sourceTypes) {
+        sql += ` AND r.source_type IN (${sourceTypes.map(() => '?').join(',')})`;
+        params.push(...sourceTypes);
+      }
+      if (projects) {
+        sql += ` AND r.project IN (${projects.map(() => '?').join(',')})`;
+        params.push(...projects);
+      }
+    }
+    const chunks = db.prepare(sql).all(...params) as any[];
     vectorResults = chunks.map(c => {
       let cos_score = cosine_sim(c.embedding, queryBuffer);
       if (c.chunk_type === 'wiki_truth') cos_score += 0.1;
@@ -151,7 +196,15 @@ export async function hybridSearch(query: string, limit: number = 10): Promise<S
     const uid = getUid(r.owner_type, r.page_slug, r.raw_id);
     const score = 1 / (60 + index + 1);
     if (!rrfScores.has(uid)) {
-      rrfScores.set(uid, { slug: r.page_slug, title: r.title, score: 0, snippet: r.text, source: r.owner_type as 'wiki' | 'raw' });
+      rrfScores.set(uid, {
+        slug: r.page_slug,
+        title: r.title,
+        score: 0,
+        snippet: r.text,
+        source: r.owner_type as 'wiki' | 'raw',
+        source_type: r.source_type || undefined,
+        project: r.project || undefined,
+      });
     }
     const current = rrfScores.get(uid)!;
     current.score += score;
@@ -199,11 +252,11 @@ export async function runGemini(prompt: string, yolo: boolean = false) {
   }
 }
 
-export async function queryBrain(question: string) {
+export async function queryBrain(question: string, opts: SearchOpts = {}) {
   const hasEmbeddings = (db.prepare('SELECT COUNT(*) as count FROM chunks WHERE embedding IS NOT NULL').get() as any).count > 0;
   let context = "";
   if (hasEmbeddings) {
-    const results = await hybridSearch(question, 10);
+    const results = await hybridSearch(question, 10, opts);
     const wikiHits = results.filter(r => r.source === 'wiki');
     const rawHits = results.filter(r => r.source === 'raw');
     if (wikiHits.length > 0) {
@@ -235,8 +288,8 @@ export async function queryBrain(question: string) {
   return runGemini(prompt);
 }
 
-export async function validateClaim(claim: string) {
-  const results = await hybridSearch(claim, 5);
+export async function validateClaim(claim: string, opts: SearchOpts = {}) {
+  const results = await hybridSearch(claim, 5, opts);
   let context = "";
   for (const r of results) {
     if (r.source === 'wiki' && r.slug) {
@@ -250,17 +303,28 @@ export async function validateClaim(claim: string) {
   return runGemini(prompt);
 }
 
-export function addToBrain(content: string, title?: string) {
+export type AddOpts = {
+  sourceType?: string;
+  project?: string;
+};
+
+export function addToBrain(content: string, title?: string, opts: AddOpts = {}) {
+  const sourceType = (opts.sourceType || 'raw').trim() || 'raw';
+  const project    = (opts.project    || 'unknown').trim() || 'unknown';
   const hash = getHash(content);
   if (db.prepare('SELECT 1 FROM raw_entries WHERE hash = ?').get(hash)) {
     return { status: 'duplicate', title: '', path: '' };
   }
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const filename = `${timestamp}.md`;
-  const filePath = path.join(PATHS.raw, filename);
+  // Layout: raw/<source_type>/<project>/<timestamp>.md
+  const dirPath  = path.join(PATHS.raw, sourceType, project);
+  if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+  const filePath = path.join(dirPath, filename);
   const finalTitle = title || `Entry ${timestamp}`;
   fs.writeFileSync(filePath, `# ${finalTitle}\n\nAdded: ${new Date().toLocaleString()}\n\n---\n\n${content}`);
-  db.prepare('INSERT INTO raw_entries (title, content, source_path, hash) VALUES (?, ?, ?, ?)').run(finalTitle, content, filePath, hash);
+  db.prepare('INSERT INTO raw_entries (title, content, source_path, hash, source_type, project) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(finalTitle, content, filePath, hash, sourceType, project);
   return { status: 'saved', title: finalTitle, path: filePath };
 }
 

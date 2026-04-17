@@ -60,6 +60,7 @@ Code lives in `src/`. Data dirs sit at repo root by default but any directory wi
 - Phase 6 (external surface refresh): committed and verified. API and MCP share `core.ts`, both call `initDb()`, no CLI shell-outs.
 - Structural cleanup + `src/` move: committed (`c210c1e`).
 - Aurora web UI + async Gemini (no event-loop blocking): committed (`ed3eaf2`).
+- Source-separation (raw/type/project taxonomy + filtered retrieval): landed.
 - Two-track plan named: Light (this repo) + Hardcore (Rust on ac shell + tabularium).
 
 ## Near-term direction

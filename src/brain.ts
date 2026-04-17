@@ -26,18 +26,53 @@ function internalRecordClaim(slug: string, claim: string, raw_id: number) {
   db.prepare(`UPDATE wiki_pages SET source_count = (SELECT COUNT(DISTINCT raw_id) FROM claim_sources WHERE claim_id IN (SELECT id FROM claims WHERE wiki_slug = ?)) WHERE slug = ?`).run(slug, slug);
 }
 
+function collectRawFiles(): string[] {
+  // Recursive scan. Layout: raw/<source_type>/<project>/<file>.md
+  // Legacy files sitting flat under raw/ are still picked up.
+  const out: string[] = [];
+  function walk(dir: string) {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.isFile() && e.name.endsWith('.md')) out.push(p);
+    }
+  }
+  walk(PATHS.raw);
+  return out;
+}
+
+function deriveProvenance(filePath: string): { sourceType: string; project: string } {
+  // Path shape: <PATHS.raw>/<sourceType>/<project>/<file>.md  → nested
+  // Or:        <PATHS.raw>/<file>.md                           → legacy flat
+  const rel = path.relative(PATHS.raw, filePath);
+  const parts = rel.split(path.sep);
+  if (parts.length >= 3) {
+    return { sourceType: parts[0], project: parts[1] };
+  }
+  return { sourceType: 'raw', project: 'unknown' };
+}
+
 function internalRebuildIndex() {
   console.log('🏗️ Syncing index...');
-  const rawFiles = fs.readdirSync(PATHS.raw).filter(f => f.endsWith('.md'));
+  const rawFiles = collectRawFiles();
   const foundRawPaths = new Set<string>();
-  for (const file of rawFiles) {
-    const filePath = path.join(PATHS.raw, file);
+  for (const filePath of rawFiles) {
     foundRawPaths.add(filePath);
     const content = fs.readFileSync(filePath, 'utf-8');
     const titleMatch = content.match(/^# (.*)/);
-    const title = titleMatch ? titleMatch[1] : file;
+    const title = titleMatch ? titleMatch[1] : path.basename(filePath);
     const hash = getHash(content);
-    db.prepare(`INSERT INTO raw_entries (title, content, source_path, hash) VALUES (?, ?, ?, ?) ON CONFLICT(source_path) DO UPDATE SET title = excluded.title, content = excluded.content, hash = excluded.hash`).run(title, content, filePath, hash);
+    const { sourceType, project } = deriveProvenance(filePath);
+    db.prepare(`INSERT INTO raw_entries (title, content, source_path, hash, source_type, project)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_path) DO UPDATE SET
+                  title = excluded.title,
+                  content = excluded.content,
+                  hash = excluded.hash,
+                  source_type = excluded.source_type,
+                  project = excluded.project`).run(title, content, filePath, hash, sourceType, project);
   }
   const allRaw = db.prepare('SELECT id, source_path FROM raw_entries').all() as any[];
   for (const r of allRaw) if (!foundRawPaths.has(r.source_path)) db.prepare('DELETE FROM raw_entries WHERE id = ?').run(r.id);
