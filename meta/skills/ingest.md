@@ -9,66 +9,35 @@ Use this when new material has been added to `/raw/` and should be incorporated 
 
 ## Goal
 
-Turn raw material into durable wiki updates.
-
-Do not merely summarize the raw entry in chat. The output should be maintained files plus a log entry.
-
-## Read First
-
-1. `meta/schema.md`
-2. `meta/log.md`
-3. the target raw file
-4. candidate wiki pages discovered via filename, alias, or content search
+Turn raw material into durable wiki updates using the **New Page Model**.
 
 ## Workflow
 
-1. Read the raw entry carefully.
-2. Extract the durable subjects:
-   - people
-   - projects
-   - concepts
-   - products
-   - places
-3. Search `/wiki/` for existing pages:
-   - exact filename match
-   - alias match in frontmatter
-   - content mention using local search
-4. Decide for each subject:
-   - update existing page
-   - create new page
-   - skip as low-signal
-5. Write concise updates:
-   - summary if page is weak
-   - evidence bullets for new facts
-   - related links when clearly useful
-6. Ensure links use canonical targets from `meta/schema.md`.
-7. Append a one-line operation entry to `meta/log.md`.
+1. Read the raw entry and identify durable subjects.
+2. Search `/wiki/` for existing pages (exact slug or alias).
+3. For each subject, choose: **Create**, **Update**, or **Skip**.
+4. **Create Page**:
+   - Use `bun brain.ts page create`.
+   - Set `type`, `confidence`, `mentions`, and `tier`.
+   - Write the **Compiled Truth** in `## Summary`.
+   - Use `--source <id>` and `--claim "..."` flags.
+5. **Update Page**:
+   - Use `bun brain.ts page update`.
+   - Rewrite the **Compiled Truth** (Summary) to include new info.
+   - Append the new evidence bullet to the **Timeline** (below the `---` separator).
+   - Use `--source <id>` and `--claim "..."` flags.
+6. Append a log entry to `meta/log.md`.
 
-## Output Rules
+## New Model Rules
 
-- prefer updating one strong page over creating many weak pages
-- preserve chronology in evidence bullets when dates are known
-- include provenance in evidence text when possible
-- avoid speculative interpretation unless it is marked as such
-
-## Create A New Page Only If
-
-- the subject is clearly distinct
-- the subject is likely to recur
-- the new page will be useful for future retrieval
-
-## Do Not
-
-- rewrite or mutate raw files
-- create duplicate pages for aliases
-- invent citations or dates
-- use non-canonical wiki links
+- **Compiled Truth**: Always above the `---` separator. Represents current best understanding.
+- **Timeline**: Always below the `<!-- TIMELINE: ... -->` comment. Append-only bullets with `raw/` citations.
+- **Frontmatter**: Update `confidence`, `mentions`, and `tier` if significant new info is added.
 
 ## Completion Checklist
 
-- raw file read
-- candidate pages checked
-- page updates written
-- broken links avoided
-- `meta/log.md` appended
-
+- Raw file read and subjects identified.
+- Pages created or updated using the harness.
+- **Timeline preserved and appended to.**
+- **Summary (Truth) updated to reflect the new state.**
+- `meta/log.md` updated.

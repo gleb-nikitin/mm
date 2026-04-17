@@ -105,6 +105,17 @@ function initDb() {
     db.run('INSERT OR REPLACE INTO schema_version (version) VALUES (1)');
     currentVersion = 1;
   }
+
+  if (currentVersion < 2) {
+    console.log('🚀 Migrating to schema version 2: Adding type, confidence, mentions, tier...');
+    try { db.run('ALTER TABLE wiki_pages ADD COLUMN type TEXT;'); } catch (e) {}
+    try { db.run('ALTER TABLE wiki_pages ADD COLUMN confidence REAL DEFAULT 0.5;'); } catch (e) {}
+    try { db.run('ALTER TABLE wiki_pages ADD COLUMN mentions INTEGER DEFAULT 1;'); } catch (e) {}
+    try { db.run('ALTER TABLE wiki_pages ADD COLUMN tier INTEGER DEFAULT 3;'); } catch (e) {}
+    
+    db.run('INSERT OR REPLACE INTO schema_version (version) VALUES (2)');
+    currentVersion = 2;
+  }
 }
 
 initDb();
@@ -127,7 +138,6 @@ function internalRecordClaim(slug: string, claim: string, raw_id: number) {
   const claim_id = res.lastInsertRowid;
   db.prepare('INSERT INTO claim_sources (claim_id, raw_id) VALUES (?, ?)').run(claim_id, raw_id);
   
-  // Update source count based on actual unique raw sources
   db.prepare(`
     UPDATE wiki_pages 
     SET source_count = (
@@ -142,7 +152,6 @@ function internalRecordClaim(slug: string, claim: string, raw_id: number) {
 function internalRebuildIndex() {
   console.log('🏗️ Syncing search and relational index...');
   
-  // 1. Sync Raw Entries (UPSERT)
   const rawFiles = fs.readdirSync('raw').filter(f => f.endsWith('.md'));
   const foundRawPaths = new Set<string>();
   
@@ -154,7 +163,6 @@ function internalRebuildIndex() {
     const title = titleMatch ? titleMatch[1] : file;
     const hash = getHash(content);
 
-    // processed is only set to 1 if it's a NEW entry discovered on disk
     db.prepare(`
       INSERT INTO raw_entries (title, content, source_path, hash, processed)
       VALUES (?, ?, ?, ?, 1)
@@ -165,7 +173,6 @@ function internalRebuildIndex() {
     `).run(title, content, filePath, hash);
   }
 
-  // Sweep missing raw entries (that were deleted from disk)
   const allRaw = db.prepare('SELECT id, source_path FROM raw_entries').all() as any[];
   for (const r of allRaw) {
     if (!foundRawPaths.has(r.source_path)) {
@@ -173,12 +180,10 @@ function internalRebuildIndex() {
     }
   }
 
-  // 2. Sync Wiki Pages
   const wikiFiles = fs.readdirSync('wiki').filter(f => f.endsWith('.md'));
   const foundSlugs = new Set<string>();
   const allLinks: { source: string, target: string }[] = [];
 
-  // Clear transient junction tables and search index
   db.run('DELETE FROM wiki_aliases');
   db.run('DELETE FROM wiki_links');
   db.run('DELETE FROM search_index');
@@ -199,14 +204,18 @@ function internalRebuildIndex() {
         const summary = summaryMatch ? summaryMatch[1].trim() : '';
 
         db.prepare(`
-          INSERT INTO wiki_pages (slug, title, tags, status, source_count, summary, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO wiki_pages (slug, title, tags, status, source_count, summary, type, confidence, mentions, tier, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(slug) DO UPDATE SET
             title = excluded.title,
             tags = excluded.tags,
             status = excluded.status,
             source_count = excluded.source_count,
             summary = excluded.summary,
+            type = excluded.type,
+            confidence = excluded.confidence,
+            mentions = excluded.mentions,
+            tier = excluded.tier,
             updated_at = excluded.updated_at
         `).run(
           slug,
@@ -215,6 +224,10 @@ function internalRebuildIndex() {
           String(frontmatter.status || 'active'),
           Number(frontmatter.source_count || 0),
           summary,
+          String(frontmatter.type || 'concept'),
+          Number(frontmatter.confidence || 0.5),
+          Number(frontmatter.mentions || 1),
+          Number(frontmatter.tier || 3),
           String(frontmatter.created_at || new Date().toISOString()),
           String(frontmatter.updated_at || new Date().toISOString())
         );
@@ -240,7 +253,6 @@ function internalRebuildIndex() {
     }
   }
 
-  // Sweep missing wiki pages (this WILL cascade to claims, which is correct if file is gone)
   const allPages = db.prepare('SELECT slug FROM wiki_pages').all() as any[];
   for (const p of allPages) {
     if (!foundSlugs.has(p.slug)) {
@@ -248,7 +260,6 @@ function internalRebuildIndex() {
     }
   }
 
-  // Restore links
   for (const { source, target } of allLinks) {
     try {
       db.prepare('INSERT OR IGNORE INTO wiki_links (source_slug, target_slug) VALUES (?, ?)').run(source, target);
@@ -259,7 +270,7 @@ function internalRebuildIndex() {
 
 function internalRebuildMarkdownIndex() {
   console.log('🏗️ Generating meta/index.md...');
-  const pages = db.prepare('SELECT slug, title, tags, summary FROM wiki_pages ORDER BY title ASC').all() as any[];
+  const pages = db.prepare('SELECT slug, title, tags, summary, type, confidence, tier FROM wiki_pages ORDER BY title ASC').all() as any[];
   let content = "# Index\n\n";
   const byTag: Record<string, any[]> = {};
   for (const p of pages) {
@@ -270,7 +281,9 @@ function internalRebuildMarkdownIndex() {
   }
   for (const [tag, pgs] of Object.entries(byTag)) {
     content += `## ${tag.charAt(0).toUpperCase() + tag.slice(1)}\n\n`;
-    for (const p of pgs) { content += `- [[${p.slug}|${p.title}]]: ${p.summary || 'No summary available.'}\n`; }
+    for (const p of pgs) { 
+      content += `- [[${p.slug}|${p.title}]]: ${p.summary || 'No summary available.'} [${p.type}, ${p.confidence}, T${p.tier}]\n`; 
+    }
     content += "\n";
   }
   fs.writeFileSync(path.join('meta', 'index.md'), content);
@@ -377,7 +390,7 @@ program
       const initialWikiMtime = fs.readdirSync('wiki').reduce((max, f) => Math.max(max, fs.statSync(path.join('wiki', f)).mtimeMs), 0);
       const initialLogSize = fs.existsSync(path.join('meta', 'log.md')) ? fs.statSync(path.join('meta', 'log.md')).size : 0;
 
-      const prompt = `${ingestSkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n## RAW ENTRY\nID: ${entry.id}\nFile: ${entry.source_path}\nContent:\n${entry.content}\n\n# INSTRUCTIONS\nYou are an AI Librarian. Use 'bun brain.ts page create/update' with --source ${entry.id} and --claim "..." for every change.\n\nIF THE ENTRY IS LOW-SIGNAL (no durable facts): call 'bun brain.ts log-append "Skipped low-signal entry ${entry.id}"' and do nothing else.\n\nWhen finished, I will verify provenance and mark processed.`;
+      const prompt = `${ingestSkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n## RAW ENTRY\nID: ${entry.id}\nFile: ${entry.source_path}\nContent:\n${entry.content}\n\n# INSTRUCTIONS\nYou are an AI Librarian. Use 'bun brain.ts page create/update' for every change.\nAlways record provenance using --source ${entry.id} and --claim \"...\".\n\nWhen finished, I will verify provenance and mark processed.`;
       
       const result = runGemini(prompt, true);
       
@@ -396,21 +409,15 @@ program
         } else if (!wikiChanged && !logChanged && !claimsAdded) {
           console.warn(`⚠️ Warning: No action taken for "${entry.title}". Keeping in queue for manual review.`);
         } else {
-          // Success OR explicit skip via log-append
           db.prepare('UPDATE raw_entries SET processed = 1 WHERE id = ?').run(entry.id);
           console.log(`✅ Processed ${entry.title} (${finalClaims.count - initialClaims.count} claims added)`);
-          
           console.log('🔄 Refreshing metadata...');
           internalRebuildIndex();
           internalRebuildMarkdownIndex();
           internalRebuildTimeline();
-          
           const logMsg = `Processed raw entry ${entry.id} ("${entry.title}")`;
           db.prepare('INSERT INTO operations_log (operation, details) VALUES (?, ?)').run('process', logMsg);
-          // Only append to log file if it wasn't already changed by LLM
-          if (!logChanged) {
-            fs.appendFileSync(path.join('meta', 'log.md'), `- ${new Date().toISOString().split('T')[0]}: ${logMsg}\n`);
-          }
+          if (!logChanged) fs.appendFileSync(path.join('meta', 'log.md'), `- ${new Date().toISOString().split('T')[0]}: ${logMsg}\n`);
         }
       } else console.error(`❌ Failed to process ${entry.title}`);
     }
@@ -450,9 +457,13 @@ page
   .command('create')
   .argument('<slug>', 'Slug')
   .argument('<title>', 'Title')
-  .option('-c, --content <content>', 'Content', '')
+  .option('-c, --content <content>', 'Truth content', '')
   .option('-t, --tags <tags>', 'Tags', '')
   .option('-a, --aliases <aliases>', 'Aliases', '')
+  .option('-y, --type <type>', 'Type (entity|concept|source|analysis)', 'concept')
+  .option('-f, --confidence <confidence>', 'Confidence 0.0-1.0', '0.5')
+  .option('-m, --mentions <mentions>', 'Mentions count', '1')
+  .option('-r, --tier <tier>', 'Tier 1-3', '3')
   .option('-s, --source <raw_id>', 'Raw source ID for provenance')
   .option('-k, --claim <claim>', 'Provenance claim text')
   .action((slug, title, options) => {
@@ -461,14 +472,43 @@ page
     const tags = options.tags ? options.tags.split(',').map((t: string) => t.trim()) : [];
     const aliases = options.aliases ? options.aliases.split(',').map((a: string) => a.trim()) : [];
     const createdAt = new Date().toISOString();
-    const frontmatter = ['---', `title: ${title}`, `slug: ${slug}`, `aliases: [${aliases.join(', ')}]`, `tags: [${tags.join(', ')}]`, 'status: active', `created_at: ${createdAt}`, `updated_at: ${createdAt}`, 'source_count: 0', '---', '', `# ${title}`, '', options.content].join('\n');
-    fs.writeFileSync(filePath, frontmatter);
     
-    // Internal index update (temp, will be fully synced later)
-    db.prepare('INSERT OR REPLACE INTO wiki_pages (slug, title, tags, status, source_count, summary, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?)')
-      .run(slug, title, JSON.stringify(tags), 'active', '', createdAt, createdAt);
+    const frontmatter = {
+      title,
+      slug,
+      aliases,
+      tags,
+      type: options.type,
+      confidence: Number(options.confidence),
+      mentions: Number(options.mentions),
+      tier: Number(options.tier),
+      status: 'active',
+      created_at: createdAt,
+      updated_at: createdAt,
+      source_count: options.source ? 1 : 0
+    };
 
+    const body = [
+      '---',
+      yaml.dump(frontmatter).trim(),
+      '---',
+      '',
+      `# ${title}`,
+      '',
+      '## Summary',
+      options.content,
+      '',
+      '## Cross-References',
+      '',
+      '---',
+      '<!-- TIMELINE: append-only below this line -->'
+    ].join('\n');
+
+    fs.writeFileSync(filePath, body);
+    
     if (options.source && options.claim) {
+      // Rebuild index first so the page exists for foreign key
+      internalRebuildIndex();
       internalRecordClaim(slug, options.claim, Number(options.source));
     }
     console.log(`✅ Created ${slug}`);
@@ -481,10 +521,44 @@ page
   .option('-t, --title <title>', 'Title')
   .option('-s, --source <raw_id>', 'Raw source ID for provenance')
   .option('-k, --claim <claim>', 'Provenance claim text')
+  .option('--section <section>', 'Section to update (truth|timeline)', 'truth')
   .action((slug, content, options) => {
     const filePath = path.join('wiki', `${slug}.md`);
     if (!fs.existsSync(filePath)) { console.error(`❌ Not found`); process.exit(1); }
-    fs.writeFileSync(filePath, content);
+    
+    const fileContent = fs.readFileSync(filePath, 'utf-8');
+    const parts = fileContent.split('---');
+    if (parts.length < 3) { console.error(`❌ Invalid page format`); process.exit(1); }
+    
+    const timelineSplit = fileContent.split('<!-- TIMELINE: append-only below this line -->');
+    const headerAndTruth = timelineSplit[0];
+    const existingTimeline = timelineSplit[1] || '';
+
+    if (options.section === 'truth') {
+      // LLM provides full file OR just truth?
+      // "validate that existing timeline entries are preserved"
+      // Let's assume content is the NEW truth part if we use --section
+      // But if it's the full file, we must extract and compare.
+      
+      // Best approach: If content contains the timeline comment, it's a full file.
+      if (content.includes('<!-- TIMELINE: append-only below this line -->')) {
+        const newTimeline = content.split('<!-- TIMELINE: append-only below this line -->')[1];
+        if (existingTimeline.trim() && !newTimeline.includes(existingTimeline.trim())) {
+          console.error(`❌ ERROR: Timeline preservation failed. Original timeline must be kept.`);
+          process.exit(1);
+        }
+        fs.writeFileSync(filePath, content);
+      } else {
+        // Just updating truth
+        const newContent = headerAndTruth.split('## Summary')[0] + '## Summary\n' + content + '\n\n' + '---' + '\n' + '<!-- TIMELINE: append-only below this line -->' + existingTimeline;
+        fs.writeFileSync(filePath, newContent);
+      }
+    } else {
+      // Appending to timeline
+      const newContent = headerAndTruth + '<!-- TIMELINE: append-only below this line -->' + existingTimeline + '\n' + content;
+      fs.writeFileSync(filePath, newContent);
+    }
+
     if (options.source && options.claim) {
       internalRecordClaim(slug, options.claim, Number(options.source));
     }
