@@ -166,7 +166,7 @@ program.command('process').action(async () => {
     const initialClaims = db.prepare('SELECT COUNT(*) as count FROM claim_sources WHERE raw_id = ?').get(entry.id) as any;
     const initialWikiMtime = fs.readdirSync(PATHS.wiki).reduce((max, f) => Math.max(max, fs.statSync(path.join(PATHS.wiki, f)).mtimeMs), 0);
     const prompt = `${ingestSkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n## RAW ENTRY\nID: ${entry.id}\nFile: ${entry.source_path}\nContent:\n${entry.content}\n\n# INSTRUCTIONS\nYou are an AI Librarian. Use 'bun run brain page create/update' with --source ${entry.id} and --claim \"...\".`;
-    const result = runGemini(prompt, true);
+    const result = await runGemini(prompt, true);
     if (result.status === 0) {
       const finalClaims = db.prepare('SELECT COUNT(*) as count FROM claim_sources WHERE raw_id = ?').get(entry.id) as any;
       const finalWikiMtime = fs.readdirSync(PATHS.wiki).reduce((max, f) => Math.max(max, fs.statSync(path.join(PATHS.wiki, f)).mtimeMs), 0);

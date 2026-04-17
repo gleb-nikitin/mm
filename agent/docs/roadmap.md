@@ -50,7 +50,7 @@ Tracked in `meta/remaining-gaps.md`. Summary:
 
 ## Near-term direction
 
-No feature work scheduled. Before any next feature:
+No feature work scheduled. Next deferred work is tracked in `agent/docs/todo.md` — tests first, then a readability pass on `src/brain.ts`, then the architectural refactor. Before any next feature:
 
 - keep the CLI/API/MCP surfaces stable
 - keep bootstrap reliable on fresh `MT_BRAIN_ROOT`

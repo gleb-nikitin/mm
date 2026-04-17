@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mnemonic51</title>
+  <style>
+    :root {
+      --bg: #0a0e14;
+      --panel-bg: rgba(255, 255, 255, 0.035);
+      --panel-border: rgba(255, 255, 255, 0.08);
+      --text: #e6edf3;
+      --text-muted: rgba(230, 237, 243, 0.5);
+      --accent: #7ec8e3;
+      --accent-2: #b794f6;
+      --accent-glow: rgba(126, 200, 227, 0.15);
+      --blur: 16px;
+      --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-6: 24px;
+      --r: 8px;
+      --f: 'Monaco', 'Menlo', 'Consolas', monospace;
+      --tr: 150ms ease-out;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { margin: 0; padding: 0; min-height: 100vh; }
+
+    body {
+      background:
+        radial-gradient(ellipse 800px 600px at 15% 10%, rgba(126, 200, 227, 0.10) 0%, transparent 55%),
+        radial-gradient(ellipse 700px 500px at 85% 90%, rgba(183, 148, 246, 0.10) 0%, transparent 55%),
+        radial-gradient(ellipse 600px 400px at 70% 20%, rgba(94, 234, 212, 0.05) 0%, transparent 50%),
+        var(--bg);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: var(--f);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      max-width: 820px;
+      margin: 0 auto;
+      padding: var(--sp-6) var(--sp-4);
+      gap: var(--sp-4);
+      min-height: 100vh;
+    }
+
+    .title {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.28em;
+      color: var(--accent);
+      text-shadow: 0 0 12px var(--accent-glow);
+      padding: 0 var(--sp-2);
+      margin-bottom: var(--sp-2);
+    }
+
+    .panel {
+      background: var(--panel-bg);
+      backdrop-filter: blur(var(--blur));
+      -webkit-backdrop-filter: blur(var(--blur));
+      border: 1px solid var(--panel-border);
+      border-radius: var(--r);
+      box-shadow:
+        0 4px 32px rgba(0, 0, 0, 0.35),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    .input-row {
+      display: flex;
+      gap: var(--sp-2);
+      padding: var(--sp-2);
+    }
+
+    input[type=text] {
+      flex: 1;
+      min-width: 0;
+      padding: var(--sp-3) var(--sp-4);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--r);
+      font-family: var(--f);
+      font-size: 14px;
+      color: var(--text);
+      outline: none;
+      transition: border-color var(--tr);
+    }
+    input[type=text]:focus { border-color: var(--panel-border); }
+    input[type=text]::placeholder { color: var(--text-muted); }
+
+    .btn {
+      padding: var(--sp-2) var(--sp-4);
+      background: transparent;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      font-family: var(--f);
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: var(--r);
+      cursor: pointer;
+      box-shadow: inset 0 0 12px var(--accent-glow);
+      transition: background var(--tr);
+      letter-spacing: 0.04em;
+    }
+    .btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.04); }
+    .btn:disabled { opacity: 0.35; cursor: default; }
+
+    .results { padding: var(--sp-2); display: flex; flex-direction: column; gap: 2px; }
+    .result {
+      padding: var(--sp-3) var(--sp-4);
+      border-radius: var(--r);
+      cursor: pointer;
+      transition: background var(--tr);
+    }
+    .result:hover { background: rgba(255, 255, 255, 0.035); }
+    .result-line1 { display: flex; align-items: baseline; gap: var(--sp-2); }
+    .result-source {
+      font-size: 11px;
+      color: var(--accent);
+      opacity: 0.7;
+      letter-spacing: 0.1em;
+      font-weight: 600;
+    }
+    .result-title { color: var(--text); font-weight: 600; }
+    .result-score { color: var(--text-muted); font-size: 11px; margin-left: auto; }
+    .result-snippet {
+      color: var(--text-muted);
+      margin-top: var(--sp-1);
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .output {
+      padding: var(--sp-4) var(--sp-6);
+      font-size: 14px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      padding: var(--sp-2) var(--sp-4);
+      font-size: 12px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--panel-border);
+    }
+    .breadcrumb .sep { opacity: 0.4; }
+    .breadcrumb .crumb-link {
+      color: var(--accent);
+      cursor: pointer;
+    }
+    .breadcrumb .crumb-link:hover { text-decoration: underline; }
+
+    .spinner {
+      padding: var(--sp-4) var(--sp-6);
+      color: var(--text-muted);
+      font-style: italic;
+    }
+    .spinner::after {
+      content: '';
+      display: inline-block;
+      width: 2.5em;
+      text-align: left;
+      animation: dots 1.4s steps(4, end) infinite;
+    }
+    @keyframes dots {
+      0%, 20% { content: ''; }
+      40% { content: '·'; }
+      60% { content: '··'; }
+      80%, 100% { content: '···'; }
+    }
+    .spinner::after { content: '···'; }
+
+    .empty-hint {
+      padding: var(--sp-4) var(--sp-6);
+      color: var(--text-muted);
+      font-size: 13px;
+      font-style: italic;
+    }
+
+    /* markdown highlighting — adapted from ac/ui/apps/chains.html */
+    .md-mark { color: var(--text-muted); opacity: 0.35; }
+    .md-list { color: var(--accent); font-weight: 600; }
+    .md-h1 { font-size: 1.35em; font-weight: 700; color: var(--text); }
+    .md-h2 { font-size: 1.18em; font-weight: 700; color: var(--accent); }
+    .md-h3 { font-size: 1.08em; font-weight: 700; color: var(--accent); opacity: 0.85; }
+    .md-bold { color: var(--text); font-weight: 600; }
+    .md-code { color: var(--accent); }
+    .md-quote { color: var(--accent); opacity: 0.85; }
+    .md-hr {
+      display: block;
+      border-bottom: 1px solid var(--accent);
+      padding-bottom: var(--sp-2);
+      margin-bottom: var(--sp-2);
+      color: var(--text-muted);
+      opacity: 0.35;
+    }
+    .md-wikilink {
+      color: var(--accent-2);
+      text-decoration: none;
+      border-bottom: 1px dashed rgba(183, 148, 246, 0.35);
+      cursor: pointer;
+      transition: color var(--tr), border-color var(--tr);
+    }
+    .md-wikilink:hover {
+      color: var(--text);
+      border-bottom-color: var(--text);
+    }
+  </style>
+</head>
+<body>
+  <div class="app" x-data="app()" x-init="init()">
+    <div class="title">MNEMONIC·51</div>
+
+    <form class="panel input-row" @submit.prevent="ask()">
+      <input
+        type="text"
+        x-model="q"
+        @input.debounce.250ms="live()"
+        @keydown.escape="reset()"
+        placeholder="search, or ask a question and press enter…"
+        autofocus
+      />
+      <button type="submit" class="btn" :disabled="!q.trim() || busy">ask</button>
+    </form>
+
+    <template x-if="mode === 'empty'">
+      <div class="panel empty-hint">
+        type to search · press enter to ask a question · esc to clear
+      </div>
+    </template>
+
+    <template x-if="mode === 'search' && results.length > 0">
+      <div class="panel results">
+        <template x-for="r in results" :key="r.source + ':' + (r.slug || r.title)">
+          <div class="result" @click="openPage(r.slug, r.title)">
+            <div class="result-line1">
+              <span class="result-source" x-text="r.source"></span>
+              <span class="result-title" x-text="r.title"></span>
+              <span class="result-score" x-text="r.score.toFixed(3)"></span>
+            </div>
+            <div class="result-snippet" x-text="r.snippet"></div>
+          </div>
+        </template>
+      </div>
+    </template>
+
+    <template x-if="mode === 'search' && searched && results.length === 0 && q.trim()">
+      <div class="panel empty-hint">no results for "<span x-text="q"></span>"</div>
+    </template>
+
+    <template x-if="mode === 'answer'">
+      <div class="panel">
+        <div x-show="busy" class="spinner">thinking</div>
+        <div x-show="!busy" class="output" x-html="rendered(answer)" @click="onLinkClick($event)"></div>
+      </div>
+    </template>
+
+    <template x-if="page">
+      <div class="panel">
+        <div class="breadcrumb">
+          <span class="crumb-link" @click="page = ''; pageTitle = ''">← back</span>
+          <span class="sep">/</span>
+          <span x-text="pageTitle || pageSlug"></span>
+        </div>
+        <div class="output" x-html="rendered(page)" @click="onLinkClick($event)"></div>
+      </div>
+    </template>
+  </div>
+
+  <script src="/ui/alpine/cdn.min.js" defer></script>
+  <script>
+    function app() {
+      return {
+        q: '',
+        mode: 'empty',
+        results: [],
+        searched: false,
+        answer: '',
+        page: '',
+        pageSlug: '',
+        pageTitle: '',
+        busy: false,
+        liveSeq: 0,
+
+        init() {},
+
+        reset() {
+          this.q = '';
+          this.mode = 'empty';
+          this.results = [];
+          this.answer = '';
+          this.page = '';
+          this.pageSlug = '';
+          this.pageTitle = '';
+          this.searched = false;
+        },
+
+        async live() {
+          this.page = '';
+          this.pageSlug = '';
+          this.pageTitle = '';
+          const q = this.q.trim();
+          if (!q) {
+            this.mode = 'empty';
+            this.results = [];
+            this.searched = false;
+            return;
+          }
+          this.mode = 'search';
+          const seq = ++this.liveSeq;
+          try {
+            const r = await fetch('/search?q=' + encodeURIComponent(q));
+            const md = await r.text();
+            if (seq !== this.liveSeq) return;
+            this.results = parseSearch(md);
+            this.searched = true;
+          } catch (e) {
+            console.error(e);
+          }
+        },
+
+        async ask() {
+          const q = this.q.trim();
+          if (!q || this.busy) return;
+          this.mode = 'answer';
+          this.page = '';
+          this.pageSlug = '';
+          this.pageTitle = '';
+          this.busy = true;
+          this.answer = '';
+          try {
+            const r = await fetch('/query?q=' + encodeURIComponent(q));
+            this.answer = await r.text();
+          } catch (e) {
+            this.answer = '**Error:** ' + (e.message || e);
+          } finally {
+            this.busy = false;
+          }
+        },
+
+        async openPage(slug, title) {
+          if (!slug) return;
+          this.pageSlug = slug;
+          this.pageTitle = title || slug;
+          try {
+            const r = await fetch('/wiki/' + encodeURIComponent(slug));
+            if (r.ok) {
+              this.page = await r.text();
+            } else {
+              this.page = '**Page not found:** ' + slug;
+            }
+          } catch (e) {
+            this.page = '**Error loading page:** ' + slug;
+          }
+          window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        },
+
+        onLinkClick(evt) {
+          const el = evt.target.closest('.md-wikilink');
+          if (!el) return;
+          evt.preventDefault();
+          const slug = el.dataset.slug;
+          const title = el.textContent;
+          this.openPage(slug, title);
+        },
+
+        rendered(text) {
+          if (!text) return '';
+          const wiki = replaceWikilinks(text);
+          return highlightMd(wiki);
+        },
+      };
+    }
+
+    function replaceWikilinks(text) {
+      // [[Slug|Title]] first (greedy on title until ]])
+      text = text.replace(/\[\[([^\[\]|]+)\|([^\[\]]+)\]\]/g, (_, slug, title) => {
+        return '\u0001WL\u0001' + encodeURIComponent(slug) + '\u0001' + escapeHtml(title) + '\u0001/WL\u0001';
+      });
+      // [[Slug]]
+      text = text.replace(/\[\[([^\[\]|]+)\]\]/g, (_, slug) => {
+        return '\u0001WL\u0001' + encodeURIComponent(slug) + '\u0001' + escapeHtml(slug) + '\u0001/WL\u0001';
+      });
+      return text;
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function highlightMd(text) {
+      if (!text) return '';
+      // escape but preserve wikilink placeholders
+      const esc = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      let result = esc.split('\n').map(line => {
+        if (/^-{3,}\s*$/.test(line)) return '<span class="md-hr">' + line + '</span>';
+        if (/^\s*###\s/.test(line)) return line.replace(/^(\s*)(###)(\s)(.*)/, '$1<span class="md-mark">$2</span>$3<span class="md-h3">$4</span>');
+        if (/^\s*##\s/.test(line)) return line.replace(/^(\s*)(##)(\s)(.*)/, '$1<span class="md-mark">$2</span>$3<span class="md-h2">$4</span>');
+        if (/^\s*#\s/.test(line))  return line.replace(/^(\s*)(#)(\s)(.*)/,  '$1<span class="md-mark">$2</span>$3<span class="md-h1">$4</span>');
+        if (/^\s*&gt;\s/.test(line)) return line.replace(/^(\s*)(&gt;)(\s)(.*)/, '$1<span class="md-mark">$2</span>$3<span class="md-quote">$4</span>');
+        if (/^(\s*)-\s/.test(line)) return line.replace(/^(\s*)(-)(\s)(.*)/, '$1<span class="md-list">$2</span>$3$4');
+        if (/^(\s*)\d+\.\s/.test(line)) return line.replace(/^(\s*)(\d+\.)(\s)(.*)/, '$1<span class="md-list">$2</span>$3$4');
+        return line;
+      }).map(line => {
+        line = line.replace(/\*\*([^*]+)\*\*/g, '<span class="md-mark">**</span><span class="md-bold">$1</span><span class="md-mark">**</span>');
+        line = line.replace(/`([^`]+)`/g, '<span class="md-mark">`</span><span class="md-code">$1</span><span class="md-mark">`</span>');
+        return line;
+      }).join('\n');
+      // restore wikilinks (placeholders used \u0001 which survives HTML escape unchanged)
+      result = result.replace(/\u0001WL\u0001([^\u0001]+)\u0001([^\u0001]+)\u0001\/WL\u0001/g,
+        (_, slug, title) => `<a class="md-wikilink" data-slug="${slug}">${title}</a>`);
+      return result;
+    }
+
+    function cleanSnippet(s) {
+      return s
+        .replace(/\[\[([^\[\]|]+)\|([^\[\]]+)\]\]/g, '$2')
+        .replace(/\[\[([^\[\]|]+)\]\]/g, '$1')
+        .replace(/\*\*([^*]+)\*\*/g, '$1')
+        .replace(/`([^`]+)`/g, '$1')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function parseSearch(md) {
+      const out = [];
+      const lines = md.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        // - [WIKI] [[slug|Title]] (score: 0.123)
+        // - [RAW]  Title (score: 0.123)   <- no slug variant
+        let m = lines[i].match(/^- \[(\w+)\] \[\[([^|\]]+)\|([^\]]+)\]\] \(score:\s*([\d.]+)\)/);
+        if (m) {
+          const snip = cleanSnippet((lines[i + 1] || '').replace(/^\s*>\s*/, ''));
+          out.push({ source: m[1], slug: m[2], title: m[3], score: parseFloat(m[4]), snippet: snip });
+          continue;
+        }
+        m = lines[i].match(/^- \[(\w+)\] (.+?) \(score:\s*([\d.]+)\)/);
+        if (m) {
+          const snip = cleanSnippet((lines[i + 1] || '').replace(/^\s*>\s*/, ''));
+          out.push({ source: m[1], slug: '', title: m[2], score: parseFloat(m[3]), snippet: snip });
+        }
+      }
+      return out;
+    }
+  </script>
+</body>
+</html>

@@ -183,13 +183,19 @@ export function getStats() {
   };
 }
 
-export function runGemini(prompt: string, yolo: boolean = false) {
+export async function runGemini(prompt: string, yolo: boolean = false) {
   const args = yolo ? ['--yolo', `-p=${prompt}`] : [`-p=${prompt}`];
   try {
-    const res = execFileSync('gemini', args, { encoding: 'utf-8' });
-    return { status: 0, stdout: res };
+    const proc = Bun.spawn(['gemini', ...args], { stdout: 'pipe', stderr: 'pipe' });
+    const [stdout, stderr, exit] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    if (exit === 0) return { status: 0, stdout };
+    return { status: exit || 1, stderr: stderr || stdout || 'gemini failed' };
   } catch (e: any) {
-    return { status: (e as any).status || 1, stderr: e.message };
+    return { status: 1, stderr: e.message || String(e) };
   }
 }
 

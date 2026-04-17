@@ -6,6 +6,7 @@ This directory is for agents (LLMs, autonomous sessions, reviewers) working on M
 
 - `docs/` — project-wide handoff material
   - `roadmap.md` — current direction, state, and next steps (rolling; rewritten, not appended)
+  - `todo.md` — deferred refactor and release work, in dependency order
 - `roles/` — per-role material for specialized agent sessions
   - each role has `soul.md` (values), `role.md` (scope and invariants), `handoff.md` (current state and next checks)
 

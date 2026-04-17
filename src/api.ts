@@ -1,29 +1,49 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { 
-  initDb, hybridSearch, getStats, queryBrain, validateClaim, addToBrain, PATHS 
+import {
+  initDb, hybridSearch, getStats, queryBrain, validateClaim, addToBrain, PATHS
 } from './core.ts';
 
 // Ensure DB is ready on fresh roots
 initDb();
 
-const server = Bun.serve({
-  port: 3000,
-  async fetch(req) {
-    const url = new URL(req.url);
+const UI_DIR = path.resolve(new URL('../ui', import.meta.url).pathname);
 
-    // Root - Markdown Instructions
-    if (url.pathname === "/") {
-      return new Response(`# Brain API v0.7.3
+const HELP_MD = `# Brain API v0.7.3
 
 Endpoints:
+- \`/\`: Web UI (aurora theme).
+- \`/help\`: This markdown endpoint list.
 - \`/query?q=<question>\`: Ask a synthesis question.
 - \`/validate?q=<claim>\`: Fact-check a specific claim.
 - \`/wiki/:slug\`: Read a specific wiki page.
 - \`/stats\`: High-level brain statistics.
 - \`/search?q=<query>\`: Hybrid search results.
 - \`/add\`: POST { content, title } or GET ?c=...&t=... to add raw snippets.
-`, { headers: { "Content-Type": "text/markdown" } });
+`;
+
+async function serveUiFile(relPath: string): Promise<Response> {
+  const absPath = path.resolve(UI_DIR, '.' + relPath);
+  if (!absPath.startsWith(UI_DIR)) return new Response("Forbidden", { status: 403 });
+  const file = Bun.file(absPath);
+  if (!(await file.exists())) return new Response("Not found", { status: 404 });
+  return new Response(file);
+}
+
+const server = Bun.serve({
+  port: 3000,
+  idleTimeout: 180,
+  async fetch(req) {
+    const url = new URL(req.url);
+
+    if (url.pathname === "/") {
+      return serveUiFile("/index.html");
+    }
+    if (url.pathname.startsWith("/ui/")) {
+      return serveUiFile(url.pathname.replace(/^\/ui/, ""));
+    }
+    if (url.pathname === "/help") {
+      return new Response(HELP_MD, { headers: { "Content-Type": "text/markdown" } });
     }
 
     if (url.pathname === "/query") {
