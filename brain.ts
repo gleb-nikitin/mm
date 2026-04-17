@@ -17,79 +17,94 @@ db.exec('PRAGMA foreign_keys = ON;');
 
 function initDb() {
   db.run(`
-    CREATE TABLE IF NOT EXISTS raw_entries (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT,
-      content TEXT NOT NULL,
-      source_path TEXT UNIQUE,
-      hash TEXT,
-      processed INTEGER DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    CREATE TABLE IF NOT EXISTS schema_version (
+      version INTEGER PRIMARY KEY
     );
   `);
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS wiki_pages (
-      slug TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      tags TEXT,
-      status TEXT,
-      source_count INTEGER DEFAULT 0,
-      summary TEXT,
-      created_at DATETIME,
-      updated_at DATETIME
-    );
-  `);
+  const row = db.prepare('SELECT version FROM schema_version').get() as { version: number } | undefined;
+  let currentVersion = row ? row.version : 0;
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS wiki_aliases (
-      alias TEXT PRIMARY KEY,
-      slug TEXT,
-      FOREIGN KEY(slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE
-    );
-  `);
+  if (currentVersion < 1) {
+    console.log('🚀 Migrating to schema version 1...');
+    db.run(`
+      CREATE TABLE IF NOT EXISTS raw_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT,
+        content TEXT NOT NULL,
+        source_path TEXT UNIQUE,
+        hash TEXT,
+        processed INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS wiki_links (
-      source_slug TEXT,
-      target_slug TEXT,
-      PRIMARY KEY (source_slug, target_slug),
-      FOREIGN KEY(source_slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE,
-      FOREIGN KEY(target_slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE
-    );
-  `);
+    db.run(`
+      CREATE TABLE IF NOT EXISTS wiki_pages (
+        slug TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        tags TEXT,
+        status TEXT,
+        source_count INTEGER DEFAULT 0,
+        summary TEXT,
+        created_at DATETIME,
+        updated_at DATETIME
+      );
+    `);
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS operations_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-      operation TEXT,
-      details TEXT
-    );
-  `);
+    db.run(`
+      CREATE TABLE IF NOT EXISTS wiki_aliases (
+        alias TEXT PRIMARY KEY,
+        slug TEXT,
+        FOREIGN KEY(slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE
+      );
+    `);
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS claims (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      wiki_slug TEXT NOT NULL,
-      claim_text TEXT NOT NULL,
-      FOREIGN KEY(wiki_slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE
-    );
-  `);
+    db.run(`
+      CREATE TABLE IF NOT EXISTS wiki_links (
+        source_slug TEXT,
+        target_slug TEXT,
+        PRIMARY KEY (source_slug, target_slug),
+        FOREIGN KEY(source_slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE,
+        FOREIGN KEY(target_slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE
+      );
+    `);
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS claim_sources (
-      claim_id INTEGER NOT NULL,
-      raw_id INTEGER NOT NULL,
-      PRIMARY KEY (claim_id, raw_id),
-      FOREIGN KEY(claim_id) REFERENCES claims(id) ON DELETE CASCADE,
-      FOREIGN KEY(raw_id) REFERENCES raw_entries(id) ON DELETE CASCADE
-    );
-  `);
+    db.run(`
+      CREATE TABLE IF NOT EXISTS operations_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        operation TEXT,
+        details TEXT
+      );
+    `);
 
-  try {
-    db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(slug, title, content, tags);`);
-  } catch (e) {}
+    db.run(`
+      CREATE TABLE IF NOT EXISTS claims (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        wiki_slug TEXT NOT NULL,
+        claim_text TEXT NOT NULL,
+        FOREIGN KEY(wiki_slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE
+      );
+    `);
+
+    db.run(`
+      CREATE TABLE IF NOT EXISTS claim_sources (
+        claim_id INTEGER NOT NULL,
+        raw_id INTEGER NOT NULL,
+        PRIMARY KEY (claim_id, raw_id),
+        FOREIGN KEY(claim_id) REFERENCES claims(id) ON DELETE CASCADE,
+        FOREIGN KEY(raw_id) REFERENCES raw_entries(id) ON DELETE CASCADE
+      );
+    `);
+
+    try {
+      db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(slug, title, content, tags);`);
+    } catch (e) {}
+
+    db.run('INSERT OR REPLACE INTO schema_version (version) VALUES (1)');
+    currentVersion = 1;
+  }
 }
 
 initDb();
@@ -102,10 +117,32 @@ function getHash(content: string): string {
   return hasher.digest("hex");
 }
 
+function internalRecordClaim(slug: string, claim: string, raw_id: number) {
+  const pageExists = db.prepare('SELECT 1 FROM wiki_pages WHERE slug = ?').get(slug);
+  if (!pageExists) throw new Error(`Page not found: ${slug}`);
+  const rawExists = db.prepare('SELECT 1 FROM raw_entries WHERE id = ?').get(raw_id);
+  if (!rawExists) throw new Error(`Raw entry not found: ${raw_id}`);
+
+  const res = db.prepare('INSERT INTO claims (wiki_slug, claim_text) VALUES (?, ?)').run(slug, claim);
+  const claim_id = res.lastInsertRowid;
+  db.prepare('INSERT INTO claim_sources (claim_id, raw_id) VALUES (?, ?)').run(claim_id, raw_id);
+  
+  // Update source count based on actual unique raw sources
+  db.prepare(`
+    UPDATE wiki_pages 
+    SET source_count = (
+      SELECT COUNT(DISTINCT raw_id) 
+      FROM claim_sources 
+      WHERE claim_id IN (SELECT id FROM claims WHERE wiki_slug = ?)
+    ) 
+    WHERE slug = ?
+  `).run(slug, slug);
+}
+
 function internalRebuildIndex() {
   console.log('🏗️ Syncing search and relational index...');
   
-  // 1. Sync Raw Entries
+  // 1. Sync Raw Entries (UPSERT)
   const rawFiles = fs.readdirSync('raw').filter(f => f.endsWith('.md'));
   const foundRawPaths = new Set<string>();
   
@@ -117,9 +154,10 @@ function internalRebuildIndex() {
     const title = titleMatch ? titleMatch[1] : file;
     const hash = getHash(content);
 
+    // processed is only set to 1 if it's a NEW entry discovered on disk
     db.prepare(`
-      INSERT INTO raw_entries (title, content, source_path, hash)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO raw_entries (title, content, source_path, hash, processed)
+      VALUES (?, ?, ?, ?, 1)
       ON CONFLICT(source_path) DO UPDATE SET
         title = excluded.title,
         content = excluded.content,
@@ -127,7 +165,7 @@ function internalRebuildIndex() {
     `).run(title, content, filePath, hash);
   }
 
-  // Sweep missing raw entries
+  // Sweep missing raw entries (that were deleted from disk)
   const allRaw = db.prepare('SELECT id, source_path FROM raw_entries').all() as any[];
   for (const r of allRaw) {
     if (!foundRawPaths.has(r.source_path)) {
@@ -140,7 +178,7 @@ function internalRebuildIndex() {
   const foundSlugs = new Set<string>();
   const allLinks: { source: string, target: string }[] = [];
 
-  // Clear transient junction tables
+  // Clear transient junction tables and search index
   db.run('DELETE FROM wiki_aliases');
   db.run('DELETE FROM wiki_links');
   db.run('DELETE FROM search_index');
@@ -182,13 +220,13 @@ function internalRebuildIndex() {
         );
 
         db.prepare('INSERT INTO search_index (slug, title, content, tags) VALUES (?, ?, ?, ?)').run(slug, frontmatter.title || slug, fileContent, (frontmatter.tags || []).join(', '));
-
+        
         if (frontmatter.aliases) {
           for (const alias of frontmatter.aliases) {
             if (alias) db.prepare('INSERT OR IGNORE INTO wiki_aliases (alias, slug) VALUES (?, ?)').run(alias, slug);
           }
         }
-
+        
         const links = body.match(/\[\[(.*?)\]\]/g);
         if (links) {
           for (const link of links) {
@@ -214,9 +252,7 @@ function internalRebuildIndex() {
   for (const { source, target } of allLinks) {
     try {
       db.prepare('INSERT OR IGNORE INTO wiki_links (source_slug, target_slug) VALUES (?, ?)').run(source, target);
-    } catch (e) {
-      console.warn(`⚠️ Could not index link [[${source}]] -> [[${target}]]: target missing.`);
-    }
+    } catch (e) {}
   }
   console.log(`✅ Sync complete: ${rawFiles.length} raw, ${wikiFiles.length} wiki entries.`);
 }
@@ -224,25 +260,19 @@ function internalRebuildIndex() {
 function internalRebuildMarkdownIndex() {
   console.log('🏗️ Generating meta/index.md...');
   const pages = db.prepare('SELECT slug, title, tags, summary FROM wiki_pages ORDER BY title ASC').all() as any[];
-  
   let content = "# Index\n\n";
   const byTag: Record<string, any[]> = {};
-
   for (const p of pages) {
     const tags = JSON.parse(p.tags);
     const tag = tags[0] || 'uncategorized';
     if (!byTag[tag]) byTag[tag] = [];
     byTag[tag].push(p);
   }
-
   for (const [tag, pgs] of Object.entries(byTag)) {
     content += `## ${tag.charAt(0).toUpperCase() + tag.slice(1)}\n\n`;
-    for (const p of pgs) {
-      content += `- [[${p.slug}|${p.title}]]: ${p.summary || 'No summary available.'}\n`;
-    }
+    for (const p of pgs) { content += `- [[${p.slug}|${p.title}]]: ${p.summary || 'No summary available.'}\n`; }
     content += "\n";
   }
-
   fs.writeFileSync(path.join('meta', 'index.md'), content);
   console.log('✅ Generated meta/index.md');
 }
@@ -279,7 +309,7 @@ function slugify(text: string): string {
 program
   .name('brain')
   .description('A persistent AI knowledge base for compounding context.')
-  .version('0.3.3');
+  .version('0.4.0');
 
 program
   .command('add')
@@ -313,7 +343,6 @@ program
 
 program
   .command('search')
-  .description('Search the Brain (Wiki and Raw)')
   .argument('<query>', 'Search term')
   .action((query) => {
     console.log(`🔍 Searching for: "${query}"...`);
@@ -321,14 +350,11 @@ program
     if (results.length > 0) {
       console.log('\n--- Search Results ---');
       results.forEach(r => console.log(`[[${r.slug}|${r.title}]]`));
-    } else {
-      console.log('No matches found.');
-    }
+    } else console.log('No matches found.');
   });
 
 program
   .command('read')
-  .description('Read a wiki page by slug')
   .argument('<slug>', 'The slug of the page')
   .action((slug) => {
     const filePath = path.join('wiki', `${slug}.md`);
@@ -348,88 +374,45 @@ program
     for (const entry of unprocessed) {
       console.log(`🧠 Processing: ${entry.title}`);
       const initialClaims = db.prepare('SELECT COUNT(*) as count FROM claim_sources WHERE raw_id = ?').get(entry.id) as any;
-      const prompt = `${ingestSkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n## RAW ENTRY\nID: ${entry.id}\nFile: ${entry.source_path}\nContent:\n${entry.content}\n\n# INSTRUCTIONS\nYou are an AI Librarian. Use the 'bun brain.ts' CLI tools to search, read, create, or update wiki pages.\nAlways record provenance using 'bun brain.ts claim-add <slug> <claim> <raw_id>'.\nWhen finished, I will automatically refresh the index and timeline.`;
+      const initialWikiMtime = fs.readdirSync('wiki').reduce((max, f) => Math.max(max, fs.statSync(path.join('wiki', f)).mtimeMs), 0);
+      const initialLogSize = fs.existsSync(path.join('meta', 'log.md')) ? fs.statSync(path.join('meta', 'log.md')).size : 0;
+
+      const prompt = `${ingestSkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n## RAW ENTRY\nID: ${entry.id}\nFile: ${entry.source_path}\nContent:\n${entry.content}\n\n# INSTRUCTIONS\nYou are an AI Librarian. Use 'bun brain.ts page create/update' with --source ${entry.id} and --claim "..." for every change.\n\nIF THE ENTRY IS LOW-SIGNAL (no durable facts): call 'bun brain.ts log-append "Skipped low-signal entry ${entry.id}"' and do nothing else.\n\nWhen finished, I will verify provenance and mark processed.`;
       
       const result = runGemini(prompt, true);
       
       if (result.status === 0) {
         const finalClaims = db.prepare('SELECT COUNT(*) as count FROM claim_sources WHERE raw_id = ?').get(entry.id) as any;
-        if (finalClaims.count > initialClaims.count) {
+        const finalWikiMtime = fs.readdirSync('wiki').reduce((max, f) => Math.max(max, fs.statSync(path.join('wiki', f)).mtimeMs), 0);
+        const finalLogSize = fs.existsSync(path.join('meta', 'log.md')) ? fs.statSync(path.join('meta', 'log.md')).size : 0;
+        const wikiChanged = finalWikiMtime > initialWikiMtime;
+        const logChanged = finalLogSize > initialLogSize;
+
+        const claimsAdded = finalClaims.count > initialClaims.count;
+
+        if (wikiChanged && !claimsAdded) {
+          console.error(`❌ ERROR: Wiki was modified but NO PROVENANCE was recorded for entry ${entry.id}. Re-indexing and keeping in queue.`);
+          internalRebuildIndex();
+        } else if (!wikiChanged && !logChanged && !claimsAdded) {
+          console.warn(`⚠️ Warning: No action taken for "${entry.title}". Keeping in queue for manual review.`);
+        } else {
+          // Success OR explicit skip via log-append
           db.prepare('UPDATE raw_entries SET processed = 1 WHERE id = ?').run(entry.id);
           console.log(`✅ Processed ${entry.title} (${finalClaims.count - initialClaims.count} claims added)`);
-        } else {
-          console.warn(`⚠️ Warning: No claims added. Marking processed anyway.`);
-          db.prepare('UPDATE raw_entries SET processed = 1 WHERE id = ?').run(entry.id);
+          
+          console.log('🔄 Refreshing metadata...');
+          internalRebuildIndex();
+          internalRebuildMarkdownIndex();
+          internalRebuildTimeline();
+          
+          const logMsg = `Processed raw entry ${entry.id} ("${entry.title}")`;
+          db.prepare('INSERT INTO operations_log (operation, details) VALUES (?, ?)').run('process', logMsg);
+          // Only append to log file if it wasn't already changed by LLM
+          if (!logChanged) {
+            fs.appendFileSync(path.join('meta', 'log.md'), `- ${new Date().toISOString().split('T')[0]}: ${logMsg}\n`);
+          }
         }
-        console.log('🔄 Refreshing metadata...');
-        internalRebuildIndex();
-        internalRebuildMarkdownIndex();
-        internalRebuildTimeline();
-        const logMsg = `Processed raw entry ${entry.id} ("${entry.title}")`;
-        db.prepare('INSERT INTO operations_log (operation, details) VALUES (?, ?)').run('process', logMsg);
-        fs.appendFileSync(path.join('meta', 'log.md'), `- ${new Date().toISOString().split('T')[0]}: ${logMsg}\n`);
-      } else {
-        console.error(`❌ Failed to process ${entry.title}`);
-      }
-    }
-  });
-
-program
-  .command('lint')
-  .description('Audit the brain for health and structural issues')
-  .action(async () => {
-    console.log('🧹 Linting the Brain...');
-    const wikiFiles = fs.readdirSync('wiki').filter(f => f.endsWith('.md'));
-    const wikiContents = wikiFiles.map(f => `File: ${f}\n---\n${fs.readFileSync(path.join('wiki', f), 'utf-8')}\n---`).join('\n\n');
-    const lintSkill = fs.readFileSync(path.join('meta', 'skills', 'lint.md'), 'utf-8');
-    const schema = fs.readFileSync(path.join('meta', 'schema.md'), 'utf-8');
-    const prompt = `${lintSkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n## WIKI CONTENT\n${wikiContents}\n\n# INSTRUCTIONS\nProduce a structured report on the health of the wiki. Do NOT modify files.`;
-    runGemini(prompt);
-  });
-
-program
-  .command('query')
-  .description('Answer a question by searching the brain first')
-  .argument('<question>', 'The user question')
-  .action(async (question) => {
-    console.log(`🧠 Querying the Brain: "${question}"...`);
-    const searchResults = db.prepare('SELECT slug, title FROM search_index WHERE search_index MATCH ? LIMIT 10').all(`"${question}"`) as any[];
-    let context = "";
-    if (searchResults.length > 0) {
-      for (const res of searchResults) {
-        const filePath = path.join('wiki', `${res.slug}.md`);
-        if (fs.existsSync(filePath)) context += `### [[${res.slug}|${res.title}]]\n${fs.readFileSync(filePath, 'utf-8')}\n---\n`;
-      }
-    }
-    const querySkill = fs.readFileSync(path.join('meta', 'skills', 'query.md'), 'utf-8');
-    const schema = fs.readFileSync(path.join('meta', 'schema.md'), 'utf-8');
-    const prompt = `${querySkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n${context}\n\n# USER QUESTION\n${question}\n\n# INSTRUCTIONS\nAnswer from brain context.`;
-    runGemini(prompt);
-  });
-
-program
-  .command('maintain')
-  .description('Perform routine brain maintenance')
-  .action(async () => {
-    console.log('🔧 Starting Brain Maintenance...');
-    const wikiFiles = fs.readdirSync('wiki').filter(f => f.endsWith('.md'));
-    const wikiContents = wikiFiles.map(f => `File: ${f}\n---\n${fs.readFileSync(path.join('wiki', f), 'utf-8')}\n---`).join('\n\n');
-    const log = fs.readFileSync(path.join('meta', 'log.md'), 'utf-8');
-    const schema = fs.readFileSync(path.join('meta', 'schema.md'), 'utf-8');
-    const maintainSkill = fs.readFileSync(path.join('meta', 'skills', 'maintain.md'), 'utf-8');
-    const prompt = `${maintainSkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n## RECENT LOG\n${log}\n\n## WIKI CONTENT\n${wikiContents}\n\n# INSTRUCTIONS\nPerform maintenance.`;
-    
-    const result = runGemini(prompt, true);
-    if (result.status === 0) {
-      console.log('✅ Maintenance complete. Refreshing metadata...');
-      internalRebuildIndex();
-      internalRebuildMarkdownIndex();
-      internalRebuildTimeline();
-      const logMsg = `Performed routine brain maintenance`;
-      db.prepare('INSERT INTO operations_log (operation, details) VALUES (?, ?)').run('maintain', logMsg);
-      fs.appendFileSync(path.join('meta', 'log.md'), `- ${new Date().toISOString().split('T')[0]}: ${logMsg}\n`);
-    } else {
-      console.error(`❌ Maintenance pass failed.`);
+      } else console.error(`❌ Failed to process ${entry.title}`);
     }
   });
 
@@ -440,19 +423,24 @@ program
   .argument('<claim>', 'Claim text')
   .argument('<raw_id>', 'Raw entry ID')
   .action((slug, claim, raw_id) => {
-    const pageExists = db.prepare('SELECT 1 FROM wiki_pages WHERE slug = ?').get(slug);
-    if (!pageExists) { console.error(`❌ Page not found: ${slug}`); process.exit(1); }
-    const rawExists = db.prepare('SELECT 1 FROM raw_entries WHERE id = ?').get(raw_id);
-    if (!rawExists) { console.error(`❌ Raw entry not found: ${raw_id}`); process.exit(1); }
     try {
-      const res = db.prepare('INSERT INTO claims (wiki_slug, claim_text) VALUES (?, ?)').run(slug, claim);
-      const claim_id = res.lastInsertRowid;
-      db.prepare('INSERT INTO claim_sources (claim_id, raw_id) VALUES (?, ?)').run(claim_id, raw_id);
+      internalRecordClaim(slug, claim, Number(raw_id));
       console.log(`✅ Recorded claim for ${slug}`);
     } catch (e: any) {
-      console.error(`❌ Failed to record claim: ${e.message}`);
+      console.error(`❌ Error: ${e.message}`);
       process.exit(1);
     }
+  });
+
+program
+  .command('log-append')
+  .argument('<message>', 'Log message')
+  .action((message) => {
+    const logPath = path.join('meta', 'log.md');
+    const logLine = `- ${new Date().toISOString().split('T')[0]}: ${message}\n`;
+    fs.appendFileSync(logPath, logLine);
+    db.prepare('INSERT INTO operations_log (operation, details) VALUES (?, ?)').run('manual_log', message);
+    console.log('📝 Log updated.');
   });
 
 // --- Subcommands ---
@@ -465,14 +453,24 @@ page
   .option('-c, --content <content>', 'Content', '')
   .option('-t, --tags <tags>', 'Tags', '')
   .option('-a, --aliases <aliases>', 'Aliases', '')
+  .option('-s, --source <raw_id>', 'Raw source ID for provenance')
+  .option('-k, --claim <claim>', 'Provenance claim text')
   .action((slug, title, options) => {
     const filePath = path.join('wiki', `${slug}.md`);
     if (fs.existsSync(filePath)) { console.error(`❌ Page exists`); process.exit(1); }
     const tags = options.tags ? options.tags.split(',').map((t: string) => t.trim()) : [];
     const aliases = options.aliases ? options.aliases.split(',').map((a: string) => a.trim()) : [];
     const createdAt = new Date().toISOString();
-    const frontmatter = ['---', `title: ${title}`, `slug: ${slug}`, `aliases: [${aliases.join(', ')}]`, `tags: [${tags.join(', ')}]`, 'status: active', `created_at: ${createdAt}`, `updated_at: ${createdAt}`, 'source_count: 1', '---', '', `# ${title}`, '', options.content].join('\n');
+    const frontmatter = ['---', `title: ${title}`, `slug: ${slug}`, `aliases: [${aliases.join(', ')}]`, `tags: [${tags.join(', ')}]`, 'status: active', `created_at: ${createdAt}`, `updated_at: ${createdAt}`, 'source_count: 0', '---', '', `# ${title}`, '', options.content].join('\n');
     fs.writeFileSync(filePath, frontmatter);
+    
+    // Internal index update (temp, will be fully synced later)
+    db.prepare('INSERT OR REPLACE INTO wiki_pages (slug, title, tags, status, source_count, summary, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?)')
+      .run(slug, title, JSON.stringify(tags), 'active', '', createdAt, createdAt);
+
+    if (options.source && options.claim) {
+      internalRecordClaim(slug, options.claim, Number(options.source));
+    }
     console.log(`✅ Created ${slug}`);
   });
 
@@ -481,10 +479,15 @@ page
   .argument('<slug>', 'Slug')
   .argument('<content>', 'Content')
   .option('-t, --title <title>', 'Title')
+  .option('-s, --source <raw_id>', 'Raw source ID for provenance')
+  .option('-k, --claim <claim>', 'Provenance claim text')
   .action((slug, content, options) => {
     const filePath = path.join('wiki', `${slug}.md`);
     if (!fs.existsSync(filePath)) { console.error(`❌ Not found`); process.exit(1); }
     fs.writeFileSync(filePath, content);
+    if (options.source && options.claim) {
+      internalRecordClaim(slug, options.claim, Number(options.source));
+    }
     console.log(`✅ Updated ${slug}`);
   });
 

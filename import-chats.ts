@@ -5,6 +5,12 @@ import { Database } from 'bun:sqlite';
 const dbFile = path.join('meta', 'brain.db');
 const db = new Database(dbFile);
 
+function getHash(content: string): string {
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(content);
+  return hasher.digest("hex");
+}
+
 async function importChat(filePath: string, chatName: string) {
   console.log(`📥 Importing chat: ${chatName}`);
   const content = fs.readFileSync(filePath, 'utf-8');
@@ -23,6 +29,7 @@ async function importChat(filePath: string, chatName: string) {
 
     const title = `Chat: ${chatName} (${date})`;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const hash = getHash(body);
     const rawFilename = `${timestamp}-chat.md`;
     const rawPath = path.join('raw', rawFilename);
     
@@ -30,10 +37,13 @@ async function importChat(filePath: string, chatName: string) {
     
     fs.writeFileSync(rawPath, fileContent);
     
-    db.prepare('INSERT INTO entries (type, title, content, source_path) VALUES (?, ?, ?, ?)')
-      .run('raw', title, body, rawPath);
-    
-    console.log(`  ✅ Added entry for ${date}`);
+    try {
+      db.prepare('INSERT INTO raw_entries (title, content, source_path, hash) VALUES (?, ?, ?, ?)')
+        .run(title, body, rawPath, hash);
+      console.log(`  ✅ Added entry for ${date}`);
+    } catch (e: any) {
+      console.log(`  ⚠️ Duplicate entry for ${date}`);
+    }
   }
 }
 
