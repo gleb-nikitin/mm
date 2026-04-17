@@ -10,7 +10,8 @@ Do them in this order. Each step unblocks the next.
 2. **Readability pass on `src/brain.ts`**
 3. **Architectural refactor**
 4. **External-dependency hygiene**
-5. **Public-release polish** (owner decisions)
+5. **Retrieval quality**
+6. **Public-release polish** (owner decisions)
 
 ## 1. Tests
 
@@ -102,7 +103,81 @@ These still apply regardless of briefing — they live in whatever the per-call 
 - `runGemini` migrated from `execFileSync` to async `Bun.spawn` so HTTP handlers no longer block the event loop.
 - `api.ts` got `idleTimeout: 180` so long Gemini runs don't get killed at 10s.
 
-## 5. Public-release polish (owner decisions)
+## 5. Retrieval quality
+
+Goal: the LLM sees better, tighter, more relevant context so answers are stronger and faster without swapping to a bigger synthesis model. Every item here compounds with 4c (briefing): smaller per-call payload means higher information density in whatever tokens we do spend.
+
+Ordered roughly by value-per-effort. 5a–5d work on the current SQLite + FTS5 + vector stack; 5e is the Rust-shell migration.
+
+### 5a. Smarter chunking (no new deps)
+
+- Today `queryBrain` inlines the **full body** of the top-3 wiki pages. A single long page drowns the rest of the context window.
+- Chunk by `##` section and by claim. Cap each chunk at ~800 chars. Inline the top 5–10 chunks instead of 3 full pages.
+- The `chunks` table already exists; extend `embedBrain` to populate section-level chunks alongside the current `wiki_truth` chunks.
+- Deterministic, reversible, measurable — exactly the kind of change that belongs right after tests land.
+
+### 5b. Reranking (uses 4a provider abstractions)
+
+- After `hybridSearch` returns top-N, rerank with a small cross-encoder (local via Ollama) or a dedicated rerank call on the synthesis provider: "score 0–10 how well each chunk answers the question."
+- Cut to top-K (e.g. 5) before stuffing the synthesis prompt.
+- Biggest single quality win available at the retrieval layer — changes *what the LLM sees* much more than tweaking the index ever will.
+
+### 5c. Field-weighted BM25
+
+- Title hits should rank above body hits; alias hits should rank above raw-snippet hits.
+- FTS5 `bm25(tbl, wTitle, wBody, …)` takes column weights — set them when building the `MATCH` query in `hybridSearch`.
+- Low effort, clear gain on entity-lookup queries.
+
+### 5d. Query expansion / HyDE for vague questions
+
+- For conceptual or open-ended questions, generate a short hypothetical answer first (via the synthesis provider), embed *that*, and use it for the vector search alongside the raw query.
+- Big recall improvement on "what do we know about X" style queries where the literal question words barely appear in the corpus.
+- Needs 4b streaming to hide the extra round-trip.
+
+### 5e. Mnemonic Hardcore — Rust track, standing on two existing codebases
+
+The Rust track (named **Mnemonic Hardcore** in the roadmap) is **not** a from-scratch rewrite. Two existing, production-grade Rust codebases already cover the pieces mm was going to build:
+
+- **ac's Rust + Tauri shell** — window management, dock, shell strip, theme system, Alpine apps, MCP wiring. Reuse as the app frame. See `ac/src-server` and `ac/ui`.
+- **[tabularium](https://github.com/eva-ics/tabularium)** (Apache-2.0, by a friend of the owner) — **markdown document store with Tantivy full-text search, SQLite backing, embedded web UI, REST, JSON-RPC, MCP, and a `tb` CLI.** This is almost exactly the substrate step 5e was describing. Available as:
+  - library crate `tabularium`
+  - service `tabularium-server`
+  - CLI `tabularium-cli`
+
+In short: ac's shell + tabularium's store = the chassis. mm's distinctive work sits on top.
+
+### What mm keeps owning (the actual mm value)
+
+These don't exist in tabularium or ac and are where mm's identity lives:
+
+- **Claims + provenance** (`claims`, `claim_sources`, `wiki_links` tables) — every wiki statement tied to raw sources.
+- **Hybrid retrieval with embeddings** — FTS5/Tantivy combined with vector search via RRF, then reranking (5b).
+- **Synthesis briefings** (4c) — stable-preamble session reuse for the synthesis provider.
+- **Maintenance loops** — `dream`, `doctor`, `lint`, `validate`, tier promotion, citation repair.
+- **The specific data model** — `compiled truth` vs `timeline`, tiers, aliases, `source_count`.
+
+### Open decisions before committing to tabularium
+
+1. **Data-model fit.** tabularium is a markdown directory tree; mm is a flat slug + frontmatter model with claims and provenance edges. Does mm's schema map onto tabularium's document + metadata model, or do we need sidecar tables for claims/links? Inspect tabularium's schema + REST API before deciding integration shape.
+2. **Integration shape.** Library crate (tightest, single binary) vs HTTP client against `tabularium-server` (looser, two processes, easier to swap later, can share the store with `tb` and the tabularium web UI). Library first-pass; service as fallback if the crate's API is too opinionated.
+3. **Platform coverage.** tabularium's current prebuilt is Apple Silicon only. mm's public-repo direction wants Linux + Intel macOS too. Either build from source on those platforms or wait for upstream artifacts.
+
+### Migration shape
+
+1. Stand up a Rust workspace parallel to the current TS code (no deletion yet).
+2. Adopt ac's shell as the app frame.
+3. Bring tabularium in at the library or service layer (per decision 2).
+4. Port mm's claim/provenance tables as sidecar SQLite tables alongside whatever tabularium manages.
+5. Port hybrid retrieval on top of tabularium's Tantivy search.
+6. Port synthesis briefings + maintenance loops.
+7. Validate each port against the behavior-level test suite from step 1 — the tests define correctness regardless of language.
+8. Flip the default runtime; keep the TS code around one release as a fallback; then remove it.
+
+5a–5d stay relevant throughout — they operate on retrieval output, not inside the text-search engine.
+
+**Do not start this until steps 1–4 are done.** Tests are the bridge that lets us swap the engine at all without silent regressions; the briefing rework (4c) is what makes the Rust synthesis provider actually tractable.
+
+## 6. Public-release polish (owner decisions)
 
 Not devops calls. Listed so we don't forget.
 
@@ -121,8 +196,17 @@ The UI (`ui/index.html`) shipped intentionally minimal. Future polish:
 - Render wiki page titles from frontmatter instead of the slug fallback.
 - Automated UI smoke test via `claude-in-chrome` MCP once available.
 
+## Parallel track — ac plugin packaging (Mnemonic Light inside ac)
+
+Not blocked by the numbered sequence. Small scope; validates the plugin-surface promise of Light.
+
+- Package `ui/index.html` as an ac Holo app (`ac/ui/apps/mm.html` or equivalent). Alpine + Tailwind conventions already match ac's contract; the main work is swapping the inline `<style>` block for ac tokens from `ui/styles/contract.css`.
+- Expose mm's MCP surface (`src/mcp.ts`) as an ac-participant tool so ac agents can query the brain via the shared MCP pipe.
+- Decide how ac and mm share the brain root: point ac's plugin at mm's running API (`/query`, `/search`, `/wiki`) over HTTP, or wire directly to `core.ts` (requires mm-as-library, bigger). HTTP is the cheap first pass.
+- Keep the standalone repo fully functional — the plugin is an additional shipping mode, not a replacement.
+
 ## Non-goals (deliberately skipping)
 
-- Rewriting in a different language/runtime.
-- Swapping SQLite for anything else.
-- Adding feature scope before the five steps above are done.
+- Piecemeal language swaps. The Rust shell migration is a planned single pass — not a sneak-in during a refactor or test round.
+- Swapping SQLite wholesale. SQLite stays for provenance, queue, and vector store even after the Rust + Tantivy migration.
+- Adding feature scope before the six numbered steps above are done.

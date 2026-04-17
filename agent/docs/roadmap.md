@@ -7,23 +7,47 @@ Project:
 - Short name / repo working name: `mm`
 - Purpose: local-first memory engine, markdown is the source of truth, SQLite is the index and retrieval layer, usable as both a standalone project and a plugin/integration surface (HTTP + MCP)
 
+## Two-track plan
+
+Mnemonic51 ships in two tracks, running in parallel, serving different purposes.
+
+### Track 1 — **Mnemonic Light** (current repo, `mm/`)
+
+- Standalone TS/Bun project. Small, hackable, iterable.
+- Also shippable as an **ac plugin** — mount `ui/index.html` and the MCP surface into ac's shell as a Holo app.
+- Purpose: fast iteration on UX, retrieval quality, prompt/briefing shape, synthesis policy. This is where product ideas get validated.
+- Out-of-scope here: heavy perf, Rust-native packaging, polished installer.
+
+### Track 2 — **Mnemonic Hardcore** (planned)
+
+- Rust workspace. Not a from-scratch rewrite — an assembly on top of two existing codebases:
+  - **ac's Rust + Tauri shell** — app frame, windowing, dock, theme system, Alpine app hosting, MCP wiring.
+  - **[tabularium](https://github.com/eva-ics/tabularium)** (Apache-2.0) — markdown store with Tantivy search, SQLite, embedded web UI, REST, JSON-RPC, MCP, `tb` CLI.
+- Purpose: production, performance, distributable app, real stemming/faceting, offline-first installer.
+- Inherits validated concepts and prompt/briefing contracts from Light.
+- Detailed migration shape in `agent/docs/todo.md` step 5e.
+
+**Why two tracks, not one:** Light moves at product velocity; Hardcore moves at systems velocity. Coupling them would slow both. Light's tests (todo.md step 1) define correctness; Hardcore must pass the same tests before flipping default.
+
 ## Read order for a fresh session
 
 1. `agent/README.md`
 2. The role files under `agent/roles/<role>/` (soul → role → handoff)
 3. This roadmap
-4. `README.md` in repo root (user-facing)
-5. Code: `src/brain.ts`, `src/core.ts`, `src/api.ts`, `src/mcp.ts`
-6. `meta/schema.md`, `meta/remaining-gaps.md`
+4. `agent/docs/todo.md` — the prioritized work list
+5. `README.md` in repo root (user-facing)
+6. Code: `src/brain.ts`, `src/core.ts`, `src/api.ts`, `src/mcp.ts`
+7. `meta/schema.md`, `meta/remaining-gaps.md`
 
-## Architecture
+## Architecture (Light)
 
 Code lives in `src/`. Data dirs sit at repo root by default but any directory with `raw/ wiki/ meta/` works via `MT_BRAIN_ROOT`.
 
 - `src/brain.ts` — CLI (commander)
-- `src/api.ts` — HTTP, markdown responses
+- `src/api.ts` — HTTP, markdown responses, serves the web UI at `/`
 - `src/mcp.ts` — MCP stdio server
 - `src/core.ts` — shared runtime: DB bootstrap, paths, hybrid search, query, validate, add, embed, stats
+- `ui/index.html` — single-page Alpine UI, aurora theme
 - `raw/` — immutable source material
 - `wiki/` — maintained knowledge pages
 - `meta/` — schema, skills, sqlite, runtime reports (runtime reports are gitignored)
@@ -34,27 +58,17 @@ Code lives in `src/`. Data dirs sit at repo root by default but any directory wi
 
 - Phase 0–5: landed and stable.
 - Phase 6 (external surface refresh): committed and verified. API and MCP share `core.ts`, both call `initDb()`, no CLI shell-outs.
-- Structural cleanup: landed. Root has only runtime entrypoints + config. `brain.ts.bak` deleted. `import-chats.ts` moved to `scripts/`. Runtime-generated meta reports are gitignored. `README.md` and `agent/README.md` added. `package.json` has `api`, `mcp`, `typecheck` scripts.
-
-## Remaining known gaps
-
-Tracked in `meta/remaining-gaps.md`. Summary:
-
-- deterministic conflict-flagging (not yet)
-- create-vs-update confidence in ingest (model-driven today)
-- bulk import (one-by-one today)
-- vector search may need a native SQLite extension if latency grows
-- search weights are hardcoded
-- no Web UI (HTTP is markdown-only — intentional for now)
-- MCP follow-up actions could be richer
+- Structural cleanup + `src/` move: committed (`c210c1e`).
+- Aurora web UI + async Gemini (no event-loop blocking): committed (`ed3eaf2`).
+- Two-track plan named: Light (this repo) + Hardcore (Rust on ac shell + tabularium).
 
 ## Near-term direction
 
-No feature work scheduled. Next deferred work is tracked in `agent/docs/todo.md` — tests first, then a readability pass on `src/brain.ts`, then the architectural refactor. Before any next feature:
+Next deferred work is tracked in `agent/docs/todo.md`. Order: tests → readability pass on `src/brain.ts` → architectural refactor → external-dep hygiene (including briefing-based synthesis) → retrieval quality → public-release polish.
 
-- keep the CLI/API/MCP surfaces stable
-- keep bootstrap reliable on fresh `MT_BRAIN_ROOT`
-- keep `core.ts` as the single source of shared logic
+Parallel track (not blocked by the numbered sequence): **ac plugin packaging** — wrap `ui/index.html` + the MCP server as a Holo app inside ac. Small surface, validates the plugin-surface promise of Light without touching Hardcore.
+
+Before any new feature: keep CLI/API/MCP surfaces stable, keep bootstrap reliable on fresh `MT_BRAIN_ROOT`, keep `core.ts` as the single source of shared logic.
 
 ## Public repo direction
 
@@ -64,6 +78,7 @@ Mnemonic51 is set up as a public-style project:
 - README at root
 - `agent/` strictly for agent material
 - runtime-generated reports out of version control
+- `run.command` / `kill.command` for one-click start/stop on macOS
 
 What's still an owner decision, not a devops one:
 
