@@ -5,11 +5,10 @@
 import { Command } from 'commander';
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawnSync, execFileSync } from 'child_process';
 import yaml from 'js-yaml';
 import { 
-  db, PATHS, initDb, getHash, slugify, embed, cosine_sim, 
-  hybridSearch, getStats, chunkText 
+  db, PATHS, initDb, getHash, slugify, hybridSearch, getStats, 
+  queryBrain, validateClaim, addToBrain, embedBrain, runGemini
 } from './core.ts';
 
 const program = new Command();
@@ -21,30 +20,16 @@ initDb();
 function internalRecordClaim(slug: string, claim: string, raw_id: number) {
   const pageExists = db.prepare('SELECT 1 FROM wiki_pages WHERE slug = ?').get(slug);
   if (!pageExists) throw new Error(`Page not found: ${slug}`);
-  const rawExists = db.prepare('SELECT 1 FROM raw_entries WHERE id = ?').get(raw_id);
-  if (!rawExists) throw new Error(`Raw entry not found: ${raw_id}`);
-
   const res = db.prepare('INSERT INTO claims (wiki_slug, claim_text) VALUES (?, ?)').run(slug, claim);
   const claim_id = res.lastInsertRowid;
   db.prepare('INSERT INTO claim_sources (claim_id, raw_id) VALUES (?, ?)').run(claim_id, raw_id);
-  
-  db.prepare(`
-    UPDATE wiki_pages 
-    SET source_count = (
-      SELECT COUNT(DISTINCT raw_id) 
-      FROM claim_sources 
-      WHERE claim_id IN (SELECT id FROM claims WHERE wiki_slug = ?)
-    ) 
-    WHERE slug = ?
-  `).run(slug, slug);
+  db.prepare(`UPDATE wiki_pages SET source_count = (SELECT COUNT(DISTINCT raw_id) FROM claim_sources WHERE claim_id IN (SELECT id FROM claims WHERE wiki_slug = ?)) WHERE slug = ?`).run(slug, slug);
 }
 
 function internalRebuildIndex() {
   console.log('🏗️ Syncing index...');
-  
   const rawFiles = fs.readdirSync(PATHS.raw).filter(f => f.endsWith('.md'));
   const foundRawPaths = new Set<string>();
-  
   for (const file of rawFiles) {
     const filePath = path.join(PATHS.raw, file);
     foundRawPaths.add(filePath);
@@ -52,38 +37,19 @@ function internalRebuildIndex() {
     const titleMatch = content.match(/^# (.*)/);
     const title = titleMatch ? titleMatch[1] : file;
     const hash = getHash(content);
-
-    db.prepare(`
-      INSERT INTO raw_entries (title, content, source_path, hash)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(source_path) DO UPDATE SET
-        title = excluded.title,
-        content = excluded.content,
-        hash = excluded.hash
-    `).run(title, content, filePath, hash);
+    db.prepare(`INSERT INTO raw_entries (title, content, source_path, hash) VALUES (?, ?, ?, ?) ON CONFLICT(source_path) DO UPDATE SET title = excluded.title, content = excluded.content, hash = excluded.hash`).run(title, content, filePath, hash);
   }
-
   const allRaw = db.prepare('SELECT id, source_path FROM raw_entries').all() as any[];
-  for (const r of allRaw) {
-    if (!foundRawPaths.has(r.source_path)) {
-      db.prepare('DELETE FROM raw_entries WHERE id = ?').run(r.id);
-    }
-  }
+  for (const r of allRaw) if (!foundRawPaths.has(r.source_path)) db.prepare('DELETE FROM raw_entries WHERE id = ?').run(r.id);
 
   const wikiFiles = fs.readdirSync(PATHS.wiki).filter(f => f.endsWith('.md'));
   const foundSlugs = new Set<string>();
   const allLinks: { source: string, target: string }[] = [];
-
-  db.run('DELETE FROM wiki_aliases');
-  db.run('DELETE FROM wiki_links');
-  db.run('DELETE FROM search_index');
-
+  db.run('DELETE FROM wiki_aliases'); db.run('DELETE FROM wiki_links'); db.run('DELETE FROM search_index');
   for (const file of wikiFiles) {
     const slug = file.replace('.md', '');
     foundSlugs.add(slug);
-    const filePath = path.join(PATHS.wiki, file);
-    const fileContent = fs.readFileSync(filePath, 'utf-8');
-    
+    const fileContent = fs.readFileSync(path.join(PATHS.wiki, file), 'utf-8');
     try {
       const parts = fileContent.split('---');
       if (parts.length >= 3) {
@@ -91,68 +57,17 @@ function internalRebuildIndex() {
         const body = parts.slice(2).join('---');
         const summaryMatch = body.match(/## Summary\n\n(.*?)\n/s);
         const summary = summaryMatch ? summaryMatch[1].trim() : '';
-
-        db.prepare(`
-          INSERT INTO wiki_pages (slug, title, tags, status, source_count, summary, type, confidence, mentions, tier, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(slug) DO UPDATE SET
-            title = excluded.title,
-            tags = excluded.tags,
-            status = excluded.status,
-            source_count = excluded.source_count,
-            summary = excluded.summary,
-            type = excluded.type,
-            confidence = excluded.confidence,
-            mentions = excluded.mentions,
-            tier = excluded.tier,
-            updated_at = excluded.updated_at
-        `).run(
-          slug,
-          String(frontmatter.title || slug),
-          JSON.stringify(frontmatter.tags || []),
-          String(frontmatter.status || 'active'),
-          Number(frontmatter.source_count || 0),
-          summary,
-          String(frontmatter.type || 'concept'),
-          Number(frontmatter.confidence || 0.5),
-          Number(frontmatter.mentions || 1),
-          Number(frontmatter.tier || 3),
-          String(frontmatter.created_at || new Date().toISOString()),
-          String(frontmatter.updated_at || new Date().toISOString())
-        );
-
+        db.prepare(`INSERT INTO wiki_pages (slug, title, tags, status, source_count, summary, type, confidence, mentions, tier, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(slug) DO UPDATE SET title = excluded.title, tags = excluded.tags, status = excluded.status, source_count = excluded.source_count, summary = excluded.summary, type = excluded.type, confidence = excluded.confidence, mentions = excluded.mentions, tier = excluded.tier, updated_at = excluded.updated_at`).run(slug, String(frontmatter.title || slug), JSON.stringify(frontmatter.tags || []), String(frontmatter.status || 'active'), Number(frontmatter.source_count || 0), summary, String(frontmatter.type || 'concept'), Number(frontmatter.confidence || 0.5), Number(frontmatter.mentions || 1), Number(frontmatter.tier || 3), String(frontmatter.created_at || new Date().toISOString()), String(frontmatter.updated_at || new Date().toISOString()));
         db.prepare('INSERT INTO search_index (slug, title, content, tags) VALUES (?, ?, ?, ?)').run(slug, frontmatter.title || slug, fileContent, (frontmatter.tags || []).join(', '));
-        if (frontmatter.aliases) {
-          for (const alias of frontmatter.aliases) {
-            if (alias) db.prepare('INSERT OR IGNORE INTO wiki_aliases (alias, slug) VALUES (?, ?)').run(alias, slug);
-          }
-        }
+        if (frontmatter.aliases) for (const alias of frontmatter.aliases) if (alias) db.prepare('INSERT OR IGNORE INTO wiki_aliases (alias, slug) VALUES (?, ?)').run(alias, slug);
         const links = body.match(/\[\[(.*?)\]\]/g);
-        if (links) {
-          for (const link of links) {
-            const target = link.slice(2, -2).split('|')[0];
-            allLinks.push({ source: slug, target });
-          }
-        }
+        if (links) for (const link of links) { const target = link.slice(2, -2).split('|')[0]; allLinks.push({ source: slug, target }); }
       }
-    } catch (e) {
-      console.error(`❌ Parse error ${file}:`, e);
-    }
+    } catch (e) { console.error(`❌ Parse error ${file}:`, e); }
   }
-
   const allPages = db.prepare('SELECT slug FROM wiki_pages').all() as any[];
-  for (const p of allPages) {
-    if (!foundSlugs.has(p.slug)) {
-      db.prepare('DELETE FROM wiki_pages WHERE slug = ?').run(p.slug);
-    }
-  }
-
-  for (const { source, target } of allLinks) {
-    try {
-      db.prepare('INSERT OR IGNORE INTO wiki_links (source_slug, target_slug) VALUES (?, ?)').run(source, target);
-    } catch (e) {}
-  }
-  console.log(`✅ Sync complete.`);
+  for (const p of allPages) if (!foundSlugs.has(p.slug)) db.prepare('DELETE FROM wiki_pages WHERE slug = ?').run(p.slug);
+  for (const { source, target } of allLinks) { try { db.prepare('INSERT OR IGNORE INTO wiki_links (source_slug, target_slug) VALUES (?, ?)').run(source, target); } catch (e) {} }
 }
 
 function internalRebuildMarkdownIndex() {
@@ -168,9 +83,7 @@ function internalRebuildMarkdownIndex() {
   }
   for (const [tag, pgs] of Object.entries(byTag)) {
     content += `## ${tag.charAt(0).toUpperCase() + tag.slice(1)}\n\n`;
-    for (const p of pgs) {
-      content += `- [[${p.slug}|${p.title}]]: ${p.summary || 'No summary available.'} [${p.type}, ${p.confidence}, T${p.tier}]\n`;
-    }
+    for (const p of pgs) content += `- [[${p.slug}|${p.title}]]: ${p.summary || 'No summary available.'} [${p.type}, ${p.confidence}, T${p.tier}]\n`;
     content += "\n";
   }
   fs.writeFileSync(path.join(PATHS.meta, 'index.md'), content);
@@ -188,49 +101,24 @@ function internalRebuildTimeline() {
   fs.writeFileSync(path.join(PATHS.meta, 'timeline.md'), timelineContent);
 }
 
-function runGemini(prompt: string, yolo: boolean = false) {
-  const args = yolo ? ['--yolo', `-p=${prompt}`] : [`-p=${prompt}`];
-  try {
-    const res = execFileSync('gemini', args, { encoding: 'utf-8' });
-    process.stdout.write(res);
-    return { status: 0, stdout: res };
-  } catch (e: any) {
-    return { status: (e as any).status || 1, stderr: e.message };
-  }
-}
-
 // --- CLI Definitions ---
 
-program.name('brain').version('0.7.0');
+program.name('brain').version('0.7.2');
 
-program.command('add').argument('<content>', 'Raw content').option('-t, --title <title>', 'Title').action(async (content, options) => {
-  const hash = getHash(content);
-  if (db.prepare('SELECT 1 FROM raw_entries WHERE hash = ?').get(hash)) {
-    console.log(`⚠️ Duplicate content detected. Entry not saved.`);
-    return;
-  }
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filePath = path.join(PATHS.raw, `${timestamp}.md`);
-  const title = options.title || `Entry ${timestamp}`;
-  fs.writeFileSync(filePath, `# ${title}\n\nAdded: ${new Date().toLocaleString()}\n\n---\n\n${content}`);
-  db.prepare('INSERT INTO raw_entries (title, content, source_path, hash) VALUES (?, ?, ?, ?)').run(title, content, filePath, hash);
-  console.log(`✅ Saved ${filePath}`);
+program.command('add').argument('<content>', 'Raw content').option('-t, --title <title>', 'Title').action((content, options) => {
+  const res = addToBrain(content, options.title);
+  if (res.status === 'duplicate') console.log(`⚠️ Duplicate content detected.`);
+  else console.log(`✅ Saved ${res.path}`);
 });
 
-program.command('save').argument('<insight>', 'Freeform insight').option('-t, --title <title>', 'Title').action(async (insight, options) => {
-  const hash = getHash(insight);
-  if (db.prepare('SELECT 1 FROM raw_entries WHERE hash = ?').get(hash)) {
-    console.log(`⚠️ Duplicate content detected. Entry not saved.`);
-    return;
+program.command('save').argument('<insight>', 'Freeform insight').option('-t, --title <title>', 'Title').action((insight, options) => {
+  const res = addToBrain(insight, options.title);
+  if (res.status === 'duplicate') console.log(`⚠️ Duplicate content detected.`);
+  else {
+    console.log(`✅ Saved ${res.path}`);
+    const results = db.prepare('SELECT slug, title FROM search_index WHERE search_index MATCH ? LIMIT 3').all(`"${insight}"`) as any[];
+    if (results.length > 0) { console.log('\nSuggested pages:'); results.forEach(r => console.log(`- [[${r.slug}|${r.title}]]`)); }
   }
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filePath = path.join(PATHS.raw, `${timestamp}-save.md`);
-  const title = options.title || `Insight ${timestamp}`;
-  fs.writeFileSync(filePath, `# ${title}\n\nSaved Insight: ${new Date().toLocaleString()}\n\n---\n\n${insight}`);
-  db.prepare('INSERT INTO raw_entries (title, content, source_path, hash) VALUES (?, ?, ?, ?)').run(title, insight, filePath, hash);
-  console.log(`✅ Saved ${filePath}`);
-  const results = db.prepare('SELECT slug, title FROM search_index WHERE search_index MATCH ? LIMIT 3').all(`"${insight}"`) as any[];
-  if (results.length > 0) { console.log('\nSuggested pages to process into:'); results.forEach(r => console.log(`- [[${r.slug}|${r.title}]]`)); }
 });
 
 program.command('queue').action(() => {
@@ -239,20 +127,14 @@ program.command('queue').action(() => {
 });
 
 program.command('search').argument('<query>', 'Search term').action(async (query) => {
-  console.log(`🔍 Searching for: "${query}"...`);
-  const hasEmbeddings = (db.prepare('SELECT COUNT(*) as count FROM chunks WHERE embedding IS NOT NULL').get() as any).count > 0;
-  if (hasEmbeddings) {
+  const stats = getStats();
+  if (stats.embeddedChunks > 0) {
     const results = await hybridSearch(query);
-    if (results.length > 0) {
-      console.log('\n--- Hybrid Search Results ---');
-      results.forEach(r => console.log(`[${r.source.toUpperCase()}] ${r.slug ? `[[${r.slug}|${r.title}]]` : r.title} (score: ${r.score.toFixed(3)})`));
-    } else console.log('No matches.');
+    if (results.length > 0) results.forEach(r => console.log(`[${r.source.toUpperCase()}] ${r.slug ? `[[${r.slug}|${r.title}]]` : r.title} (score: ${r.score.toFixed(3)})`));
+    else console.log('No matches.');
   } else {
     const results = db.prepare('SELECT slug, title FROM search_index WHERE search_index MATCH ?').all(`"${query}"`) as any[];
-    if (results.length > 0) {
-      console.log('\n--- FTS Search Results ---');
-      results.forEach(r => console.log(`[[${r.slug}|${r.title}]]`));
-    } else console.log('No matches.');
+    if (results.length > 0) results.forEach(r => console.log(`[[${r.slug}|${r.title}]]`)); else console.log('No matches.');
   }
 });
 
@@ -263,37 +145,13 @@ program.command('read').argument('<slug>', 'Slug').action((slug) => {
 
 program.command('query').argument('<question>', 'The question').option('--save', 'Save as analysis page').action(async (question, options) => {
   console.log(`🧠 Querying: "${question}"...`);
-  const hasEmbeddings = (db.prepare('SELECT COUNT(*) as count FROM chunks WHERE embedding IS NOT NULL').get() as any).count > 0;
-  let context = "";
-  if (hasEmbeddings) {
-    const results = await hybridSearch(question, 10);
-    const wikiHits = results.filter(r => r.source === 'wiki');
-    const rawHits = results.filter(r => r.source === 'raw');
-    if (wikiHits.length > 0) {
-      context += "## RELEVANT WIKI PAGES\n\n";
-      for (let i = 0; i < Math.min(wikiHits.length, 3); i++) { if (wikiHits[i].slug) context += `### [[${wikiHits[i].slug}|${wikiHits[i].title}]]\n${fs.readFileSync(path.join(PATHS.wiki, `${wikiHits[i].slug}.md`), 'utf-8')}\n---\n`; }
-    }
-    if (rawHits.length > 0) {
-      context += "\n## RAW EVIDENCE\n\n";
-      for (let i = 0; i < Math.min(rawHits.length, 5); i++) context += `### ${rawHits[i].title}\n${rawHits[i].snippet}\n---\n`;
-    }
-  } else {
-    const searchResults = db.prepare('SELECT slug, title FROM search_index WHERE search_index MATCH ? LIMIT 10').all(`"${question}"`) as any[];
-    if (searchResults.length > 0) {
-      context = "## RELEVANT WIKI PAGES\n\n";
-      for (const res of searchResults) context += `### [[${res.slug}|${res.title}]]\n${fs.readFileSync(path.join(PATHS.wiki, `${res.slug}.md`), 'utf-8')}\n---\n`;
-    }
-  }
-  if (!context) context = "No relevant information found.\n";
-  const querySkill = fs.readFileSync(path.join(PATHS.meta, 'skills', 'query.md'), 'utf-8');
-  const schema = fs.readFileSync(path.join(PATHS.meta, 'schema.md'), 'utf-8');
-  const prompt = `${querySkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n${context}\n\n# USER QUESTION\n${question}\n\n# INSTRUCTIONS\nAnswer using the brain. Cite sources strictly.`;
-  const result = runGemini(prompt);
+  const result = await queryBrain(question);
+  process.stdout.write(result.stdout || result.stderr || "");
   if (options.save && result.status === 0) {
     const slug = `analysis_${slugify(question)}`;
     const body = `---\ntitle: Synthesis: ${question}\nslug: ${slug}\ntags: [analysis]\ntype: analysis\nconfidence: 0.7\nmentions: 1\ntier: 2\nstatus: active\ncreated_at: ${new Date().toISOString()}\nupdated_at: ${new Date().toISOString()}\nsource_count: 0\n---\n\n# Analysis: ${question}\n\n## Summary\n${result.stdout}\n\n## Cross-References\n\n---\n<!-- TIMELINE: append-only below this line -->\n- **${new Date().toISOString().split('T')[0]}**: Generated synthesis via query.\n`;
     fs.writeFileSync(path.join(PATHS.wiki, `${slug}.md`), body);
-    console.log(`✅ Saved to wiki/${slug}.md`);
+    console.log(`\n✅ Saved to wiki/${slug}.md`);
     internalRebuildIndex();
   }
 });
@@ -307,24 +165,19 @@ program.command('process').action(async () => {
     console.log(`🧠 Processing: ${entry.title}`);
     const initialClaims = db.prepare('SELECT COUNT(*) as count FROM claim_sources WHERE raw_id = ?').get(entry.id) as any;
     const initialWikiMtime = fs.readdirSync(PATHS.wiki).reduce((max, f) => Math.max(max, fs.statSync(path.join(PATHS.wiki, f)).mtimeMs), 0);
-    const initialLogSize = fs.existsSync(path.join(PATHS.meta, 'log.md')) ? fs.statSync(path.join(PATHS.meta, 'log.md')).size : 0;
     const prompt = `${ingestSkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n## RAW ENTRY\nID: ${entry.id}\nFile: ${entry.source_path}\nContent:\n${entry.content}\n\n# INSTRUCTIONS\nYou are an AI Librarian. Use 'bun brain.ts page create/update' with --source ${entry.id} and --claim \"...\".`;
     const result = runGemini(prompt, true);
     if (result.status === 0) {
       const finalClaims = db.prepare('SELECT COUNT(*) as count FROM claim_sources WHERE raw_id = ?').get(entry.id) as any;
       const finalWikiMtime = fs.readdirSync(PATHS.wiki).reduce((max, f) => Math.max(max, fs.statSync(path.join(PATHS.wiki, f)).mtimeMs), 0);
-      const finalLogSize = fs.existsSync(path.join(PATHS.meta, 'log.md')) ? fs.statSync(path.join(PATHS.meta, 'log.md')).size : 0;
       const claimsAdded = finalClaims.count > initialClaims.count;
       const wikiChanged = finalWikiMtime > initialWikiMtime;
-      const logChanged = finalLogSize > initialLogSize;
       if (wikiChanged && !claimsAdded) { console.error(`❌ ERR: Wiki mod without provenance.`); internalRebuildIndex(); }
-      else if (!wikiChanged && !logChanged && !claimsAdded) console.warn(`⚠️ Warn: No action taken.`);
       else {
         db.prepare('UPDATE raw_entries SET processed = 1 WHERE id = ?').run(entry.id);
         internalRebuildIndex(); internalRebuildMarkdownIndex(); internalRebuildTimeline();
         const logMsg = `Processed raw entry ${entry.id}`;
         db.prepare('INSERT INTO operations_log (operation, details) VALUES (?, ?)').run('process', logMsg);
-        if (!logChanged) fs.appendFileSync(path.join(PATHS.meta, 'log.md'), `- ${new Date().toISOString().split('T')[0]}: ${logMsg}\n`);
       }
     }
   }
@@ -373,7 +226,6 @@ program.command('lint').option('--fix', 'Safe fixes only').action((options) => {
   noProv.forEach(p => findings.push(`- **No Provenance**: [[${p.slug}]]`));
   const stale = db.prepare(`SELECT slug, title, updated_at FROM wiki_pages WHERE julianday(updated_at) < julianday('now', '-30 days')`).all() as any[];
   for (const s of stale) {
-     const terms = [s.slug, s.title].filter(Boolean);
      const recent = db.prepare(`SELECT 1 FROM raw_entries WHERE julianday(created_at) > julianday(?) AND (content LIKE ? OR content LIKE ?)`).get(s.updated_at, `%${s.title}%`, `%${s.slug}%`);
      if (recent) findings.push(`- **Stale Page**: [[${s.slug}]] (mentioned in recent raw)`);
   }
@@ -392,27 +244,14 @@ program.command('doctor').action(async () => {
   const start = Date.now(); const hasEmbeddings = stats.embeddedChunks > 0; let sType = 'FTS-only';
   try { if (hasEmbeddings) { await hybridSearch('test', 1); sType = 'Hybrid'; } else db.prepare(`SELECT slug FROM search_index WHERE search_index MATCH 'test' LIMIT 1`).all(); } catch(e) {}
   report.push(`\n## Latency\n- Test Search (${sType}): ${Date.now() - start}ms`);
-  const version = (db.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any).version;
-  report.push(`\n## Schema\n- Version: ${version}`);
+  report.push(`\n## Schema\n- Version: ${stats.version}`);
   const reportStr = report.join('\n'); fs.writeFileSync(path.join(PATHS.meta, 'doctor-report.md'), reportStr); console.log(reportStr);
 });
 
 program.command('validate').argument('<claim>', 'Claim').action(async (claim) => {
   console.log(`🧠 Validating: "${claim}"...`);
-  const hasEmbeddings = (db.prepare('SELECT COUNT(*) as count FROM chunks WHERE embedding IS NOT NULL').get() as any).count > 0;
-  let context = "";
-  if (hasEmbeddings) {
-    const results = await hybridSearch(claim, 5);
-    const wikiHits = results.filter(r => r.source === 'wiki');
-    const rawHits = results.filter(r => r.source === 'raw');
-    if (wikiHits.length > 0) { context += "## RELEVANT WIKI PAGES\n\n"; for (let i = 0; i < wikiHits.length; i++) if (wikiHits[i].slug) context += `### [[${wikiHits[i].slug}|${wikiHits[i].title}]]\n${fs.readFileSync(path.join(PATHS.wiki, `${wikiHits[i].slug}.md`), 'utf-8')}\n---\n`; }
-    if (rawHits.length > 0) { context += "\n## RAW EVIDENCE\n\n"; for (let i = 0; i < rawHits.length; i++) context += `### ${rawHits[i].title}\n${rawHits[i].snippet}\n---\n`; }
-  } else {
-    const searchResults = db.prepare('SELECT slug, title FROM search_index WHERE search_index MATCH ? LIMIT 5').all(`"${claim}"`) as any[];
-    if (searchResults.length > 0) { context = "## RELEVANT WIKI PAGES\n\n"; for (const res of searchResults) context += `### [[${res.slug}|${res.title}]]\n${fs.readFileSync(path.join(PATHS.wiki, `${res.slug}.md`), 'utf-8')}\n---\n`; }
-  }
-  const prompt = `Fact-check the claim against the context.\n\n# CONTEXT\n${context}\n\n# CLAIM\n${claim}\n\n# INSTRUCTIONS\nReturn exactly ONE verdict: ✅ confirmed, ⚠️ partial, ❌ contradicted, ❓ no data. Citing specific [[Wiki Pages]] or raw entries.`;
-  runGemini(prompt);
+  const result = await validateClaim(claim);
+  process.stdout.write(result.stdout || result.stderr || "");
 });
 
 program.command('dream').action(async () => {
@@ -426,7 +265,6 @@ program.command('dream').action(async () => {
       report.push(`- Promoted [[${p.slug}]] to Tier 2`); logs.push(`Promoted [[${p.slug}]] to tier 2`);
     }
   }
-  // Stale Page Scan
   const stale = db.prepare(`SELECT slug, title, updated_at FROM wiki_pages WHERE julianday(updated_at) < julianday('now', '-30 days')`).all() as any[];
   const staleCandidates = [];
   for (const s of stale) {
@@ -434,8 +272,6 @@ program.command('dream').action(async () => {
      if (recent) staleCandidates.push(s.slug);
   }
   if (staleCandidates.length > 0) { report.push('\n## Stale Candidates'); staleCandidates.forEach(s => report.push(`- [[${s}]]`)); }
-
-  // Gap Detection (Mentioned 3+ times in raw)
   const raws = db.prepare('SELECT content FROM raw_entries').all() as any[]; const words = new Map<string, number>();
   for (const r of raws) {
      const matches = r.content.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b/g); 
@@ -443,7 +279,6 @@ program.command('dream').action(async () => {
   }
   const gaps = Array.from(words.entries()).filter(([word, count]) => count >= 3 && !db.prepare('SELECT 1 FROM wiki_pages WHERE title = ? OR slug = ?').get(word, slugify(word))).map(([word]) => word);
   if (gaps.length > 0) { report.push('\n## Gap Detection'); gaps.forEach(g => report.push(`- Suggested missing page: [[${g}]]`)); }
-
   const repairs = []; const broken = db.prepare('SELECT source_slug, target_slug FROM wiki_links WHERE target_slug NOT IN (SELECT slug FROM wiki_pages)').all() as any[];
   const allSlugs = db.prepare('SELECT slug FROM wiki_pages').all().map((r: any) => r.slug);
   const getDist = (a: string, b: string) => {
@@ -482,47 +317,10 @@ program.command('embed').description('Embed brain content').option('--all', 'Re-
   console.log('🧠 Generating Embeddings...');
   const ollamaCheck = await fetch('http://localhost:11434/api/tags').catch(() => null);
   if (!ollamaCheck || !ollamaCheck.ok) { console.error('❌ Ollama not running at localhost:11434'); process.exit(1); }
-  if (options.all) { db.run('DELETE FROM chunks'); } else if (slug) db.prepare('DELETE FROM chunks WHERE page_slug = ? AND owner_type = "wiki"').run(slug);
-  let count = 0; const start = Date.now();
-  const pages = slug ? db.prepare('SELECT slug FROM wiki_pages WHERE slug = ?').all(slug) : db.prepare('SELECT slug FROM wiki_pages WHERE slug NOT IN (SELECT DISTINCT page_slug FROM chunks WHERE owner_type = "wiki")').all();
-  for (const p of pages as any[]) {
-    const content = fs.readFileSync(path.join(PATHS.wiki, `${p.slug}.md`), 'utf-8');
-    const parts = content.split('<!-- TIMELINE: append-only below this line -->');
-    const sections = [{ text: parts[0], type: 'wiki_truth' }, { text: (parts[1] || '').trim(), type: 'wiki_timeline' }];
-    for (const sec of sections) {
-      if (!sec.text) continue;
-      const chunks = chunkText(sec.text);
-      for (const t of chunks) {
-        const vec = await embed(t);
-        if (vec) {
-          const buf = Buffer.from(vec.buffer);
-          const currentEmbeddings = db.prepare(`SELECT embedding FROM chunks WHERE owner_type = 'wiki' AND page_slug = ?`).all(p.slug) as any[];
-          if (currentEmbeddings.some(c => cosine_sim(c.embedding, buf) > 0.98)) { console.log(`⚠️ Skip duplicate chunk in [[${p.slug}]]`); continue; }
-          db.prepare('INSERT INTO chunks (owner_type, page_slug, chunk_type, text, embedding) VALUES (?, ?, ?, ?, ?)').run('wiki', p.slug, sec.type, t, buf);
-          count++;
-        }
-      }
-    }
-    process.stdout.write('.');
-  }
-  if (!slug) {
-    const rawQ = db.prepare('SELECT id, content FROM raw_entries WHERE id NOT IN (SELECT DISTINCT raw_id FROM chunks WHERE owner_type = "raw")').all() as any[];
-    for (const r of rawQ) {
-      const chunks = chunkText(r.content);
-      for (const t of chunks) {
-        const vec = await embed(t);
-        if (vec) {
-          const buf = Buffer.from(vec.buffer);
-          const currentEmbeddings = db.prepare(`SELECT embedding FROM chunks WHERE owner_type = 'raw' AND raw_id = ?`).all(r.id) as any[];
-          if (currentEmbeddings.some(c => cosine_sim(c.embedding, buf) > 0.98)) { console.log(`⚠️ Skip duplicate chunk in Raw ID ${r.id}`); continue; }
-          db.prepare('INSERT INTO chunks (owner_type, raw_id, chunk_type, text, embedding) VALUES (?, ?, ?, ?, ?)').run('raw', r.id, 'raw', t, buf);
-          count++;
-        }
-      }
-      process.stdout.write('.');
-    }
-  }
-  console.log(`\n✅ Embedded ${count} chunks in ${((Date.now() - start) / 1000).toFixed(1)}s.`);
+  if (options.all) { db.run('DELETE FROM chunks'); } 
+  else if (slug) db.prepare('DELETE FROM chunks WHERE page_slug = ? AND owner_type = "wiki"').run(slug);
+  const res = await embedBrain(slug);
+  console.log(`\n✅ Embedded ${res.count} chunks.`);
 });
 
 const page = program.command('page');

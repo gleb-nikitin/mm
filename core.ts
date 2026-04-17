@@ -2,6 +2,7 @@ import { Database } from 'bun:sqlite';
 import * as fs from 'fs';
 import * as path from 'path';
 import yaml from 'js-yaml';
+import { execFileSync } from 'child_process';
 
 // --- Configuration ---
 export const BRAIN_ROOT = process.env.MT_BRAIN_ROOT || process.cwd();
@@ -28,23 +29,30 @@ try {
 
 export function initDb() {
   db.run(`CREATE TABLE IF NOT EXISTS schema_version (id INTEGER PRIMARY KEY CHECK(id = 1), version INTEGER NOT NULL);`);
-  const row = db.prepare('SELECT version FROM schema_version WHERE id = 1').get() as { version: number } | undefined;
-  let currentVersion = row ? row.version : 0;
+  
+  let currentVersion = 0;
+  try {
+    const row = db.prepare('SELECT version FROM schema_version WHERE id = 1').get() as { version: number } | undefined;
+    if (row) currentVersion = row.version;
+  } catch (e) {}
 
-  if (currentVersion < 1) {
-    db.run(`CREATE TABLE IF NOT EXISTS raw_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, content TEXT NOT NULL, source_path TEXT UNIQUE, hash TEXT, processed INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);`);
-    db.run(`CREATE TABLE IF NOT EXISTS wiki_pages (slug TEXT PRIMARY KEY, title TEXT NOT NULL, tags TEXT, status TEXT, source_count INTEGER DEFAULT 0, summary TEXT, type TEXT, confidence REAL DEFAULT 0.5, mentions INTEGER DEFAULT 1, tier INTEGER DEFAULT 3, created_at DATETIME, updated_at DATETIME);`);
-    db.run(`CREATE TABLE IF NOT EXISTS wiki_aliases (alias TEXT PRIMARY KEY, slug TEXT, FOREIGN KEY(slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE);`);
-    db.run(`CREATE TABLE IF NOT EXISTS wiki_links (source_slug TEXT, target_slug TEXT, PRIMARY KEY (source_slug, target_slug), FOREIGN KEY(source_slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE, FOREIGN KEY(target_slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE);`);
-    db.run(`CREATE TABLE IF NOT EXISTS operations_log (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, operation TEXT, details TEXT);`);
-    db.run(`CREATE TABLE IF NOT EXISTS claims (id INTEGER PRIMARY KEY AUTOINCREMENT, wiki_slug TEXT NOT NULL, claim_text TEXT NOT NULL, FOREIGN KEY(wiki_slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE);`);
-    db.run(`CREATE TABLE IF NOT EXISTS claim_sources (claim_id INTEGER NOT NULL, raw_id INTEGER NOT NULL, PRIMARY KEY (claim_id, raw_id), FOREIGN KEY(claim_id) REFERENCES claims(id) ON DELETE CASCADE, FOREIGN KEY(raw_id) REFERENCES raw_entries(id) ON DELETE CASCADE);`);
-    try { db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(slug, title, content, tags);`); } catch (e) {}
-    db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 3)');
-  }
+  // Base Tables (v1)
+  db.run(`CREATE TABLE IF NOT EXISTS raw_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, content TEXT NOT NULL, source_path TEXT UNIQUE, hash TEXT, processed INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);`);
+  db.run(`CREATE TABLE IF NOT EXISTS wiki_pages (slug TEXT PRIMARY KEY, title TEXT NOT NULL, tags TEXT, status TEXT, source_count INTEGER DEFAULT 0, summary TEXT, type TEXT, confidence REAL DEFAULT 0.5, mentions INTEGER DEFAULT 1, tier INTEGER DEFAULT 3, created_at DATETIME, updated_at DATETIME);`);
+  db.run(`CREATE TABLE IF NOT EXISTS wiki_aliases (alias TEXT PRIMARY KEY, slug TEXT, FOREIGN KEY(slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE);`);
+  db.run(`CREATE TABLE IF NOT EXISTS wiki_links (source_slug TEXT, target_slug TEXT, PRIMARY KEY (source_slug, target_slug), FOREIGN KEY(source_slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE, FOREIGN KEY(target_slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE);`);
+  db.run(`CREATE TABLE IF NOT EXISTS operations_log (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, operation TEXT, details TEXT);`);
+  db.run(`CREATE TABLE IF NOT EXISTS claims (id INTEGER PRIMARY KEY AUTOINCREMENT, wiki_slug TEXT NOT NULL, claim_text TEXT NOT NULL, FOREIGN KEY(wiki_slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE);`);
+  db.run(`CREATE TABLE IF NOT EXISTS claim_sources (claim_id INTEGER NOT NULL, raw_id INTEGER NOT NULL, PRIMARY KEY (claim_id, raw_id), FOREIGN KEY(claim_id) REFERENCES claims(id) ON DELETE CASCADE, FOREIGN KEY(raw_id) REFERENCES raw_entries(id) ON DELETE CASCADE);`);
+  try { db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(slug, title, content, tags);`); } catch (e) {}
+
+  // v3: Chunks
+  db.run(`CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_type TEXT NOT NULL CHECK(owner_type IN ('wiki', 'raw')), page_slug TEXT, raw_id INTEGER, chunk_type TEXT NOT NULL, text TEXT NOT NULL, embedding BLOB, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(page_slug) REFERENCES wiki_pages(slug) ON DELETE CASCADE, FOREIGN KEY(raw_id) REFERENCES raw_entries(id) ON DELETE CASCADE, CHECK ((owner_type = 'wiki' AND page_slug IS NOT NULL AND raw_id IS NULL) OR (owner_type = 'raw' AND raw_id IS NOT NULL AND page_slug IS NULL)));`);
+
+  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 3)');
 }
 
-// --- Logic ---
+// --- Common Logic ---
 
 export function cosine_sim(a: Buffer | null | undefined, b: Buffer | null | undefined): number {
   if (!a || !b) return 0;
@@ -79,6 +87,30 @@ export function getHash(content: string): string {
 export function slugify(text: string): string {
   return text.trim().replace(/\s+/g, '_').replace(/[^\p{L}\p{N}_]+/gu, '').toLowerCase();
 }
+
+export function chunkText(text: string, maxTokens = 400, overlapFraction = 0.2): string[] {
+  const words = text.split(/(\s+)/);
+  const chunks: string[] = [];
+  let currentChunkWords: string[] = [];
+  let currentWordCount = 0;
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    currentChunkWords.push(word);
+    if (word.trim().length > 0) currentWordCount++;
+    if (currentWordCount >= maxTokens) {
+      chunks.push(currentChunkWords.join(''));
+      const overlapWordsCount = Math.floor(maxTokens * overlapFraction);
+      let backtrackWords = 0; let backtrackIndex = currentChunkWords.length - 1;
+      while (backtrackIndex >= 0 && backtrackWords < overlapWordsCount) { if (currentChunkWords[backtrackIndex].trim().length > 0) backtrackWords++; backtrackIndex--; }
+      currentChunkWords = currentChunkWords.slice(backtrackIndex + 1);
+      currentWordCount = overlapWordsCount;
+    }
+  }
+  if (currentWordCount > 0) chunks.push(currentChunkWords.join(''));
+  return chunks;
+}
+
+// --- Shared Operations ---
 
 export type SearchResult = {
   slug: string | null;
@@ -130,6 +162,7 @@ export async function hybridSearch(query: string, limit: number = 10): Promise<S
 }
 
 export function getStats() {
+  const version = (db.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any)?.version || 0;
   const totalChunks = (db.prepare('SELECT COUNT(*) as c FROM chunks').get() as any).c;
   const embeddedChunks = (db.prepare('SELECT COUNT(*) as c FROM chunks WHERE embedding IS NOT NULL').get() as any).c;
   const pages = (db.prepare('SELECT COUNT(*) as c FROM wiki_pages').get() as any).c;
@@ -139,6 +172,7 @@ export function getStats() {
   const avgSource = (db.prepare('SELECT AVG(source_count) as a FROM wiki_pages').get() as any).a || 0;
 
   return {
+    version,
     pages,
     raws,
     links,
@@ -149,24 +183,103 @@ export function getStats() {
   };
 }
 
-export function chunkText(text: string, maxTokens = 400, overlapFraction = 0.2): string[] {
-  const words = text.split(/(\s+)/);
-  const chunks: string[] = [];
-  let currentChunkWords: string[] = [];
-  let currentWordCount = 0;
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i];
-    currentChunkWords.push(word);
-    if (word.trim().length > 0) currentWordCount++;
-    if (currentWordCount >= maxTokens) {
-      chunks.push(currentChunkWords.join(''));
-      const overlapWordsCount = Math.floor(maxTokens * overlapFraction);
-      let backtrackWords = 0; let backtrackIndex = currentChunkWords.length - 1;
-      while (backtrackIndex >= 0 && backtrackWords < overlapWordsCount) { if (currentChunkWords[backtrackIndex].trim().length > 0) backtrackWords++; backtrackIndex--; }
-      currentChunkWords = currentChunkWords.slice(backtrackIndex + 1);
-      currentWordCount = overlapWordsCount;
+export function runGemini(prompt: string, yolo: boolean = false) {
+  const args = yolo ? ['--yolo', `-p=${prompt}`] : [`-p=${prompt}`];
+  try {
+    const res = execFileSync('gemini', args, { encoding: 'utf-8' });
+    return { status: 0, stdout: res };
+  } catch (e: any) {
+    return { status: (e as any).status || 1, stderr: e.message };
+  }
+}
+
+export async function queryBrain(question: string) {
+  const hasEmbeddings = (db.prepare('SELECT COUNT(*) as count FROM chunks WHERE embedding IS NOT NULL').get() as any).count > 0;
+  let context = "";
+  if (hasEmbeddings) {
+    const results = await hybridSearch(question, 10);
+    const wikiHits = results.filter(r => r.source === 'wiki');
+    const rawHits = results.filter(r => r.source === 'raw');
+    if (wikiHits.length > 0) {
+      context += "## RELEVANT WIKI PAGES\n\n";
+      for (let i = 0; i < Math.min(wikiHits.length, 3); i++) {
+        if (wikiHits[i].slug) {
+          const body = fs.readFileSync(path.join(PATHS.wiki, `${wikiHits[i].slug}.md`), 'utf-8');
+          context += `### [[${wikiHits[i].slug}|${wikiHits[i].title}]]\n${body}\n---\n`;
+        }
+      }
+    }
+    if (rawHits.length > 0) {
+      context += "\n## RAW EVIDENCE\n\n";
+      for (let i = 0; i < Math.min(rawHits.length, 5); i++) context += `### ${rawHits[i].title}\n${rawHits[i].snippet}\n---\n`;
+    }
+  } else {
+    const results = db.prepare('SELECT slug, title FROM search_index WHERE search_index MATCH ? LIMIT 5').all(`"${question}"`) as any[];
+    if (results.length > 0) {
+      context = "## RELEVANT WIKI PAGES\n\n";
+      for (const res of results) {
+        const body = fs.readFileSync(path.join(PATHS.wiki, `${res.slug}.md`), 'utf-8');
+        context += `### [[${res.slug}|${res.title}]]\n${body}\n---\n`;
+      }
     }
   }
-  if (currentWordCount > 0) chunks.push(currentChunkWords.join(''));
-  return chunks;
+  const querySkill = fs.readFileSync(path.join(PATHS.meta, 'skills', 'query.md'), 'utf-8');
+  const schema = fs.readFileSync(path.join(PATHS.meta, 'schema.md'), 'utf-8');
+  const prompt = `${querySkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n${context}\n\n# USER QUESTION\n${question}\n\n# INSTRUCTIONS\nAnswer using the brain. Cite sources strictly.`;
+  return runGemini(prompt);
+}
+
+export async function validateClaim(claim: string) {
+  const results = await hybridSearch(claim, 5);
+  let context = "";
+  for (const r of results) {
+    if (r.source === 'wiki' && r.slug) {
+      const body = fs.readFileSync(path.join(PATHS.wiki, `${r.slug}.md`), 'utf-8');
+      context += `### [[${r.slug}|${r.title}]]\n${body}\n---\n`;
+    } else {
+      context += `### ${r.title}\n${r.snippet}\n---\n`;
+    }
+  }
+  const prompt = `Fact-check the claim against the context.\n\n# CONTEXT\n${context}\n\n# CLAIM\n${claim}\n\n# INSTRUCTIONS\nReturn exactly ONE verdict: ✅ confirmed, ⚠️ partial, ❌ contradicted, ❓ no data. Cite evidence.`;
+  return runGemini(prompt);
+}
+
+export function addToBrain(content: string, title?: string) {
+  const hash = getHash(content);
+  if (db.prepare('SELECT 1 FROM raw_entries WHERE hash = ?').get(hash)) {
+    return { status: 'duplicate', title: '', path: '' };
+  }
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `${timestamp}.md`;
+  const filePath = path.join(PATHS.raw, filename);
+  const finalTitle = title || `Entry ${timestamp}`;
+  fs.writeFileSync(filePath, `# ${finalTitle}\n\nAdded: ${new Date().toLocaleString()}\n\n---\n\n${content}`);
+  db.prepare('INSERT INTO raw_entries (title, content, source_path, hash) VALUES (?, ?, ?, ?)').run(finalTitle, content, filePath, hash);
+  return { status: 'saved', title: finalTitle, path: filePath };
+}
+
+export async function embedBrain(slug?: string) {
+  let count = 0;
+  const pages = slug ? db.prepare('SELECT slug FROM wiki_pages WHERE slug = ?').all(slug) : db.prepare('SELECT slug FROM wiki_pages').all();
+  for (const p of pages as any[]) {
+    const content = fs.readFileSync(path.join(PATHS.wiki, `${p.slug}.md`), 'utf-8');
+    const parts = content.split('<!-- TIMELINE: append-only below this line -->');
+    const sections = [{ text: parts[0], type: 'wiki_truth' }, { text: (parts[1] || '').trim(), type: 'wiki_timeline' }];
+    for (const sec of sections) {
+      if (!sec.text) continue;
+      const chunks = chunkText(sec.text);
+      for (const t of chunks) {
+        const vec = await embed(t);
+        if (vec) {
+          const buf = Buffer.from(vec.buffer);
+          const current = db.prepare(`SELECT embedding FROM chunks WHERE owner_type = 'wiki' AND page_slug = ?`).all(p.slug) as any[];
+          if (!current.some(c => cosine_sim(c.embedding, buf) > 0.98)) {
+            db.prepare('INSERT INTO chunks (owner_type, page_slug, chunk_type, text, embedding) VALUES (?, ?, ?, ?, ?)').run('wiki', p.slug, sec.type, t, buf);
+            count++;
+          }
+        }
+      }
+    }
+  }
+  return { count };
 }
