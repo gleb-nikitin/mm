@@ -1,6 +1,6 @@
 # Handoff — mm_devops
 
-Last updated 2026-04-17 after committing the aurora web UI, async Gemini refactor, and Claude import work.
+Last updated 2026-04-17 after landing source-separation.
 
 ## Current state
 
@@ -8,19 +8,24 @@ Last updated 2026-04-17 after committing the aurora web UI, async Gemini refacto
 - A `git` role was added (`61e284e`) — devops does not own that role.
 - **UI + async-gemini work is committed** (`ed3eaf2`).
 - **Claude Code sessions import script + macOS commands are committed** (`dd9bba4`).
+- **Source-separation landed** (`7b5f0ef`): schema v4, recursive raw/ indexing, filtered search/query by source_type and project.
 - **Two-track plan (Light + Hardcore) defined** in `agent/docs/roadmap.md`.
 
 ## What this session changed
 
-- (See previous handoff for details on Web UI, API changes, and Async synthesis)
-- Established `git` role and scripts in `agent/roles/git/`.
-- Added `scripts/import-claude.ts` for automated session ingestion.
-- Added `run.command` and `kill.command` for macOS UX.
-- Updated `agent/docs/todo.md` with retrieval quality (step 5) and Mnemonic Hardcore (Rust track) details.
+- (See previous handoffs for earlier work)
+- Implemented **Source-separation**:
+  - `meta/schema.md` defines the source_type/project taxonomy.
+  - `src/core.ts` handles schema v4 migration and filtered `hybridSearch`.
+  - `src/api.ts` and `src/mcp.ts` expose filters to external surfaces.
+  - `scripts/import-claude.ts` now uses correct directory layout and tags.
+- Added `agent/docs/how-to-import.md`.
 
 ## Verification this session (all green)
 
 - All changes verified end-to-end.
+- Filtered retrieval verified: `?source=raw` excludes wiki pages.
+- Claude import verified: dry-run shows correct target paths.
 - Repository is clean (except for handoff files).
 
 ## Next steps
