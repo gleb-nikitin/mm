@@ -1,6 +1,6 @@
 # Brain Doctor Report
 
-Generated: 4/17/2026, 4:55:19 PM
+Generated: 4/17/2026, 5:05:41 PM
 
 ## DB Integrity
 - Status: ✅ OK
@@ -15,7 +15,7 @@ Generated: 4/17/2026, 4:55:19 PM
 - Claims: 0
 
 ## Latency
-- Test Search (Hybrid): 19ms
+- Test Search (Hybrid): 43ms
 
 ## Schema
 - Version: 3
