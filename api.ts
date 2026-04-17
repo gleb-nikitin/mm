@@ -1,9 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawnSync } from 'child_process';
 import { 
-  db, PATHS, getHash, slugify, hybridSearch, getStats, embed 
+  initDb, hybridSearch, getStats, queryBrain, validateClaim, addToBrain, PATHS 
 } from './core.ts';
+
+// Ensure DB is ready on fresh roots
+initDb();
 
 const server = Bun.serve({
   port: 3000,
@@ -12,7 +14,7 @@ const server = Bun.serve({
 
     // Root - Markdown Instructions
     if (url.pathname === "/") {
-      return new Response(`# Brain API v0.7.0
+      return new Response(`# Brain API v0.7.3
 
 Endpoints:
 - \`/query?q=<question>\`: Ask a synthesis question.
@@ -25,22 +27,23 @@ Endpoints:
     }
 
     if (url.pathname === "/query") {
-      const question = url.searchParams.get("q") || "";
-      if (!question) return new Response("Missing 'q' parameter", { status: 400 });
-      const res = spawnSync('bun', ['brain.ts', 'query', question], { encoding: 'utf-8' });
+      const q = url.searchParams.get("q") || "";
+      if (!q) return new Response("Missing 'q' parameter", { status: 400 });
+      const res = await queryBrain(q);
       return new Response(res.stdout || res.stderr, { headers: { "Content-Type": "text/markdown" } });
     }
 
     if (url.pathname === "/validate") {
-      const claim = url.searchParams.get("q") || "";
-      if (!claim) return new Response("Missing 'q' parameter", { status: 400 });
-      const res = spawnSync('bun', ['brain.ts', 'validate', claim], { encoding: 'utf-8' });
+      const q = url.searchParams.get("q") || "";
+      if (!q) return new Response("Missing 'q' parameter", { status: 400 });
+      const res = await validateClaim(q);
       return new Response(res.stdout || res.stderr, { headers: { "Content-Type": "text/markdown" } });
     }
 
     if (url.pathname === "/stats") {
       const stats = getStats();
       let md = "# Brain Stats\n\n";
+      md += `- Schema Version: ${stats.version}\n`;
       md += `- Pages: ${stats.pages}\n`;
       md += `- Raw Entries: ${stats.raws}\n`;
       md += `- Links: ${stats.links}\n`;
@@ -60,9 +63,9 @@ Endpoints:
     }
 
     if (url.pathname === "/search") {
-      const query = url.searchParams.get("q") || "";
-      const results = await hybridSearch(query);
-      let md = `# Search Results for "${query}"\n\n`;
+      const q = url.searchParams.get("q") || "";
+      const results = await hybridSearch(q);
+      let md = `# Search Results for "${q}"\n\n`;
       if (results.length === 0) md += "No results found.";
       else {
         results.forEach(r => {
@@ -85,12 +88,9 @@ Endpoints:
         title = url.searchParams.get("t") || "";
       }
       if (!content) return new Response("Missing content", { status: 400 });
-      const hash = getHash(content);
-      if (db.prepare('SELECT 1 FROM raw_entries WHERE hash = ?').get(hash)) {
-        return new Response("⚠️ Duplicate content detected. Not saved.", { status: 200 });
-      }
-      const res = spawnSync('bun', ['brain.ts', 'add', content, '--title', title || ""], { encoding: 'utf-8' });
-      return new Response(res.stdout || "Added.", { status: 200 });
+      const res = addToBrain(content, title);
+      if (res.status === 'duplicate') return new Response("⚠️ Duplicate content detected.", { status: 200 });
+      return new Response(`✅ Saved as raw entry.`, { status: 200 });
     }
 
     return new Response("Not found", { status: 404 });

@@ -6,9 +6,9 @@ import { Command } from 'commander';
 import * as fs from 'fs';
 import * as path from 'path';
 import yaml from 'js-yaml';
-import { 
-  db, PATHS, initDb, getHash, slugify, hybridSearch, getStats, 
-  queryBrain, validateClaim, addToBrain, embedBrain, runGemini
+import {
+  db, PATHS, initDb, getHash, slugify, hybridSearch, getStats,
+  queryBrain, validateClaim, addToBrain, embedBrain, runGemini, cosine_sim
 } from './core.ts';
 
 const program = new Command();
