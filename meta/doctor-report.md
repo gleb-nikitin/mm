@@ -1,23 +1,21 @@
 # Brain Doctor Report
 
-Generated: 4/17/2026, 4:16:30 PM
+Generated: 4/17/2026, 4:55:19 PM
 
 ## DB Integrity
 - Status: ✅ OK
 - FTS5: ✅ OK
 
 ## Embeddings
-- Coverage: 8 / 8 chunks
+- Coverage: 10 / 10 chunks
 
 ## Stats
 - Pages: 2
-- Raw Entries: 4
-- Links: 2
+- Raw Entries: 6
 - Claims: 0
-- Avg Sources/Page: 1.00
 
 ## Latency
-- Test Search (FTS-only): 0ms
+- Test Search (Hybrid): 19ms
 
 ## Schema
 - Version: 3
