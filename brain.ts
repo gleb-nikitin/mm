@@ -16,15 +16,9 @@ db.exec('PRAGMA busy_timeout = 5000;');
 db.exec('PRAGMA foreign_keys = ON;');
 
 function initDb() {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS schema_version (
-      version INTEGER PRIMARY KEY
-    );
-  `);
-
+  db.run(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);`);
   const row = db.prepare('SELECT version FROM schema_version').get() as { version: number } | undefined;
   let currentVersion = row ? row.version : 0;
-
   if (currentVersion < 1) {
     db.run(`CREATE TABLE IF NOT EXISTS raw_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, content TEXT NOT NULL, source_path TEXT UNIQUE, hash TEXT, processed INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);`);
     db.run(`CREATE TABLE IF NOT EXISTS wiki_pages (slug TEXT PRIMARY KEY, title TEXT NOT NULL, tags TEXT, status TEXT, source_count INTEGER DEFAULT 0, summary TEXT, created_at DATETIME, updated_at DATETIME);`);
@@ -37,20 +31,23 @@ function initDb() {
     db.run('INSERT OR REPLACE INTO schema_version (version) VALUES (1)');
     currentVersion = 1;
   }
-
   if (currentVersion < 2) {
-    try { db.run('ALTER TABLE wiki_pages ADD COLUMN type TEXT;'); } catch (e) {}
-    try { db.run('ALTER TABLE wiki_pages ADD COLUMN confidence REAL DEFAULT 0.5;'); } catch (e) {}
-    try { db.run('ALTER TABLE wiki_pages ADD COLUMN mentions INTEGER DEFAULT 1;'); } catch (e) {}
-    try { db.run('ALTER TABLE wiki_pages ADD COLUMN tier INTEGER DEFAULT 3;'); } catch (e) {}
+    try { db.run('ALTER TABLE wiki_pages ADD COLUMN type TEXT;'); db.run('ALTER TABLE wiki_pages ADD COLUMN confidence REAL DEFAULT 0.5;'); db.run('ALTER TABLE wiki_pages ADD COLUMN mentions INTEGER DEFAULT 1;'); db.run('ALTER TABLE wiki_pages ADD COLUMN tier INTEGER DEFAULT 3;'); } catch (e) {}
     db.run('INSERT OR REPLACE INTO schema_version (version) VALUES (2)');
     currentVersion = 2;
   }
 }
-
 initDb();
 
 // --- Internal Logic ---
+
+function slugify(text: string): string {
+  return text
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^\p{L}\p{N}_]+/gu, '') // Keep letters (including Unicode), numbers, and underscores
+    .toLowerCase();
+}
 
 function getHash(content: string): string {
   const hasher = new Bun.CryptoHasher("sha256");
@@ -111,7 +108,6 @@ function internalRebuildIndex() {
   const allPages = db.prepare('SELECT slug FROM wiki_pages').all() as any[];
   for (const p of allPages) if (!foundSlugs.has(p.slug)) db.prepare('DELETE FROM wiki_pages WHERE slug = ?').run(p.slug);
   for (const { source, target } of allLinks) { try { db.prepare('INSERT OR IGNORE INTO wiki_links (source_slug, target_slug) VALUES (?, ?)').run(source, target); } catch (e) {} }
-  console.log(`✅ Sync complete.`);
 }
 
 function internalRebuildMarkdownIndex() {
@@ -156,7 +152,7 @@ function runGemini(prompt: string, yolo: boolean = false) {
 
 // --- CLI Definitions ---
 
-program.name('brain').version('0.5.0');
+program.name('brain').version('0.5.2');
 
 program.command('add').argument('<content>', 'Raw content').option('-t, --title <title>', 'Title').action((content, options) => {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -179,7 +175,6 @@ program.command('save').argument('<insight>', 'Freeform insight').option('-t, --
   try {
     db.prepare('INSERT INTO raw_entries (title, content, source_path, hash) VALUES (?, ?, ?, ?)').run(title, insight, filePath, hash);
     console.log(`✅ Saved ${filePath}`);
-    // Optional: suggestion
     const results = db.prepare('SELECT slug, title FROM search_index WHERE search_index MATCH ? LIMIT 3').all(`"${insight}"`) as any[];
     if (results.length > 0) { console.log('\nSuggested pages to process into:'); results.forEach(r => console.log(`- [[${r.slug}|${r.title}]]`)); }
   } catch (e) { console.log(`⚠️ Exists.`); }
@@ -202,25 +197,18 @@ program.command('read').argument('<slug>', 'Slug').action((slug) => {
 
 program.command('query').argument('<question>', 'The question').option('--save', 'Save as analysis page').action(async (question, options) => {
   console.log(`🧠 Querying: "${question}"...`);
-  // Exact hits first
   const exactHits = db.prepare('SELECT slug, title, summary FROM wiki_pages WHERE slug = ? OR slug IN (SELECT slug FROM wiki_aliases WHERE alias = ?)').all(question, question) as any[];
-  // FTS hits
   const searchResults = db.prepare('SELECT slug, title, summary FROM wiki_pages WHERE slug IN (SELECT slug FROM search_index WHERE search_index MATCH ?) LIMIT 10').all(`"${question}"`) as any[];
-  
   const uniqueResults = new Map();
   [...exactHits, ...searchResults].forEach(r => { if (!uniqueResults.has(r.slug)) uniqueResults.set(r.slug, r); });
   const finalResults = Array.from(uniqueResults.values());
-
   let context = "";
   if (finalResults.length > 0) {
     context = "## RELEVANT WIKI PAGES\n\n";
-    // Full body for top 3
     for (let i = 0; i < Math.min(finalResults.length, 3); i++) {
       const res = finalResults[i];
-      const body = fs.readFileSync(path.join('wiki', `${res.slug}.md`), 'utf-8');
-      context += `### [[${res.slug}|${res.title}]]\n${body}\n---\n`;
+      context += `### [[${res.slug}|${res.title}]]\n${fs.readFileSync(path.join('wiki', `${res.slug}.md`), 'utf-8')}\n---\n`;
     }
-    // Summaries for the rest
     if (finalResults.length > 3) {
       context += "### OTHER POTENTIAL MATCHES\n";
       for (let i = 3; i < finalResults.length; i++) {
@@ -236,19 +224,15 @@ program.command('query').argument('<question>', 'The question').option('--save',
       for (const res of rawResults) context += `### ${res.title} (ID: ${res.id})\n${res.content}\n---\n`;
     }
   }
-
   const querySkill = fs.readFileSync(path.join('meta', 'skills', 'query.md'), 'utf-8');
   const schema = fs.readFileSync(path.join('meta', 'schema.md'), 'utf-8');
   const prompt = `${querySkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n${context}\n\n# USER QUESTION\n${question}\n\n# INSTRUCTIONS\nAnswer using the brain. Cite sources strictly.`;
-  
   const result = runGemini(prompt);
-  
   if (options.save && result.status === 0) {
-    const slug = question.toLowerCase().trim().replace(/\s+/g, '_').replace(/[^\w]/g, '');
-    const synthesis = result.stdout;
+    const slug = `analysis_${slugify(question)}`;
     const body = `---
 title: Synthesis: ${question}
-slug: analysis_${slug}
+slug: ${slug}
 tags: [analysis]
 type: analysis
 confidence: 0.7
@@ -263,7 +247,7 @@ source_count: 0
 # Analysis: ${question}
 
 ## Summary
-${synthesis}
+${result.stdout}
 
 ## Cross-References
 
@@ -271,8 +255,8 @@ ${synthesis}
 <!-- TIMELINE: append-only below this line -->
 - **${new Date().toISOString().split('T')[0]}**: Generated synthesis via query.
 `;
-    fs.writeFileSync(path.join('wiki', `analysis_${slug}.md`), body);
-    console.log(`✅ Saved to wiki/analysis_${slug}.md`);
+    fs.writeFileSync(path.join('wiki', `${slug}.md`), body);
+    console.log(`✅ Saved to wiki/${slug}.md`);
     internalRebuildIndex();
   }
 });
@@ -309,22 +293,47 @@ program.command('process').action(async () => {
   }
 });
 
-program.command('lint').action(async () => {
+program.command('lint').option('--fix', 'Safe fixes only').action((options) => {
+  console.log('🧹 Linting Brain...');
   const wikiFiles = fs.readdirSync('wiki').filter(f => f.endsWith('.md'));
-  const wikiContents = wikiFiles.map(f => `File: ${f}\n---\n${fs.readFileSync(path.join('wiki', f), 'utf-8')}\n---`).join('\n\n');
-  const lintSkill = fs.readFileSync(path.join('meta', 'skills', 'lint.md'), 'utf-8');
-  const schema = fs.readFileSync(path.join('meta', 'schema.md'), 'utf-8');
-  const prompt = `${lintSkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n## WIKI CONTENT\n${wikiContents}\n\n# INSTRUCTIONS\nProduce report.`;
-  runGemini(prompt);
+  const findings: string[] = [];
+  
+  // 1. Broken Links
+  const links = db.prepare('SELECT source_slug, target_slug FROM wiki_links').all() as any[];
+  for (const link of links) if (!db.prepare('SELECT 1 FROM wiki_pages WHERE slug = ?').get(link.target_slug)) findings.push(`- **Broken Link**: [[${link.source_slug}]] -> [[${link.target_slug}]]`);
+
+  // 2. Structural Checks
+  for (const file of wikiFiles) {
+    const content = fs.readFileSync(path.join('wiki', file), 'utf-8');
+    const slug = file.replace('.md', '');
+    if (!content.includes('---')) findings.push(`- **Missing Header**: ${file}`);
+    if (!content.includes('## Summary')) findings.push(`- **Missing Truth**: ${file}`);
+    if (!content.includes('<!-- TIMELINE: append-only below this line -->')) {
+      if (options.fix) {
+        fs.appendFileSync(path.join('wiki', file), '\n---\n<!-- TIMELINE: append-only below this line -->\n');
+        console.log(`✅ Fixed separator in ${file}`);
+      } else findings.push(`- **Missing Timeline Separator**: ${file}`);
+    }
+  }
+
+  // 3. Orphans & Provenance
+  const orphans = db.prepare('SELECT slug FROM wiki_pages WHERE slug NOT IN (SELECT target_slug FROM wiki_links) AND slug NOT IN (SELECT slug FROM wiki_aliases)').all() as any[];
+  orphans.forEach(o => findings.push(`- **Orphan Page**: [[${o.slug}]]`));
+  const noProv = db.prepare('SELECT slug FROM wiki_pages WHERE source_count = 0 AND type != "analysis"').all() as any[];
+  noProv.forEach(p => findings.push(`- **No Provenance**: [[${p.slug}]]`));
+
+  // 4. Stale Pages
+  const stale = db.prepare('SELECT slug FROM wiki_pages WHERE updated_at < date("now", "-30 days")').all() as any[];
+  stale.forEach(s => findings.push(`- **Stale Page**: [[${s.slug}]]` || ''));
+
+  const report = `# Lint Report\n\nGenerated: ${new Date().toLocaleString()}\n\n${findings.length > 0 ? findings.join('\n') : '✨ No issues found.'}\n`;
+  fs.writeFileSync(path.join('meta', 'lint-report.md'), report);
+  console.log(report);
 });
 
 program.command('maintain').action(async () => {
-  const wikiFiles = fs.readdirSync('wiki').filter(f => f.endsWith('.md'));
-  const wikiContents = wikiFiles.map(f => `File: ${f}\n---\n${fs.readFileSync(path.join('wiki', f), 'utf-8')}\n---`).join('\n\n');
-  const log = fs.readFileSync(path.join('meta', 'log.md'), 'utf-8');
-  const schema = fs.readFileSync(path.join('meta', 'schema.md'), 'utf-8');
   const maintainSkill = fs.readFileSync(path.join('meta', 'skills', 'maintain.md'), 'utf-8');
-  const prompt = `${maintainSkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n## RECENT LOG\n${log}\n\n## WIKI CONTENT\n${wikiContents}\n\n# INSTRUCTIONS\nPerform maintenance.`;
+  const prompt = `${maintainSkill}\n\n# CONTEXT\n\n## SCHEMA\n${fs.readFileSync(path.join('meta', 'schema.md'), 'utf-8')}\n\n# INSTRUCTIONS\nPerform maintenance.`;
   const result = runGemini(prompt, true);
   if (result.status === 0) { internalRebuildIndex(); internalRebuildMarkdownIndex(); internalRebuildTimeline(); }
 });
@@ -339,8 +348,7 @@ page.command('create').argument('<slug>', 'Slug').argument('<title>', 'Title').o
   if (fs.existsSync(filePath)) { console.error(`❌ Exists`); process.exit(1); }
   const tags = options.tags ? options.tags.split(',').map((t: string) => t.trim()) : [];
   const aliases = options.aliases ? options.aliases.split(',').map((a: string) => a.trim()) : [];
-  const frontmatter = { title, slug, aliases, tags, type: options.type, confidence: Number(options.confidence), mentions: Number(options.mentions), tier: Number(options.tier), status: 'active', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), source_count: options.source ? 1 : 0 };
-  const body = ['---', yaml.dump(frontmatter).trim(), '---', '', `# ${title}`, '', '## Summary', options.content, '', '## Cross-References', '', '---', '<!-- TIMELINE: append-only below this line -->'].join('\n');
+  const body = ['---', yaml.dump({ title, slug, aliases, tags, type: options.type, confidence: Number(options.confidence), mentions: Number(options.mentions), tier: Number(options.tier), status: 'active', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), source_count: options.source ? 1 : 0 }).trim(), '---', '', `# ${title}`, '', '## Summary', options.content, '', '## Cross-References', '', '---', '<!-- TIMELINE: append-only below this line -->'].join('\n');
   fs.writeFileSync(filePath, body);
   if (options.source && options.claim) { internalRebuildIndex(); internalRecordClaim(slug, options.claim, Number(options.source)); }
   console.log(`✅ Created ${slug}`);
@@ -350,21 +358,23 @@ page.command('update').argument('<slug>', 'Slug').argument('<content>', 'Content
   const filePath = path.join('wiki', `${slug}.md`);
   if (!fs.existsSync(filePath)) { console.error(`❌ Not found`); process.exit(1); }
   const fileContent = fs.readFileSync(filePath, 'utf-8');
-  const timelineSplit = fileContent.split('<!-- TIMELINE: append-only below this line -->');
-  const headerAndTruth = timelineSplit[0];
-  const existingTimeline = timelineSplit[1] || '';
+  const parts = fileContent.split('<!-- TIMELINE: append-only below this line -->');
+  const headerAndTruth = parts[0];
+  const existingTimeline = parts[1] || '';
   if (options.section === 'truth') {
     if (content.includes('<!-- TIMELINE: append-only below this line -->')) {
       const newTimeline = content.split('<!-- TIMELINE: append-only below this line -->')[1];
       if (existingTimeline.trim() && !newTimeline.includes(existingTimeline.trim())) { console.error(`❌ ERR: Timeline wiped.`); process.exit(1); }
       fs.writeFileSync(filePath, content);
     } else {
-      const newContent = headerAndTruth.split('## Summary')[0] + '## Summary\n' + content + '\n\n' + '---' + '\n' + '<!-- TIMELINE: append-only below this line -->' + existingTimeline;
-      fs.writeFileSync(filePath, newContent);
+      const summarySplit = headerAndTruth.split('## Summary');
+      const start = summarySplit[0];
+      const rest = summarySplit.slice(1).join('## Summary');
+      const afterSummary = rest.includes('## Cross-References') ? '## Cross-References' + rest.split('## Cross-References').slice(1).join('## Cross-References') : '## Cross-References';
+      fs.writeFileSync(filePath, start + '## Summary\n' + content + '\n\n' + afterSummary + '\n---\n<!-- TIMELINE: append-only below this line -->' + existingTimeline);
     }
   } else {
-    const newContent = headerAndTruth + '<!-- TIMELINE: append-only below this line -->' + existingTimeline + '\n' + content;
-    fs.writeFileSync(filePath, newContent);
+    fs.writeFileSync(filePath, headerAndTruth + '<!-- TIMELINE: append-only below this line -->' + existingTimeline + '\n' + content);
   }
   if (options.source && options.claim) internalRecordClaim(slug, options.claim, Number(options.source));
   console.log(`✅ Updated ${slug}`);
@@ -376,13 +386,5 @@ indexCmd.command('rebuild-markdown').action(() => internalRebuildMarkdownIndex()
 
 const timelineCmd = program.command('timeline');
 timelineCmd.command('rebuild').action(() => internalRebuildTimeline());
-
-const linksCmd = program.command('links');
-linksCmd.command('check').action(() => {
-  const l = db.prepare('SELECT source_slug, target_slug FROM wiki_links').all() as any[];
-  let broken = 0;
-  for (const link of l) if (!db.prepare('SELECT 1 FROM wiki_pages WHERE slug = ?').get(link.target_slug)) { console.warn(`⚠️ Broken: [[${link.source_slug}]] -> [[${link.target_slug}]]`); broken++; }
-  if (broken === 0) console.log('✅ Healthy.'); else console.log(`❌ Found ${broken} broken.`);
-});
 
 program.parse();
