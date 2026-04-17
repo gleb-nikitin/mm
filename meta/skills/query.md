@@ -7,53 +7,28 @@ description: Answer a user question by searching the local brain first, reading 
 
 Use this when the user asks a factual or synthesis question that may already be covered by the brain.
 
-## Goal
+## Intent Categories
 
-Answer from the maintained brain before reaching for external knowledge or freeform memory.
-
-## Read First
-
-1. `meta/schema.md`
-2. `meta/index.md` if it exists
-3. relevant wiki pages found through local search
-
-If `meta/index.md` does not exist yet, search `/wiki/` and `/raw/` directly.
+1. **Entity Lookup**: Find specific facts about a person, place, or thing.
+2. **Temporal Query**: "When did X happen?" or "How has Y evolved?"
+3. **Conceptual Synthesis**: Connect multiple ideas or summarize a broad topic.
 
 ## Workflow
 
-1. Convert the user request into search terms:
-   - exact names
-   - aliases
-   - related concepts
-2. Search the local brain.
-3. Open the top 3-5 relevant wiki pages.
-4. If the pages are incomplete or contradictory, inspect the linked raw evidence.
-5. Answer using the wiki as the primary source.
-6. Cite page names in the response when useful.
+1. **Analyze Intent**: Determine if this is an entity, temporal, or conceptual query.
+2. **Search & Read**:
+   - Exact slug/alias hits first.
+   - Relevant wiki pages by content.
+   - Raw evidence only if needed for deeper detail.
+3. **Synthesize Answer**:
+   - Answer using ONLY the provided context from the brain.
+   - If info is missing, state clearly what is known and what is missing.
+4. **Cite Sources**:
+   - **MANDATORY**: Every major claim must cite its source.
+   - Format: `[[Page_Slug|Page Title]]` for wiki info, or `raw/filename.md` for raw evidence.
 
-## Retrieval Order
+## Citation Rule
+Do not make claims without a specific citation. If multiple pages support a claim, cite all relevant ones.
 
-1. exact title / slug / alias matches
-2. relevant wiki pages by content
-3. raw evidence only if the wiki is thin or stale
-
-## If The Brain Is Missing Information
-
-Say so directly.
-
-Good behavior:
-
-- "The brain has partial info on X but not enough to answer Y."
-- "The brain covers A and B, but I don't see evidence for C."
-
-Bad behavior:
-
-- hallucinating details not present in the brain
-
-## Durable Follow-Up
-
-If the query produces a durable synthesis that should remain useful:
-
-- propose saving it back to the wiki
-- or create/update a relevant summary page if the workflow explicitly calls for it
-
+## Durable Synthesis
+If you produce a high-value synthesis, the user may request to `--save` it. In that case, use `bun brain.ts page create` to save it as an `analysis` type page.
