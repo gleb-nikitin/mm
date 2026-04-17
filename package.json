@@ -1,0 +1,24 @@
+{
+  "name": "mt",
+  "version": "1.0.0",
+  "description": "Local-first persistent knowledge base",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/node": "^22.0.0",
+    "better-sqlite3": "^11.0.0",
+    "bun-types": "^1.1.0",
+    "commander": "^12.0.0",
+    "js-yaml": "^4.1.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9"
+  }
+}

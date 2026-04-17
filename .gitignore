@@ -1,0 +1,7 @@
+node_modules/
+meta/brain.db
+meta/brain.db-wal
+meta/brain.db-shm
+.DS_Store
+tsconfig.tsbuildinfo
+*.log
