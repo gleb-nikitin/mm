@@ -1,12 +1,13 @@
 {
   "name": "mm",
   "version": "1.0.0",
-  "description": "Local-first persistent knowledge base",
+  "description": "Mnemonic51 — local-first persistent knowledge base",
   "type": "module",
-  "main": "index.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "brain": "bun brain.ts"
+    "brain": "bun src/brain.ts",
+    "api": "bun src/api.ts",
+    "mcp": "bun src/mcp.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -17,12 +17,12 @@ Turn raw material into durable wiki updates using the **New Page Model**.
 2. Search `/wiki/` for existing pages (exact slug or alias).
 3. For each subject, choose: **Create**, **Update**, or **Skip**.
 4. **Create Page**:
-   - Use `bun brain.ts page create`.
+   - Use `bun run brain page create`.
    - Set `type`, `confidence`, `mentions`, and `tier`.
    - Write the **Compiled Truth** in `## Summary`.
    - Use `--source <id>` and `--claim "..."` flags.
 5. **Update Page**:
-   - Use `bun brain.ts page update`.
+   - Use `bun run brain page update`.
    - Rewrite the **Compiled Truth** (Summary) to include new info.
    - Append the new evidence bullet to the **Timeline** (below the `---` separator).
    - Use `--source <id>` and `--claim "..."` flags.

@@ -1,6 +1,6 @@
 # Remaining Gaps vs Plan
 
-This file tracks the delta between the implemented system and the original `plan.md` or the updated `roadmap-2.md`.
+This file tracks the delta between the implemented system and the current roadmap in `agent/docs/roadmap.md`.
 
 ## Metadata & Maintenance
 

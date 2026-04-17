@@ -1,57 +1,62 @@
 # Handoff — mm_devops
 
-Last updated 2026-04-17 after a fresh devops session (prior executor died mid-flight; this session resumed from the auditor seed and finished the Phase 6 verification pass).
+Last updated 2026-04-17 after the structural cleanup pass + `src/` move. All changes uncommitted.
 
 ## Current state
 
-- Phase 6 integration is **verified working** but still **uncommitted**.
-- Project name: **Mnemonic51**, short/working name: **mm**, branch: `master`.
-- `api.ts` and `mcp.ts` both import from `core.ts`, call `initDb()`, and do **not** shell out to `brain.ts`.
-- `core.ts::getStats()` returns schema `version` and the API `/stats` markdown surfaces it.
-- Fresh-root bootstrap with `MT_BRAIN_ROOT` creates `meta/brain.db` at schema v3 with zero counts.
+- Phase 6 integration is committed (`4789d6f`) and verified.
+- Structural cleanup + `src/` consolidation are applied to the worktree but **not yet committed**.
+- Typecheck, API boot on live root, fresh-root API boot, and CLI all green.
 
-## What I did this session
+## What this session changed
 
-- Fixed the typecheck blocker: added `cosine_sim` to the `./core.ts` import list in `brain.ts` (was used on line 305, not imported).
-- Ran the full verification checklist on the live worktree.
+### `src/` consolidation
+- Moved `brain.ts`, `core.ts`, `api.ts`, `mcp.ts` → `src/`. Relative imports (`./core.ts`) stay valid because they all moved together.
+- `package.json` scripts now point at `bun src/<file>.ts`.
+- Repo root now holds only config + data dirs + docs; no loose `.ts`.
 
-## Verification run (all green)
+### Root hygiene (earlier in this session)
+- Deleted `brain.ts.bak`.
+- Moved `import-chats.ts` → `scripts/import-chats.ts`.
 
-- `bun x tsc --noEmit` → no output, exit 0
-- `bun run api.ts` → boots, `/stats` returns schema v3, `/` returns markdown endpoint list
-- `bun run mcp.ts` → stdio server stays alive while stdin is held, no errors
-- Fresh-root test with `MT_BRAIN_ROOT=/tmp/mm_fresh_XXXX` containing empty `raw/ wiki/ meta/`:
-  - `bun run brain.ts --help` and `brain.ts queue` work
-  - API `/stats` returns schema v3, counts all zero
-  - API `/add` writes a file under `raw/` and bumps `Raw Entries` to 1
-  - `meta/brain.db` + WAL/SHM created on first init
+### Gitignore + untracking
+- Added runtime-generated meta reports to `.gitignore`: `doctor-report.md`, `lint-report.md`, `dream-report.md`, `index.md`, `timeline.md`, `log.md`.
+- `git rm --cached` on those six files. They remain on disk; `brain.ts` commands keep writing them.
 
-## Uncommitted changes in worktree
+### Agent docs
+- Renamed `agent/docs/roadmap-1-17-04.md` → `agent/docs/roadmap.md` and rewrote its contents.
+- Added `agent/README.md`.
 
-- `M brain.ts` (the `cosine_sim` import fix, this session)
-- `M api.ts` (Phase 6 integration, prior session)
-- `M mcp.ts` (Phase 6 integration, prior session)
-- `D plan.md`, `D opus-plan.md`, `D roadmap-2.md`, `D upgrade-opus.md` (root cleanup, prior session)
-- `?? agent/` (handoff + roles tree, seeded by auditor)
+### Public-facing
+- Added root `README.md`.
+- Updated `package.json`: dropped stale `"main"` and noop test script; added `api`, `mcp`, `typecheck` scripts.
 
-## Known operational risk
+### Stale references swept
+- `meta/remaining-gaps.md` no longer references deleted `plan.md` / `roadmap-2.md`.
+- `meta/skills/query.md` and `meta/skills/ingest.md` now use `bun run brain ...` instead of `bun brain.ts ...`.
+- `src/brain.ts` cron comment and embedded LLM prompt updated to `bun run brain ...`.
+- `agent/roles/devops/role.md` scope section points at `src/*.ts`.
 
-- The verified Phase 6 changes are not committed yet. A single commit should land them together with the `cosine_sim` import fix.
-- `brain.ts.bak` still sits in the repo root. Not covered by `.gitignore`. Should be deleted during cleanup, not now.
-- `tsconfig.tsbuildinfo` is not in `.gitignore` either — review during cleanup.
+## Verification this session (all green)
 
-## Immediate next steps
+- `bun run typecheck` → clean
+- `bun run api` on live root → `/stats` returns schema v3 with real counts
+- `MT_BRAIN_ROOT=<tmp>` fresh root with empty `raw/ wiki/ meta/` → API boots, `/stats` returns schema v3 with zero counts, `meta/brain.db` created
+- `bun run brain queue` and `bun run brain --help` work
 
-1. Commit the verified Phase 6 pass:
-   - Stage: `brain.ts api.ts mcp.ts plan.md opus-plan.md roadmap-2.md upgrade-opus.md`
-   - Leave `agent/` untracked or stage separately — it is agent-facing material, not product code.
-   - Suggested commit scope: "Phase 6 verified — shared core, no CLI shell-outs, fresh-root bootstrap".
-2. After commit, start the cleanup pass (scope already captured in `agent/docs/roadmap-1-17-04.md`):
-   - Delete `brain.ts.bak`.
-   - Add `tsconfig.tsbuildinfo` and `.DS_Store` to `.gitignore` if missing.
-   - Decide final public-repo layout (entrypoints + `raw/ wiki/ meta/ agent/`).
-3. Do not broaden scope. No feature work until cleanup is landed.
+## Suggested commit scope
+
+Single commit: "Structural cleanup + src/ move — root hygiene, gitignored runtime reports, public README, stable roadmap name, entrypoints in src/".
+
+## Known deferred items (owner decisions, not devops)
+
+- License choice.
+- Scrub sample-brain content in `raw/` and `wiki/` before going public (`scripts/import-chats.ts` also has a hardcoded personal path).
+- Version-tag a public 0.1.
 
 ## First recommendation for the next session
 
-Open with: `git status`, `bun x tsc --noEmit`, `bun run api.ts` + `curl /stats`, fresh-root test. If all four still green, proceed straight to the commit + cleanup pass above.
+- Open with `git status` and `git diff --stat`.
+- If the cleanup commit hasn't been made, make it.
+- Then `bun run typecheck` + `bun run api` + fresh-root test as a smoke check.
+- After that, stop unless the owner has given new scope. This repo is at a good resting point for public.

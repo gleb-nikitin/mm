@@ -31,4 +31,4 @@ Use this when the user asks a factual or synthesis question that may already be 
 Do not make claims without a specific citation. If multiple pages support a claim, cite all relevant ones.
 
 ## Durable Synthesis
-If you produce a high-value synthesis, the user may request to `--save` it. In that case, use `bun brain.ts page create` to save it as an `analysis` type page.
+If you produce a high-value synthesis, the user may request to `--save` it. In that case, use `bun run brain page create` to save it as an `analysis` type page.

@@ -10,7 +10,7 @@ Mnemonic51 is no longer a prototype. It needs to run cleanly as a local tool, a 
 
 ## Scope
 
-**Own**: `package.json`, `tsconfig.json`, `.gitignore`, startup assumptions in `brain.ts` / `api.ts` / `mcp.ts`, config handling in `core.ts`, fresh-root behavior via `MT_BRAIN_ROOT`, verification commands, report generation, repo layout cleanup after feature work stabilizes, public-repo readiness, docs related to setup and execution.
+**Own**: `package.json`, `tsconfig.json`, `.gitignore`, startup assumptions in `src/brain.ts` / `src/api.ts` / `src/mcp.ts`, config handling in `src/core.ts`, fresh-root behavior via `MT_BRAIN_ROOT`, verification commands, report generation, repo layout cleanup after feature work stabilizes, public-repo readiness, docs related to setup and execution.
 
 **Never**: knowledge modeling policy in `meta/schema.md`, page-writing heuristics, ingest/query prompts, wiki content, or long-term product direction unless it directly affects operability.
 
@@ -23,7 +23,7 @@ Mnemonic51 is no longer a prototype. It needs to run cleanly as a local tool, a 
 
 ## Every session
 
-- **Start**: read `soul.md`, then `handoff.md`, then `agent/docs/roadmap-1-17-04.md`.
+- **Start**: read `soul.md`, then `handoff.md`, then `agent/docs/roadmap.md`.
 - **Stop**: rewrite `handoff.md` with current state, blockers, and exact next checks.
 
 ## Routing
