@@ -1,32 +1,26 @@
 # Handoff — mm_devops
 
-Last updated 2026-04-18 after landing incremental imports and FTS refinement.
+Last updated 2026-04-18 after landing Gemini importer.
 
 ## Current state
 
 - **Schema v7 live** (adds `import_state` for incremental session imports).
 - **Claude Importer updated** with `--min-age-seconds` and `mtime` state tracking.
 - **Codex Importer added** (`scripts/import-codex.ts`) for importing Codex sessions.
+- **Gemini Importer added** (`scripts/import-gemini.ts`) for importing Gemini sessions.
 - **Search refined**: `hybridSearch` now uses `buildFtsQuery` and `applyEventLane`.
 
 ## What this session changed
 
-- **Implemented `import_state`** in `src/core.ts` to cache filesystem mtime and avoid re-importing unchanged sessions.
-- **Updated `scripts/import-claude.ts`**:
-  - Integrated with `import_state`.
-  - Added `--min-age-seconds` flag to skip "live" sessions.
-- **Added `scripts/import-codex.ts`**:
-  - Parity with the Claude importer for `.codex/sessions/*.jsonl` transcripts.
-- **Refined `hybridSearch`**:
-  - Added `buildFtsQuery` for safer, more robust FTS matching (bag-of-words logic).
-  - Added `applyEventLane` to ensure a minimum quota (30%) for event results in ranked lists.
+- **Added `scripts/import-gemini.ts`**:
+  - Parity with Claude/Codex importers for `~/.gemini/tmp/<project>/chats/session-*.json` transcripts.
+  - Defaults to `--min-turns 3`.
+  - Strips `toolCalls` and `info` messages.
 
 ## Verification this session (all green)
 
 - `bun run typecheck` green.
-- `initDb()` migrates to v7 correctly.
-- Dry-run of new `import-codex.ts` verified correctly on local sessions.
-- Search verified to return events even when wiki results are strong (event lane).
+- Gemini importer verified against local data: successfully skips live/unchanged sessions and imports new ones.
 
 ## Next steps
 
