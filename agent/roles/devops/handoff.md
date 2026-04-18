@@ -1,29 +1,26 @@
 # Handoff — mm_devops
 
-Last updated 2026-04-18 after establishing the automated milestone log.
+Last updated 2026-04-18 after landing Schema v5 and Dual-Root Raw architecture.
 
 ## Current state
 
-- **Milestone Log (`wiki/Milestones.md`) established and automated** (`c88c4f1`).
-- Structural cleanup + `src/` move are committed (`c210c1e`).
-- A `git` role was added (`61e284e`) — devops does not own that role.
-- **UI + async-gemini work is committed** (`ed3eaf2`).
-- **Claude Code sessions import script + macOS commands are committed** (`dd9bba4`).
-- **Source-separation landed** (`7b5f0ef`).
-- **Wiki updated with ingested session data and agent documentation refined** (`6a758af`).
-- **Two-track plan (Light + Hardcore) defined** in `agent/docs/roadmap.md`.
+- **Schema v5 landed** (added `raw_events` table for streaming chats/chains).
+- **Dual-Root Raw Architecture** (MD + SQLite) defined in `todo.md`.
+- **Tiered Compute Philosophy** (Simple/Stupid/Serious) documented forLib vs Processor split.
+- Role Briefings established for `devops` and `git` for faster context loading.
 
 ## What this session changed
 
-- (See previous handoffs for earlier work)
-- Established `wiki/Milestones.md` to track architectural evolution.
-- Updated `git` role scripts to automatically append to `Milestones.md` on every commit.
+- (See roadmap for earlier work)
+- **Implemented `raw_events` in `src/core.ts`**.
+- Refined `agent/docs/todo.md` with detailed architecture and metadata hygiene rules.
+- Added `meta/skills/summarize-event.md` for low-latency pre-processing.
 
 ## Verification this session (all green)
 
-- Automated milestone append verified via `commit-scope.sh`.
-- All changes verified end-to-end.
-- Repository is clean (except for handoff files).
+- `bun run typecheck` green.
+- `initDb()` migrates to v5 correctly.
+- All docs verified.
 
 ## Next steps
 

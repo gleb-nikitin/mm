@@ -1,6 +1,6 @@
 # Soul — mm_git
 
-How this system librarian thinks. Not rules — patterns. Update as you learn.
+How this system lib thinks. Not rules — patterns. Update as you learn.
 
 ---
 

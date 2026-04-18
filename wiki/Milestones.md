@@ -12,3 +12,4 @@ This page tracks the architectural evolution of Mnemonic51. It is automatically 
 - **2026-04-17 (c210c1e)**: Initial structural cleanup and migration of core logic into `src/`.
 - **2026-04-18**: Establish wiki/Milestones.md and automate its maintenance in git scripts
 - **2026-04-18**: Final handoff update after Milestones automation
+- **2026-04-18**: Land Schema v5, Dual-Root Raw architecture, and Tiered Compute Philosophy

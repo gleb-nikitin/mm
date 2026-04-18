@@ -57,7 +57,28 @@ export function initDb() {
   db.run(`CREATE INDEX IF NOT EXISTS idx_raw_source_type ON raw_entries(source_type)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_raw_project     ON raw_entries(project)`);
 
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 4)');
+  // v5: raw_events for streaming data (chains, chats)
+  db.run(`CREATE TABLE IF NOT EXISTS raw_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_type TEXT NOT NULL,      -- 'human_chat', 'llm_chat', 'chain', 'soul'
+    project TEXT NOT NULL,
+    external_id TEXT UNIQUE,        -- chain_id:msg_id or session:turn
+    chain_id TEXT,
+    from_id TEXT,
+    to_id TEXT,
+    timestamp DATETIME NOT NULL,
+    content TEXT NOT NULL,
+    participants TEXT,              -- JSON array
+    metadata TEXT,                  -- JSON object (for footer info)
+    processed INTEGER DEFAULT 0,    -- 1 if ingested to wiki
+    deduped INTEGER DEFAULT 0,      -- 1 if passed through normalization script
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_event_chain ON raw_events(chain_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_event_project ON raw_events(project)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_event_processed ON raw_events(processed)`);
+
+  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 5)');
 }
 
 // --- Common Logic ---

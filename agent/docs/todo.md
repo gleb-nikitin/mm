@@ -12,6 +12,41 @@ mm is not a memory engine that happens to be useful for project management. mm i
 
 The **skills library is the product**. Code is infrastructure. Skills are markdown files that encode extraction procedures; new skills extend mm's capabilities without new code. That principle is load-bearing for the whole sequence below.
 
+## Tiered Compute Philosophy
+
+Mnemonic51 follows a strict compute hierarchy to balance speed, cost, and intelligence:
+- **Simple Jobs -> Scripts**: Data ETL, deduplication, JSONL parsing, and format normalization belong in deterministic TypeScript/Rust scripts. Don't waste LLM tokens on parsing.
+- **Stupid Jobs -> Local LLMs**: Fast, cheap, non-reasoning local models (like a local Ollama instance or Haiku) handle high-volume classification tasks: intent routing, signal detection, entity extraction, and semantic dedup. 
+    - *Example*: `summarize-event` skill. Reading 300 lines of a chain to produce a 50-char summary and a 0.0–1.0 signal score.
+- **Serious Tasks -> Thinking Models**: Deep synthesis, wiki page creation, conflict resolution, and architectural derivations are reserved for high-capability reasoning models (like Gemini Pro or Claude Opus).
+
+## Metadata Hygiene & Responsibility Split (Decision 2026-04-18)
+
+To avoid "metadata exhaustion" for the Lib, fields are divided by the Tiered Compute Philosophy. The goal is to minimize the "Thinking Surface" during synthesis.
+
+### 1. The "Lib" Job (High Reasoning)
+These fields require project-wide understanding and synthesis.
+- **Slug / Title**: Canonical identification and naming.
+- **Summary (Truth)**: The core synthesis of knowledge.
+- **Cross-References (`[[links]]`)**: Associative trails between concepts.
+
+### 2. The "Stupid" Job (Local LLM / Classification)
+These fields are categorical and can be guessed by a local 8B model.
+- **Type**: `concept`, `entity`, `source`, `soul`.
+- **Tags**: Keyword extraction.
+- **Initial Tier / Confidence**: Suggested values based on source signal strength.
+
+### 3. The "Simple" Job (Deterministic Scripts)
+These fields must be automated to prevent "context rot" and manual error.
+- **Source Count**: **[REFACTOR]** Move from manual frontmatter to a computed value (count of linked `claim_sources`).
+- **Mentions**: **[REFACTOR]** Move to a computed value (count of occurrences in `raw_events` + inbound `wiki_links`).
+- **Created_at / Updated_at**: Set by DB triggers or filesystem `mtime`.
+- **Status**: Default to `active`, managed by lifecycle scripts.
+
+### 4. Fields to Deprecate/Simplify
+- **`confidence`**: Currently a manual `0.0–1.0` float. If it stays, it should be a product of `source_count` and `tier` rather than a manual guess.
+- **`mentions`**: Manual incrementing is too brittle for agents. It must be a derived metric.
+
 ## Sequence
 
 Do them in this order. Each step unblocks the next.
@@ -23,6 +58,37 @@ Do them in this order. Each step unblocks the next.
 5. **Retrieval quality** (chunking, dedup, rerank, intent, expansion)
 6. **Public-release polish** (owner decisions)
 7. **Mnemonic Hardcore** (Rust migration — deferred until methodology proves out)
+
+## Gemini Ideas: Friction Reduction
+
+These are "quality of life" improvements to the agent-system interface, identified during active ingestion sessions.
+
+- **Automatic "Observer" Mode**: Implement a file watcher (or a pre-command hash check) that triggers `internalRebuildIndex` automatically when `raw/` or `wiki/` files change. This removes the manual "diagnose/re-index" loop when the agent or user adds files directly to the filesystem.
+- **YAML-First Provenance**: Allow citing sources directly in a page's frontmatter (e.g., `sources: [raw/research/mm/karpathy.md]`) instead of requiring the agent to query the database for a `raw_id` to pass to `bun run brain page create`. The system should resolve these paths to IDs during the sync/index process.
+- **Direct "Stream-to-Brain" Tooling**: A dedicated `ingest_url(url, source_type, project)` tool or skill that fetches, sanitizes, and writes to the correct `raw/` path in one step. This reduces the multi-turn `web_fetch` -> `cat > raw` overhead and ensures consistent taxonomy from the start.
+
+## Dual-Root Raw Architecture (Brainstormed 2026-04-18)
+
+Mnemonic will transition from "Markdown-only" to a split-nature raw layer to handle the difference between durable docs and streaming events.
+
+### 1. The Split
+- **`raw/docs/` (Filesystem + Git)**: Stays as Markdown. Used for research papers, human notes, READMEs, and project documents. Inherits Git versioning and human legibility.
+- **`raw_events` (SQLite Table)**: **[SHIPPED v5]** Primary store for high-volume, immutable streaming data (Claude chats, ac chains, tool logs).
+- **`source_type='soul'`**: A high-priority event type for retirement messages and exit interviews. These should be prioritised in retrieval and "warm-loaded" into new sessions.
+
+### 2. Event Schema & Lifecycle (Next DevOps Pass)
+The `raw_events` table (landed in `src/core.ts` v5) requires operational scripts to satisfy the "Clean Timeline" requirement:
+- **Chain Importer**: Extract messages with `--- chain:` footers.
+- **Session Importer**: Map JSONL turns to `llm_chat` events.
+- **Normalization Script**: Dedup messages that appear in both sessions and chains, ensuring `chain` type wins.
+- **Hand-off**: Scripts must mark entries as `deduped=1` before the Lib ingest pass.
+- **Signal Filter**: Optional filter to drop mechanical turns (`[tool: Bash]`) and keep only reasoning/decisions.
+
+### 3. Production Ingestion Pipeline
+The logic from `process-new.command` must be ported to a robust, unattended service:
+- **Atomic Batches**: Grouping imports, indexing, and processing into single transactions.
+- **Context Awareness**: The processor should track token limits and output `[STOP: relaunch_needed]` when context saturates, triggering the creation of a `RELAUNCH_NEEDED` marker in the DB.
+- **Auto-Sync**: Background file-watching (Observer Mode) to eliminate the need for manual `index rebuild`.
 
 ## 1. Tests
 
