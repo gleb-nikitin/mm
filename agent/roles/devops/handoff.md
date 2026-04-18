@@ -1,28 +1,32 @@
 # Handoff — mm_devops
 
-Last updated 2026-04-18 after landing raw_events FTS and importer rewrite.
+Last updated 2026-04-18 after landing incremental imports and FTS refinement.
 
 ## Current state
 
-- **Schema v6 live** (adds `raw_events.title` and `events_fts` virtual table).
-- **Claude Importer rewritten** to target `raw_events` and `events_fts` directly.
-- **Search always uses hybridSearch** (removed wiki-only fallback), making events immediately findable.
-- **Dual-Root Raw Architecture** (MD + SQLite) is now being actively used for high-volume streaming data.
+- **Schema v7 live** (adds `import_state` for incremental session imports).
+- **Claude Importer updated** with `--min-age-seconds` and `mtime` state tracking.
+- **Codex Importer added** (`scripts/import-codex.ts`) for importing Codex sessions.
+- **Search refined**: `hybridSearch` now uses `buildFtsQuery` and `applyEventLane`.
 
 ## What this session changed
 
-- **Implemented `events_fts`** in `src/core.ts` for fast retrieval of raw events.
-- **Rewrote `scripts/import-claude.ts`**:
-  - Ingests into `raw_events` and `events_fts` instead of `raw/` files.
-  - Flattens session transcripts, removing noise (`tool_use`).
-  - Added `--projects-dir` flag for testing.
-- **Simplified search path** in `src/brain.ts` to always use `hybridSearch`.
+- **Implemented `import_state`** in `src/core.ts` to cache filesystem mtime and avoid re-importing unchanged sessions.
+- **Updated `scripts/import-claude.ts`**:
+  - Integrated with `import_state`.
+  - Added `--min-age-seconds` flag to skip "live" sessions.
+- **Added `scripts/import-codex.ts`**:
+  - Parity with the Claude importer for `.codex/sessions/*.jsonl` transcripts.
+- **Refined `hybridSearch`**:
+  - Added `buildFtsQuery` for safer, more robust FTS matching (bag-of-words logic).
+  - Added `applyEventLane` to ensure a minimum quota (30%) for event results in ranked lists.
 
 ## Verification this session (all green)
 
 - `bun run typecheck` green.
-- `initDb()` migrates to v6 correctly.
-- Dry-run of new `import-claude.ts` verified target paths and session flattening.
+- `initDb()` migrates to v7 correctly.
+- Dry-run of new `import-codex.ts` verified correctly on local sessions.
+- Search verified to return events even when wiki results are strong (event lane).
 
 ## Next steps
 

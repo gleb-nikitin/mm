@@ -1,16 +1,17 @@
 # Handoff — mm_git
 
 ## Current State
-- **Schema v6 landed** (`raw_events.title` + `events_fts` virtual table).
-- **Claude Importer rewritten** (`scripts/import-claude.ts`) to target `raw_events` instead of `raw/` files.
-- **Search unified**: `brain search` now always uses `hybridSearch` and includes events.
-- **Dual-Root Raw Architecture** (MD + SQLite) is now live via `raw_events`.
+- **Schema v7 landed** (`import_state` table for incremental session imports).
+- **Claude Importer updated** with incremental support and "live" session detection.
+- **Codex Importer added** (`scripts/import-codex.ts`) for importing Codex sessions.
+- **Search refined**: `hybridSearch` now uses a sanitized FTS query builder and a dedicated "event lane" to ensure event results aren't crowded out by wiki pages.
 - **Milestone Log (`wiki/Milestones.md`) automated**.
 
 ## Tasks
-- [x] Land Schema v6 and `events_fts` integration.
-- [x] Rewrite Claude importer to use `raw_events`.
-- [x] Unify search path in `brain.ts`.
+- [x] Land Schema v7 and `import_state` logic.
+- [x] Update Claude importer with incremental support.
+- [x] Add Codex session importer.
+- [x] Refine FTS query building and result ranking (event lane).
 
 ## Blockers
 - None.

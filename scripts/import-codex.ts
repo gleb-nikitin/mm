@@ -1,10 +1,10 @@
 /**
- * Import Claude Code session transcripts directly into `raw_events`.
+ * Import Codex session transcripts directly into `raw_events`.
  *
- * Walks `~/.claude/projects/*.jsonl` (or `--projects-dir <path>` for testing),
+ * Walks `~/.codex/sessions/*.jsonl` (or `--sessions-dir <path>` for testing),
  * filters by mtime + min-turns + project substring, flattens each session into
  * a single clean transcript, and inserts one row per session. Dedup is via
- * `external_id UNIQUE` (the Claude session id) + `INSERT OR IGNORE`.
+ * `external_id UNIQUE` (the Codex session id) + `INSERT OR IGNORE`.
  *
  * Search-visible immediately via `events_fts`. Ingestion into wiki is a
  * separate, later, targeted pass — this importer's job is only to land all
@@ -28,7 +28,24 @@ type Flags = {
   includeThinking: boolean;
   dryRun: boolean;
   force: boolean;
-  projectsDir: string | null;
+  sessionsDir: string | null;
+};
+
+type Block =
+  | { kind: 'text'; text: string }
+  | { kind: 'thinking'; text: string };
+
+type Turn = {
+  role: 'user' | 'assistant';
+  timestamp: string;
+  blocks: Block[];
+};
+
+type Session = {
+  sessionId: string;
+  cwd: string | null;
+  model: string | null;
+  turns: Turn[];
 };
 
 function parseFlags(argv: string[]): Flags {
@@ -40,7 +57,7 @@ function parseFlags(argv: string[]): Flags {
     includeThinking: false,
     dryRun: false,
     force: false,
-    projectsDir: null,
+    sessionsDir: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -51,7 +68,7 @@ function parseFlags(argv: string[]): Flags {
     else if (arg === '--include-thinking') flags.includeThinking = true;
     else if (arg === '--dry-run') flags.dryRun = true;
     else if (arg === '--force') flags.force = true;
-    else if (arg === '--projects-dir') flags.projectsDir = argv[++i];
+    else if (arg === '--sessions-dir') flags.sessionsDir = argv[++i];
     else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -77,16 +94,16 @@ function parseFlags(argv: string[]): Flags {
 }
 
 function printHelp() {
-  console.log(`Usage: bun scripts/import-claude.ts [flags]
+  console.log(`Usage: bun scripts/import-codex.ts [flags]
 
 Flags:
   --days N                Only sessions with mtime >= today - N  (default: 30)
-  --project <substr>      Filter by decoded cwd substring         (e.g. "work/code/mm")
+  --project <substr>      Filter by cwd substring
   --min-turns N           Skip sessions with fewer user turns     (default: 2)
   --min-age-seconds N     Skip files modified in the last N sec   (default: 300)
   --include-thinking      Include assistant thinking blocks       (default: off)
   --force                 Ignore settled/unchanged checks
-  --projects-dir <path>   Override ~/.claude/projects              (testing)
+  --sessions-dir <path>   Override ~/.codex/sessions              (testing)
   --dry-run               List what would import, write nothing
   -h, --help              Show this help
 `);
@@ -105,105 +122,138 @@ function projectSlugFromCwd(cwd: string | null | undefined): string {
   return parts[parts.length - 1] || 'unknown';
 }
 
-type Block =
-  | { kind: 'text'; text: string }
-  | { kind: 'thinking'; text: string };
-
-type Turn = {
-  role: 'user' | 'assistant';
-  timestamp: string;
-  blocks: Block[];
-};
-
-type Session = {
-  sessionId: string;
-  cwd: string | null;
-  model: string | null;
-  turns: Turn[];
-};
-
-function normalizeUserContent(raw: any): Block[] {
-  const out: Block[] = [];
-  if (typeof raw === 'string') {
-    if (raw.trim()) out.push({ kind: 'text', text: raw });
-    return out;
-  }
-  if (Array.isArray(raw)) {
-    for (const item of raw) {
-      if (!item || typeof item !== 'object') continue;
-      if (item.type === 'text' && typeof item.text === 'string' && item.text.trim()) {
-        out.push({ kind: 'text', text: item.text });
+function collectRolloutFiles(root: string): string[] {
+  const out: string[] = [];
+  const stack = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        out.push(fullPath);
       }
-      // tool_result blocks are deliberately skipped — they are usually file
-      // contents or long tool outputs that duplicate existing raw material.
     }
   }
   return out;
 }
 
-function normalizeAssistantContent(raw: any, includeThinking: boolean): Block[] {
-  const out: Block[] = [];
-  if (!Array.isArray(raw)) return out;
-  for (const item of raw) {
+function getRecordTimestamp(rec: any): string {
+  return typeof rec?.timestamp === 'string' ? rec.timestamp : '';
+}
+
+function extractAssistantText(content: any): string {
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const item of content) {
     if (!item || typeof item !== 'object') continue;
-    if (item.type === 'text' && typeof item.text === 'string' && item.text.trim()) {
-      out.push({ kind: 'text', text: item.text });
-    } else if (item.type === 'thinking' && includeThinking) {
-      const t = typeof item.thinking === 'string' ? item.thinking : '';
-      if (t.trim()) out.push({ kind: 'thinking', text: t });
+    if (item.type === 'output_text' && typeof item.text === 'string' && item.text.trim()) {
+      parts.push(item.text.trim());
     }
-    // tool_use blocks are deliberately dropped — mechanical turns, not signal.
   }
-  return out;
+  return parts.join('\n\n');
 }
 
-function parseJsonlFile(filePath: string, includeThinking: boolean): Session[] {
+function extractReasoningText(summary: any): string {
+  if (!Array.isArray(summary)) return '';
+  const parts: string[] = [];
+  for (const item of summary) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.type === 'summary_text' && typeof item.text === 'string' && item.text.trim()) {
+      parts.push(item.text.trim());
+    }
+  }
+  return parts.join('\n\n');
+}
+
+function parseRolloutFile(filePath: string, includeThinking: boolean): Session | null {
   const content = fs.readFileSync(filePath, 'utf-8');
   const lines = content.split('\n');
-  const bySession = new Map<string, Session>();
+
+  let sessionId: string | null = null;
+  let cwd: string | null = null;
+  let model: string | null = null;
+  const turns: Turn[] = [];
+  const pendingThinking: Block[] = [];
+
+  const flushPendingThinking = () => {
+    pendingThinking.length = 0;
+  };
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
+
     let rec: any;
-    try { rec = JSON.parse(trimmed); } catch { continue; }
-    const sid = rec.sessionId;
-    if (!sid) continue;
-
-    let session = bySession.get(sid);
-    if (!session) {
-      session = { sessionId: sid, cwd: null, model: null, turns: [] };
-      bySession.set(sid, session);
+    try {
+      rec = JSON.parse(trimmed);
+    } catch {
+      continue;
     }
 
-    if (rec.cwd && !session.cwd) session.cwd = rec.cwd;
+    const recordType = rec?.type;
+    const timestamp = getRecordTimestamp(rec);
+    const payload = rec?.payload || {};
 
-    const rtype = rec.type;
-    if (rtype !== 'user' && rtype !== 'assistant') continue;
+    if (recordType === 'session_meta') {
+      if (typeof payload.id === 'string' && payload.id) sessionId = payload.id;
+      if (typeof payload.cwd === 'string' && payload.cwd) cwd = payload.cwd;
+      if (typeof payload.model === 'string' && payload.model) model = payload.model;
+      continue;
+    }
 
-    const msg = rec.message || {};
-    const timestamp = typeof rec.timestamp === 'string' ? rec.timestamp : '';
+    if (recordType === 'event_msg' && payload.type === 'user_message') {
+      const message = typeof payload.message === 'string' ? payload.message.trim() : '';
+      if (message) {
+        flushPendingThinking();
+        turns.push({
+          role: 'user',
+          timestamp,
+          blocks: [{ kind: 'text', text: message }],
+        });
+      }
+      continue;
+    }
 
-    if (rtype === 'user') {
-      const blocks = normalizeUserContent(msg.content);
-      if (blocks.length > 0) session.turns.push({ role: 'user', timestamp, blocks });
-    } else {
-      if (msg.model && !session.model) session.model = msg.model;
-      const blocks = normalizeAssistantContent(msg.content, includeThinking);
-      if (blocks.length > 0) session.turns.push({ role: 'assistant', timestamp, blocks });
+    if (recordType === 'response_item' && payload.type === 'reasoning' && includeThinking) {
+      const reasoning = extractReasoningText(payload.summary);
+      if (reasoning) pendingThinking.push({ kind: 'thinking', text: reasoning });
+      continue;
+    }
+
+    if (recordType === 'response_item' && payload.type === 'message' && payload.role === 'assistant') {
+      const text = extractAssistantText(payload.content);
+      if (!text) continue;
+
+      const blocks: Block[] = [];
+      if (pendingThinking.length > 0) blocks.push(...pendingThinking);
+      blocks.push({ kind: 'text', text });
+      turns.push({
+        role: 'assistant',
+        timestamp,
+        blocks,
+      });
+      flushPendingThinking();
+      continue;
     }
   }
 
-  for (const s of bySession.values()) {
-    s.turns.sort((a, b) => (a.timestamp > b.timestamp ? 1 : a.timestamp < b.timestamp ? -1 : 0));
-  }
-  return Array.from(bySession.values());
+  if (!sessionId) return null;
+  turns.sort((a, b) => (a.timestamp > b.timestamp ? 1 : a.timestamp < b.timestamp ? -1 : 0));
+  return { sessionId, cwd, model, turns };
 }
 
 function flattenSession(session: Session): { title: string; content: string; userTurnCount: number; started: string; ended: string } {
   const proj = projectNameFromCwd(session.cwd);
   const shortId = session.sessionId.slice(0, 8);
-  const title = `Claude Session — ${proj} — ${shortId}`;
+  const title = `Codex Session — ${proj} — ${shortId}`;
   const started = session.turns[0]?.timestamp || '';
   const ended = session.turns[session.turns.length - 1]?.timestamp || '';
   const userTurnCount = session.turns.filter(t => t.role === 'user').length;
@@ -211,45 +261,37 @@ function flattenSession(session: Session): { title: string; content: string; use
   const parts: string[] = [];
   for (const turn of session.turns) {
     const role = turn.role === 'user' ? 'User' : 'Assistant';
-    const body = turn.blocks.map(b => {
-      if (b.kind === 'text') return b.text.trim();
-      if (b.kind === 'thinking') return `_thinking_: ${b.text.trim()}`;
+    const body = turn.blocks.map(block => {
+      if (block.kind === 'text') return block.text.trim();
+      if (block.kind === 'thinking') return `_thinking_: ${block.text.trim()}`;
       return '';
     }).filter(Boolean).join('\n\n');
     if (body) parts.push(`${role}: ${body}`);
   }
+
   return { title, content: parts.join('\n\n'), userTurnCount, started, ended };
 }
 
 async function main() {
   const flags = parseFlags(process.argv.slice(2));
-  const projectsDir = flags.projectsDir || path.join(os.homedir(), '.claude', 'projects');
-  if (!fs.existsSync(projectsDir)) {
-    console.error(`Claude projects dir not found: ${projectsDir}`);
+  const sessionsDir = flags.sessionsDir || path.join(os.homedir(), '.codex', 'sessions');
+  if (!fs.existsSync(sessionsDir)) {
+    console.error(`Codex sessions dir not found: ${sessionsDir}`);
     process.exit(1);
   }
 
   initDb();
 
   const cutoffMs = flags.days > 0 ? Date.now() - flags.days * 24 * 60 * 60 * 1000 : 0;
-
-  const projectDirs = fs.readdirSync(projectsDir, { withFileTypes: true })
-    .filter(d => d.isDirectory())
-    .map(d => d.name);
-
   const candidateFiles: { path: string; mtimeMs: number }[] = [];
-  for (const proj of projectDirs) {
-    const dir = path.join(projectsDir, proj);
-    let entries: string[];
-    try { entries = fs.readdirSync(dir); } catch { continue; }
-    for (const entry of entries) {
-      if (!entry.endsWith('.jsonl')) continue;
-      const p = path.join(dir, entry);
-      try {
-        const st = fs.statSync(p);
-        if (st.mtimeMs < cutoffMs) continue;
-        candidateFiles.push({ path: p, mtimeMs: st.mtimeMs });
-      } catch { continue; }
+
+  for (const filePath of collectRolloutFiles(sessionsDir)) {
+    try {
+      const st = fs.statSync(filePath);
+      if (st.mtimeMs < cutoffMs) continue;
+      candidateFiles.push({ path: filePath, mtimeMs: st.mtimeMs });
+    } catch {
+      continue;
     }
   }
 
@@ -290,55 +332,67 @@ async function main() {
       }
     }
 
-    let sessions: Session[];
-    try { sessions = parseJsonlFile(filePath, flags.includeThinking); }
-    catch (e: any) { errored++; console.error(`  ✗ parse error: ${filePath}: ${e.message}`); continue; }
+    let session: Session | null;
+    try {
+      session = parseRolloutFile(filePath, flags.includeThinking);
+    } catch (e: any) {
+      errored++;
+      console.error(`  ✗ parse error: ${filePath}: ${e.message}`);
+      continue;
+    }
 
-    for (const session of sessions) {
-      if (flags.project && !(session.cwd || '').includes(flags.project)) {
-        skippedProject++;
-        continue;
-      }
-      const userTurnCount = session.turns.filter(t => t.role === 'user').length;
-      if (userTurnCount < flags.minTurns) {
-        skippedMinTurns++;
-        continue;
-      }
+    if (!session) {
+      if (!flags.dryRun) upsertImportState!.run(filePath, mtimeMs);
+      continue;
+    }
 
-      const { title, content, started, ended } = flattenSession(session);
-      const projectSlug = projectSlugFromCwd(session.cwd);
-      if (flags.dryRun) {
-        console.log(`  [dry-run] ${title}  →  raw_events  (${session.turns.length} turns, ${content.length} chars)`);
-        imported++;
-        continue;
-      }
+    if (flags.project && !(session.cwd || '').includes(flags.project)) {
+      skippedProject++;
+      if (!flags.dryRun) upsertImportState!.run(filePath, mtimeMs);
+      continue;
+    }
 
-      const metadata = JSON.stringify({
-        source_path: filePath,
-        model: session.model,
-        cwd: session.cwd,
-        started,
-        ended,
-        turn_count: session.turns.length,
-        user_turn_count: userTurnCount,
-      });
-      const res = insertEvent!.run(
-        'llm_chat',
-        projectSlug,
-        session.sessionId,
-        started || new Date().toISOString(),
-        content,
-        title,
-        JSON.stringify(['user', 'assistant']),
-        metadata,
-      );
-      if (res.changes > 0) {
-        insertFts!.run(session.sessionId, projectSlug, 'llm_chat', title, content);
-        imported++;
-        console.log(`  ✔ ${title}  →  raw_events`);
-      } else {
-        duplicate++;
-      }
+    const userTurnCount = session.turns.filter(t => t.role === 'user').length;
+    if (userTurnCount < flags.minTurns) {
+      skippedMinTurns++;
+      if (!flags.dryRun) upsertImportState!.run(filePath, mtimeMs);
+      continue;
+    }
+
+    const { title, content, started, ended } = flattenSession(session);
+    const projectSlug = projectSlugFromCwd(session.cwd);
+    if (flags.dryRun) {
+      console.log(`  [dry-run] ${title}  ->  raw_events  (${session.turns.length} turns, ${content.length} chars)`);
+      imported++;
+      continue;
+    }
+
+    const metadata = JSON.stringify({
+      provider: 'codex',
+      source_path: filePath,
+      model: session.model,
+      cwd: session.cwd,
+      started,
+      ended,
+      turn_count: session.turns.length,
+      user_turn_count: userTurnCount,
+    });
+    const res = insertEvent!.run(
+      'llm_chat',
+      projectSlug,
+      session.sessionId,
+      started || new Date().toISOString(),
+      content,
+      title,
+      JSON.stringify(['user', 'assistant']),
+      metadata,
+    );
+    if (res.changes > 0) {
+      insertFts!.run(session.sessionId, projectSlug, 'llm_chat', title, content);
+      imported++;
+      console.log(`  OK ${title}  ->  raw_events`);
+    } else {
+      duplicate++;
     }
 
     if (!flags.dryRun) upsertImportState!.run(filePath, mtimeMs);

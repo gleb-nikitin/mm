@@ -100,7 +100,14 @@ export function initDb() {
             SELECT external_id, project, source_type, COALESCE(title, ''), content FROM raw_events`);
   }
 
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 6)');
+  // v7: importer filesystem-state cache for incremental session imports
+  db.run(`CREATE TABLE IF NOT EXISTS import_state (
+    source_path TEXT PRIMARY KEY,
+    last_mtime REAL NOT NULL,
+    last_imported_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );`);
+
+  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 7)');
 }
 
 // --- Common Logic ---
@@ -179,10 +186,70 @@ export type SearchOpts = {
   projects?: string[];
 };
 
+function buildFtsQuery(query: string): string | null {
+  const sanitized = query
+    .normalize('NFKC')
+    // Strip FTS operators/punctuation so MATCH sees bag-of-words, not syntax.
+    .replace(/["'^*:\-]/g, ' ')
+    .replace(/[()]/g, ' ')
+    .replace(/[^\p{L}\p{N}_\s]+/gu, ' ')
+    .trim();
+
+  if (!sanitized) return null;
+
+  const terms = sanitized.split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return null;
+
+  return Array.from(new Set(terms)).join(' AND ');
+}
+
+function applyEventLane(results: SearchResult[], limit: number): SearchResult[] {
+  const eventQuota = Math.min(
+    results.filter(r => r.source === 'event').length,
+    Math.ceil(limit * 0.3),
+  );
+  if (eventQuota === 0) return results.slice(0, limit);
+
+  // Reserve a small event lane so wiki's dual-arm RRF does not crowd events out.
+  const selected: SearchResult[] = [];
+  const deferred: SearchResult[] = [];
+  let eventsSelected = 0;
+
+  for (const result of results) {
+    if (selected.length === limit) break;
+    if (result.source === 'event') {
+      selected.push(result);
+      eventsSelected++;
+      continue;
+    }
+
+    const remainingSlots = limit - selected.length;
+    const remainingEventQuota = eventQuota - eventsSelected;
+    if (remainingSlots <= remainingEventQuota) {
+      deferred.push(result);
+      continue;
+    }
+
+    selected.push(result);
+  }
+
+  if (selected.length < limit) {
+    for (const result of deferred) {
+      if (selected.length === limit) break;
+      selected.push(result);
+    }
+  }
+
+  return selected;
+}
+
 export async function hybridSearch(query: string, limit: number = 10, opts: SearchOpts = {}): Promise<SearchResult[]> {
   const sourceTypes = opts.sourceTypes && opts.sourceTypes.length > 0 ? opts.sourceTypes : null;
   const projects    = opts.projects    && opts.projects.length    > 0 ? opts.projects    : null;
   const hasFilters  = sourceTypes !== null || projects !== null;
+  const ftsQuery    = buildFtsQuery(query);
+
+  if (!ftsQuery) return [];
 
   const queryEmbedding = await embed(query);
 
@@ -190,7 +257,7 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
   // compiled truth, so hard source/project filters skip the wiki arm entirely.
   const ftsResults: any[] = hasFilters
     ? []
-    : db.prepare(`SELECT slug, title, content, bm25(search_index) as rank FROM search_index WHERE search_index MATCH ? ORDER BY rank LIMIT 50`).all(`"${query}"`) as any[];
+    : db.prepare(`SELECT slug, title, content, bm25(search_index) as rank FROM search_index WHERE search_index MATCH ? ORDER BY rank LIMIT 50`).all(ftsQuery) as any[];
 
   let vectorResults: any[] = [];
   if (queryEmbedding) {
@@ -228,7 +295,7 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
   // Always participates; honors source_type and project filters when set.
   let eventSql = `SELECT external_id, title, content, source_type, project, bm25(events_fts) as rank
                   FROM events_fts WHERE events_fts MATCH ?`;
-  const eventParams: any[] = [`"${query}"`];
+  const eventParams: any[] = [ftsQuery];
   if (sourceTypes) {
     eventSql += ` AND source_type IN (${sourceTypes.map(() => '?').join(',')})`;
     eventParams.push(...sourceTypes);
@@ -290,7 +357,8 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
     rrfScores.get(uid)!.score += score;
   });
 
-  return Array.from(rrfScores.values()).sort((a, b) => b.score - a.score).slice(0, limit);
+  const ranked = Array.from(rrfScores.values()).sort((a, b) => b.score - a.score);
+  return applyEventLane(ranked, limit);
 }
 
 export function getStats() {
