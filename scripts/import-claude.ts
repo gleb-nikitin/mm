@@ -1,18 +1,24 @@
 /**
- * Import Claude Code session transcripts into the brain.
+ * Import Claude Code session transcripts directly into `raw_events`.
  *
- * Walks `~/.claude/projects/*.jsonl`, filters by mtime + min-turns + project substring,
- * normalizes user/assistant content blocks (skipping tool_result noise and collapsing
- * tool_use to one-liners), and writes one markdown file per session to `raw/`.
+ * Walks `~/.claude/projects/*.jsonl` (or `--projects-dir <path>` for testing),
+ * filters by mtime + min-turns + project substring, flattens each session into
+ * a single clean transcript, and inserts one row per session. Dedup is via
+ * `external_id UNIQUE` (the Claude session id) + `INSERT OR IGNORE`.
  *
- * Content-block flattening logic is ported from the Python reference at
- * `claude-usage/scanner.py::get_session_transcript`.
+ * Search-visible immediately via `events_fts`. Ingestion into wiki is a
+ * separate, later, targeted pass — this importer's job is only to land all
+ * sessions cleanly.
+ *
+ * No filesystem writes under raw/; no `addToBrain`; no per-turn headers; no
+ * `[tool: X]` markers. User/assistant turns are inlined as plain speaker
+ * markers.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { initDb, addToBrain, PATHS } from '../src/core.ts';
+import { initDb, db } from '../src/core.ts';
 
 type Flags = {
   days: number;
@@ -20,6 +26,7 @@ type Flags = {
   minTurns: number;
   includeThinking: boolean;
   dryRun: boolean;
+  projectsDir: string | null;
 };
 
 function parseFlags(argv: string[]): Flags {
@@ -29,6 +36,7 @@ function parseFlags(argv: string[]): Flags {
     minTurns: 2,
     includeThinking: false,
     dryRun: false,
+    projectsDir: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -37,6 +45,7 @@ function parseFlags(argv: string[]): Flags {
     else if (arg === '--min-turns') flags.minTurns = parseInt(argv[++i], 10);
     else if (arg === '--include-thinking') flags.includeThinking = true;
     else if (arg === '--dry-run') flags.dryRun = true;
+    else if (arg === '--projects-dir') flags.projectsDir = argv[++i];
     else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -61,23 +70,17 @@ function printHelp() {
   console.log(`Usage: bun scripts/import-claude.ts [flags]
 
 Flags:
-  --days N             Only sessions with mtime >= today - N  (default: 30)
-  --project <substr>   Filter by decoded cwd substring        (e.g. "work/code/mm")
-  --min-turns N        Skip sessions with fewer user turns    (default: 2)
-  --include-thinking   Include assistant thinking blocks      (default: off)
-  --dry-run            List what would import, write nothing
-  -h, --help           Show this help
+  --days N                Only sessions with mtime >= today - N  (default: 30)
+  --project <substr>      Filter by decoded cwd substring         (e.g. "work/code/mm")
+  --min-turns N           Skip sessions with fewer user turns     (default: 2)
+  --include-thinking      Include assistant thinking blocks       (default: off)
+  --projects-dir <path>   Override ~/.claude/projects              (testing)
+  --dry-run               List what would import, write nothing
+  -h, --help              Show this help
 `);
 }
 
-// Decode the encoded project dir name used under ~/.claude/projects
-// e.g. "-Users-glebnikitin-work-code-mm" -> "/Users/glebnikitin/work/code/mm"
-function decodeProjectDir(name: string): string {
-  return name.replace(/-/g, '/');
-}
-
 function projectNameFromCwd(cwd: string | null | undefined): string {
-  // Display-friendly: last two path components (e.g. "code/mm").
   if (!cwd) return 'unknown';
   const parts = cwd.replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean);
   if (parts.length >= 2) return parts.slice(-2).join('/');
@@ -85,8 +88,6 @@ function projectNameFromCwd(cwd: string | null | undefined): string {
 }
 
 function projectSlugFromCwd(cwd: string | null | undefined): string {
-  // Storage-side slug: just the basename (e.g. "mm"). Used as the project
-  // column so raw/<source>/<project>/ stays tidy even for deep cwds.
   if (!cwd) return 'unknown';
   const parts = cwd.replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean);
   return parts[parts.length - 1] || 'unknown';
@@ -94,8 +95,7 @@ function projectSlugFromCwd(cwd: string | null | undefined): string {
 
 type Block =
   | { kind: 'text'; text: string }
-  | { kind: 'thinking'; text: string }
-  | { kind: 'tool_use'; name: string };
+  | { kind: 'thinking'; text: string };
 
 type Turn = {
   role: 'user' | 'assistant';
@@ -139,9 +139,8 @@ function normalizeAssistantContent(raw: any, includeThinking: boolean): Block[] 
     } else if (item.type === 'thinking' && includeThinking) {
       const t = typeof item.thinking === 'string' ? item.thinking : '';
       if (t.trim()) out.push({ kind: 'thinking', text: t });
-    } else if (item.type === 'tool_use') {
-      out.push({ kind: 'tool_use', name: typeof item.name === 'string' ? item.name : '?' });
     }
+    // tool_use blocks are deliberately dropped — mechanical turns, not signal.
   }
   return out;
 }
@@ -155,11 +154,7 @@ function parseJsonlFile(filePath: string, includeThinking: boolean): Session[] {
     const trimmed = line.trim();
     if (!trimmed) continue;
     let rec: any;
-    try {
-      rec = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
+    try { rec = JSON.parse(trimmed); } catch { continue; }
     const sid = rec.sessionId;
     if (!sid) continue;
 
@@ -179,63 +174,44 @@ function parseJsonlFile(filePath: string, includeThinking: boolean): Session[] {
 
     if (rtype === 'user') {
       const blocks = normalizeUserContent(msg.content);
-      if (blocks.length > 0) {
-        session.turns.push({ role: 'user', timestamp, blocks });
-      }
+      if (blocks.length > 0) session.turns.push({ role: 'user', timestamp, blocks });
     } else {
-      // assistant
       if (msg.model && !session.model) session.model = msg.model;
       const blocks = normalizeAssistantContent(msg.content, includeThinking);
-      if (blocks.length > 0) {
-        session.turns.push({ role: 'assistant', timestamp, blocks });
-      }
+      if (blocks.length > 0) session.turns.push({ role: 'assistant', timestamp, blocks });
     }
   }
 
-  // Sort turns per session by timestamp for stable ordering
   for (const s of bySession.values()) {
     s.turns.sort((a, b) => (a.timestamp > b.timestamp ? 1 : a.timestamp < b.timestamp ? -1 : 0));
   }
-
   return Array.from(bySession.values());
 }
 
-function renderTurn(turn: Turn): string {
-  const short = turn.timestamp ? turn.timestamp.replace('T', ' ').replace(/\.\d+Z?$/, '') : '';
-  const header = `## ${turn.role === 'user' ? 'User' : 'Assistant'}${short ? ` — ${short}` : ''}`;
-  const body = turn.blocks.map(b => {
-    if (b.kind === 'text') return b.text.trim();
-    if (b.kind === 'thinking') return `> _thinking_\n> ${b.text.trim().split('\n').join('\n> ')}`;
-    if (b.kind === 'tool_use') return `\`[tool: ${b.name}]\``;
-    return '';
-  }).filter(Boolean).join('\n\n');
-  return `${header}\n\n${body}`;
-}
-
-function renderSession(session: Session): { title: string; body: string; userTurnCount: number } {
+function flattenSession(session: Session): { title: string; content: string; userTurnCount: number; started: string; ended: string } {
   const proj = projectNameFromCwd(session.cwd);
   const shortId = session.sessionId.slice(0, 8);
   const title = `Claude Session — ${proj} — ${shortId}`;
-  const first = session.turns[0]?.timestamp || '';
-  const last = session.turns[session.turns.length - 1]?.timestamp || '';
+  const started = session.turns[0]?.timestamp || '';
+  const ended = session.turns[session.turns.length - 1]?.timestamp || '';
   const userTurnCount = session.turns.filter(t => t.role === 'user').length;
 
-  const metaLines = [
-    `- session_id: ${session.sessionId}`,
-    `- project: ${session.cwd || 'unknown'}`,
-    session.model ? `- model: ${session.model}` : null,
-    `- started: ${first}`,
-    `- ended: ${last}`,
-    `- turns: ${session.turns.length} (user: ${userTurnCount})`,
-  ].filter(Boolean).join('\n');
-
-  const body = `${metaLines}\n\n---\n\n${session.turns.map(renderTurn).join('\n\n')}\n`;
-  return { title, body, userTurnCount };
+  const parts: string[] = [];
+  for (const turn of session.turns) {
+    const role = turn.role === 'user' ? 'User' : 'Assistant';
+    const body = turn.blocks.map(b => {
+      if (b.kind === 'text') return b.text.trim();
+      if (b.kind === 'thinking') return `_thinking_: ${b.text.trim()}`;
+      return '';
+    }).filter(Boolean).join('\n\n');
+    if (body) parts.push(`${role}: ${body}`);
+  }
+  return { title, content: parts.join('\n\n'), userTurnCount, started, ended };
 }
 
 async function main() {
   const flags = parseFlags(process.argv.slice(2));
-  const projectsDir = path.join(os.homedir(), '.claude', 'projects');
+  const projectsDir = flags.projectsDir || path.join(os.homedir(), '.claude', 'projects');
   if (!fs.existsSync(projectsDir)) {
     console.error(`Claude projects dir not found: ${projectsDir}`);
     process.exit(1);
@@ -245,7 +221,6 @@ async function main() {
 
   const cutoffMs = flags.days > 0 ? Date.now() - flags.days * 24 * 60 * 60 * 1000 : 0;
 
-  // Walk projects dir for .jsonl files
   const projectDirs = fs.readdirSync(projectsDir, { withFileTypes: true })
     .filter(d => d.isDirectory())
     .map(d => d.name);
@@ -262,13 +237,17 @@ async function main() {
         const st = fs.statSync(p);
         if (st.mtimeMs < cutoffMs) continue;
         candidateFiles.push({ path: p, mtimeMs: st.mtimeMs });
-      } catch {
-        continue;
-      }
+      } catch { continue; }
     }
   }
 
   console.log(`Found ${candidateFiles.length} jsonl files within --days ${flags.days}.`);
+
+  const insertEvent = flags.dryRun ? null : db.prepare(`INSERT OR IGNORE INTO raw_events
+    (source_type, project, external_id, timestamp, content, title, participants, metadata, processed, deduped)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1)`);
+  const insertFts = flags.dryRun ? null : db.prepare(`INSERT INTO events_fts
+    (external_id, project, source_type, title, content) VALUES (?, ?, ?, ?, ?)`);
 
   let imported = 0;
   let skippedProject = 0;
@@ -278,13 +257,8 @@ async function main() {
 
   for (const { path: filePath } of candidateFiles) {
     let sessions: Session[];
-    try {
-      sessions = parseJsonlFile(filePath, flags.includeThinking);
-    } catch (e: any) {
-      errored++;
-      console.error(`  ✗ parse error: ${filePath}: ${e.message}`);
-      continue;
-    }
+    try { sessions = parseJsonlFile(filePath, flags.includeThinking); }
+    catch (e: any) { errored++; console.error(`  ✗ parse error: ${filePath}: ${e.message}`); continue; }
 
     for (const session of sessions) {
       if (flags.project && !(session.cwd || '').includes(flags.project)) {
@@ -297,20 +271,39 @@ async function main() {
         continue;
       }
 
-      const { title, body } = renderSession(session);
+      const { title, content, started, ended } = flattenSession(session);
       const projectSlug = projectSlugFromCwd(session.cwd);
       if (flags.dryRun) {
-        console.log(`  [dry-run] ${title}  →  raw/claude/${projectSlug}/  (${session.turns.length} turns)`);
+        console.log(`  [dry-run] ${title}  →  raw_events  (${session.turns.length} turns, ${content.length} chars)`);
         imported++;
         continue;
       }
 
-      const res = addToBrain(body, title, { sourceType: 'claude', project: projectSlug });
-      if (res.status === 'duplicate') {
-        duplicate++;
-      } else {
+      const metadata = JSON.stringify({
+        source_path: filePath,
+        model: session.model,
+        cwd: session.cwd,
+        started,
+        ended,
+        turn_count: session.turns.length,
+        user_turn_count: userTurnCount,
+      });
+      const res = insertEvent!.run(
+        'llm_chat',
+        projectSlug,
+        session.sessionId,
+        started || new Date().toISOString(),
+        content,
+        title,
+        JSON.stringify(['user', 'assistant']),
+        metadata,
+      );
+      if (res.changes > 0) {
+        insertFts!.run(session.sessionId, projectSlug, 'llm_chat', title, content);
         imported++;
-        console.log(`  ✔ ${title}  →  ${res.path}`);
+        console.log(`  ✔ ${title}  →  raw_events`);
+      } else {
+        duplicate++;
       }
     }
   }
@@ -324,7 +317,7 @@ async function main() {
   if (errored > 0) console.log(`  parse errors:      ${errored}`);
   if (!flags.dryRun && imported > 0) {
     console.log();
-    console.log(`Run 'bun run brain queue' to see the imported entries.`);
+    console.log(`Run 'bun run brain search <query>' to search imported sessions.`);
   }
 }
 

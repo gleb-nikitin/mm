@@ -78,7 +78,29 @@ export function initDb() {
   db.run(`CREATE INDEX IF NOT EXISTS idx_event_project ON raw_events(project)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_event_processed ON raw_events(processed)`);
 
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 5)');
+  // v6: events_fts — targeted FTS over raw_events so imported sessions/chains
+  // are findable via /search without waiting for the ingest pass. Vector-layer
+  // events land in a later pass.
+  const eventCols = db.prepare(`PRAGMA table_info(raw_events)`).all() as Array<{ name: string }>;
+  if (!eventCols.some(c => c.name === 'title')) db.run(`ALTER TABLE raw_events ADD COLUMN title TEXT`);
+  try {
+    db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+      external_id UNINDEXED,
+      project UNINDEXED,
+      source_type UNINDEXED,
+      title,
+      content
+    )`);
+  } catch (e) {}
+  // Backfill events_fts from any pre-existing raw_events rows.
+  const ftsCount = (db.prepare(`SELECT COUNT(*) as c FROM events_fts`).get() as any).c;
+  const eventCount = (db.prepare(`SELECT COUNT(*) as c FROM raw_events`).get() as any).c;
+  if (eventCount > 0 && ftsCount === 0) {
+    db.run(`INSERT INTO events_fts (external_id, project, source_type, title, content)
+            SELECT external_id, project, source_type, COALESCE(title, ''), content FROM raw_events`);
+  }
+
+  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 6)');
 }
 
 // --- Common Logic ---
@@ -146,9 +168,10 @@ export type SearchResult = {
   title: string;
   score: number;
   snippet: string;
-  source: 'wiki' | 'raw';
+  source: 'wiki' | 'raw' | 'event';
   source_type?: string;
   project?: string;
+  external_id?: string;
 };
 
 export type SearchOpts = {
@@ -201,6 +224,23 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
     }).sort((a, b) => b.cos_score - a.cos_score).slice(0, 50);
   }
 
+  // Events FTS — raw-tier provenance-scoped streaming data (sessions, chains).
+  // Always participates; honors source_type and project filters when set.
+  let eventSql = `SELECT external_id, title, content, source_type, project, bm25(events_fts) as rank
+                  FROM events_fts WHERE events_fts MATCH ?`;
+  const eventParams: any[] = [`"${query}"`];
+  if (sourceTypes) {
+    eventSql += ` AND source_type IN (${sourceTypes.map(() => '?').join(',')})`;
+    eventParams.push(...sourceTypes);
+  }
+  if (projects) {
+    eventSql += ` AND project IN (${projects.map(() => '?').join(',')})`;
+    eventParams.push(...projects);
+  }
+  eventSql += ` ORDER BY rank LIMIT 50`;
+  let eventResults: any[] = [];
+  try { eventResults = db.prepare(eventSql).all(...eventParams) as any[]; } catch (e) {}
+
   const rrfScores = new Map<string, SearchResult>();
   const getUid = (type: string, slug: string | null, raw_id: number | null) => `${type}:${slug || raw_id}`;
 
@@ -230,6 +270,24 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
     const current = rrfScores.get(uid)!;
     current.score += score;
     if (index === 0 || current.snippet.length > 300) current.snippet = r.text;
+  });
+
+  eventResults.forEach((r, index) => {
+    const uid = `event:${r.external_id}`;
+    const score = 1 / (60 + index + 1);
+    if (!rrfScores.has(uid)) {
+      rrfScores.set(uid, {
+        slug: null,
+        title: r.title || r.external_id,
+        score: 0,
+        snippet: (r.content || '').substring(0, 200) + '...',
+        source: 'event',
+        source_type: r.source_type || undefined,
+        project: r.project || undefined,
+        external_id: r.external_id,
+      });
+    }
+    rrfScores.get(uid)!.score += score;
   });
 
   return Array.from(rrfScores.values()).sort((a, b) => b.score - a.score).slice(0, limit);

@@ -224,15 +224,12 @@ program.command('queue').action(() => {
 });
 
 program.command('search').argument('<query>', 'Search term').action(async (query) => {
-  const stats = getStats();
-  if (stats.embeddedChunks > 0) {
-    const results = await hybridSearch(query);
-    if (results.length > 0) results.forEach(r => console.log(`[${r.source.toUpperCase()}] ${r.slug ? `[[${r.slug}|${r.title}]]` : r.title} (score: ${r.score.toFixed(3)})`));
-    else console.log('No matches.');
-  } else {
-    const results = db.prepare('SELECT slug, title FROM search_index WHERE search_index MATCH ?').all(`"${query}"`) as any[];
-    if (results.length > 0) results.forEach(r => console.log(`[[${r.slug}|${r.title}]]`)); else console.log('No matches.');
-  }
+  const results = await hybridSearch(query);
+  if (results.length === 0) { console.log('No matches.'); return; }
+  results.forEach(r => {
+    const label = r.slug ? `[[${r.slug}|${r.title}]]` : r.title;
+    console.log(`[${r.source.toUpperCase()}] ${label} (score: ${r.score.toFixed(3)})`);
+  });
 });
 
 program.command('projects').description('List all unique project slugs in the brain').action(() => {
