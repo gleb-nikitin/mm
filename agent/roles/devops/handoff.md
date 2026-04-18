@@ -1,9 +1,10 @@
 # Handoff — mm_devops
 
-Last updated 2026-04-17 after committing ingested session data and documentation refinements.
+Last updated 2026-04-18 after establishing the automated milestone log.
 
 ## Current state
 
+- **Milestone Log (`wiki/Milestones.md`) established and automated** (`c88c4f1`).
 - Structural cleanup + `src/` move are committed (`c210c1e`).
 - A `git` role was added (`61e284e`) — devops does not own that role.
 - **UI + async-gemini work is committed** (`ed3eaf2`).
@@ -15,14 +16,12 @@ Last updated 2026-04-17 after committing ingested session data and documentation
 ## What this session changed
 
 - (See previous handoffs for earlier work)
-- Performed a recursive ingest pass over `raw/` files.
-- Created and updated numerous wiki pages with Timeline citations.
-- Refined `agent/docs/todo.md` with detailed retrieval quality and Mnemonic Hardcore (Rust track) plans.
-- Updated `meta/skills/ingest.md` with source-separation guidance.
-- Added `agent/docs/how-to-import.md`.
+- Established `wiki/Milestones.md` to track architectural evolution.
+- Updated `git` role scripts to automatically append to `Milestones.md` on every commit.
 
 ## Verification this session (all green)
 
+- Automated milestone append verified via `commit-scope.sh`.
 - All changes verified end-to-end.
 - Repository is clean (except for handoff files).
 
