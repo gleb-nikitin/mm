@@ -14,6 +14,13 @@ MSG="$1"
 [[ -d "$REPO/.git" ]] || die "not a git repo: $REPO"
 cd "$REPO"
 
+# Automate Milestones.md trace
+MILESTONES="wiki/Milestones.md"
+if [[ -f "$MILESTONES" ]]; then
+  DATE=$(date +%Y-%m-%d)
+  echo "- **$DATE**: $MSG" >> "$MILESTONES"
+fi
+
 # Stage all except ignored
 git add .
 

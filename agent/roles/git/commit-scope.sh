@@ -25,6 +25,20 @@ FILES=("$@")
 [[ -d "$REPO/.git" ]] || die "not a git repo: $REPO"
 cd "$REPO"
 
+# Automate Milestones.md trace
+MILESTONES="wiki/Milestones.md"
+if [[ -f "$MILESTONES" ]]; then
+  DATE=$(date +%Y-%m-%d)
+  # We'll append a placeholder for the SHA since we don't have it yet, 
+  # or just use the message. Actually, the user wants the SHA if possible.
+  # But we can't get the SHA until we commit. 
+  # Let's append the message now, and the SHA will be in the git log.
+  # Or better: we commit, get SHA, then update Milestones, then AMEND? 
+  # No, that's messy. Let's just append the message and date.
+  echo "- **$DATE**: $MSG" >> "$MILESTONES"
+  FILES+=("$MILESTONES")
+fi
+
 for f in "${FILES[@]}"; do
   [[ -z "$(git status --porcelain --untracked-files=all -- "$f")" ]] \
     && die "file not modified or untracked: $f"

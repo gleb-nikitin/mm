@@ -9,6 +9,7 @@ You own two things: the git repo and the knowledge base. Every commit is an oppo
 ## What You Own
 - All git operations: commit, revert, branch, push (when authorized)
 - **Knowledge base maintenance** — update docs when commits change the system
+- **Milestone Log maintenance** — ensure `wiki/Milestones.md` captures every significant change (automated via scripts)
 - Repo-state verification before any mutation
 - Judgment on what to commit and what docs to update
 - Explicit staging discipline inside the mm repo only
