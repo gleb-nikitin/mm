@@ -14,3 +14,4 @@ This page tracks the architectural evolution of Mnemonic51. It is automatically 
 - **2026-04-18**: Final handoff update after Milestones automation
 - **2026-04-18**: Land Schema v5, Dual-Root Raw architecture, and Tiered Compute Philosophy
 - **2026-04-18**: Refactor process command to v0.7.3 with Phase 1 retro-sweep and Phase 2 dual-signal provenance
+- **2026-04-18**: Perform documentation hygiene pass to centralize reading order and remove duplication

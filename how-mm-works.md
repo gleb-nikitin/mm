@@ -88,11 +88,7 @@ To make MM a "living" system, you should automate the import and processing step
 
 ## 5. Wiki Page Anatomy
 
-Every page in `wiki/` must follow this structure:
-1. **Frontmatter**: YAML block with `tier` (1-3), `confidence`, and `source_count`.
-2. **Summary**: The "Compiled Truth." This is the section agents read to understand the current state.
-3. **Separator**: A `---` line followed by `<!-- TIMELINE: append-only below this line -->`.
-4. **Timeline**: A list of dated bullets. **Never delete these.** They are the evidence that proves the Summary is true.
+Canonical definition lives in `meta/schema.md`. In short: YAML frontmatter, `## Summary` (Compiled Truth), then `---` and `<!-- TIMELINE: append-only below this line -->` marking an append-only evidence log. Never edit or delete timeline bullets; every bullet must cite its raw source path.
 
 ---
 
@@ -106,30 +102,6 @@ Every page in `wiki/` must follow this structure:
 
 ---
 
-## 7. Feature Plans & Roadmap
+## 7. Direction & Roadmap
 
-The project follows a **Two-Track Strategy**: **Mnemonic Light** (current TS/Bun prototype for rapid iteration) and **Mnemonic Hardcore** (future Rust/Tabularium implementation for production scaling).
-
-### Phase 1: Professionalization (The Refactor Plan)
-To prepare for a public release and the Rust migration, the system is undergoing a 5-step refactor:
-1. **Behavioral Testing**: Implementing safety nets for the CLI, API, and MCP tools.
-2. **Readability Pass**: De-compressing logic in `brain.ts` for easier maintenance.
-3. **Architectural Decoupling**: Extracting core logic from CLI glue into `core.ts`.
-4. **Dependency Hygiene**: Abstracting providers (LLM/Embeddings) and implementing the **Briefing Protocol** (session reuse for speed).
-5. **Retrieval Quality**: Implementing section-level chunking, semantic reranking, and weighted BM25 search.
-
-### Phase 2: Skills as the Product (The Action Layer)
-Mnemonic51 is evolving from a memory engine into a project-management primitive. The goal is a rich library of **Derivation Skills** that automatically maintain project documentation:
-- **`derive-bugs`**: Extracts surfaced defects into `agent/docs/bugs.md`.
-- **`derive-decisions`**: Logs architectural choices into `agent/docs/decisions.md`.
-- **`derive-corrections`**: Builds a "mistakes library" to prevent repeating past errors.
-- **`derive-friction`**: Tracks recurring pain points in the development process.
-
-### Phase 3: Automation & UX
-- **Streaming Queries**: Token-by-token rendering in the UI for real-time feedback.
-- **Declarative Orchestration**: Using `meta/config.toml` to schedule imports and maintenance tasks automatically.
-- **Holo App Packaging**: Wrapping MM as a plugin for the `ac` shell.
-
-### Phase 4: Mnemonic Hardcore
-- **Rust Migration**: Rebuilding the substrate on top of `tabularium` for native performance and advanced indexing (Tantivy).
-- **HNSW Vector Index**: Moving from brute-force cosine similarity to high-performance vector retrieval.
+Current direction, priority order, and the two-track plan (Mnemonic Light → Mnemonic Hardcore) live in `agent/docs/roadmap.md`. Loose ideas and proposals not yet committed to a sequence live in `agent/docs/todo.md`.

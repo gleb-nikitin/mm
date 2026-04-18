@@ -1,16 +1,6 @@
 # Todo
 
-Rolling list of deferred work. Rewrite when it drifts — don't append forever. Keep each entry small enough that a future session can pick it up without needing to rediscover the context.
-
-## What mm actually is
-
-mm is not a memory engine that happens to be useful for project management. mm is a **project-management primitive** whose input is conversation, whose durable artifact is markdown, and whose mechanism is **LLM-mediated extraction** driven by skill files.
-
-- **Knowledge layer** → `wiki/` (compiled truth, extracted by `ingest`).
-- **Action layer** → `agent/docs/*.md` files (todos, bugs, decisions, corrections, friction) — each extracted by a dedicated `derive-*` skill from the same conversational input.
-- **Provenance layer** → `raw/<source_type>/<project>/` + `claims` table — every artifact traceable to a source.
-
-The **skills library is the product**. Code is infrastructure. Skills are markdown files that encode extraction procedures; new skills extend mm's capabilities without new code. That principle is load-bearing for the whole sequence below.
+**Brainstorm aggregation.** Ideas under discussion that may become roadmap items. Not a sequenced plan — committed sequence and state live in `agent/docs/roadmap.md`. Framing and product shape live in `agent/docs/roadmap.md` and `how-mm-works.md`. Keep each entry small enough that a future session can pick it up without re-deriving context. Rewrite when it drifts — don't append forever.
 
 ## Tiered Compute Philosophy
 
@@ -46,18 +36,6 @@ These fields must be automated to prevent "context rot" and manual error.
 ### 4. Fields to Deprecate/Simplify
 - **`confidence`**: Currently a manual `0.0–1.0` float. If it stays, it should be a product of `source_count` and `tier` rather than a manual guess.
 - **`mentions`**: Manual incrementing is too brittle for agents. It must be a derived metric.
-
-## Sequence
-
-Do them in this order. Each step unblocks the next.
-
-1. **Tests** (blocks everything else — safety net + quality evals)
-2. **Skills library & extensibility** (the product — methodology proof)
-3. **Refactor** (readability + architectural + pluggable storage trait)
-4. **External-dependency hygiene** (provider abstraction + briefing + streaming)
-5. **Retrieval quality** (chunking, dedup, rerank, intent, expansion)
-6. **Public-release polish** (owner decisions)
-7. **Mnemonic Hardcore** (Rust migration — deferred until methodology proves out)
 
 ## Gemini Ideas: Friction Reduction
 

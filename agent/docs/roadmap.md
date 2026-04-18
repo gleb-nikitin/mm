@@ -44,30 +44,9 @@ Purpose: production performance, distributable app, real stemming/faceting, offl
 
 **Why:** if the methodology doesn't pan out, Hardcore would have optimized the wrong thing. If it does, Hardcore becomes a natural scaling migration that gbrain has already demonstrated works.
 
-## Read order for a fresh session
+## Reading order and architecture
 
-1. `agent/README.md`
-2. The role files under `agent/roles/<role>/` (soul → role → handoff)
-3. This roadmap
-4. `agent/docs/todo.md` — the prioritized work list
-5. `README.md` in repo root (user-facing)
-6. Code: `src/brain.ts`, `src/core.ts`, `src/api.ts`, `src/mcp.ts`
-7. `meta/schema.md`, `meta/remaining-gaps.md`
-
-## Architecture (Light)
-
-Code lives in `src/`. Data dirs sit at repo root by default but any directory with `raw/ wiki/ meta/` works via `MT_BRAIN_ROOT`.
-
-- `src/brain.ts` — CLI (commander)
-- `src/api.ts` — HTTP, markdown responses, serves the web UI at `/`
-- `src/mcp.ts` — MCP stdio server
-- `src/core.ts` — shared runtime: DB bootstrap, paths, hybrid search, query, validate, add, embed, stats
-- `ui/index.html` — single-page Alpine UI, aurora theme
-- `raw/<source_type>/<project>/` — immutable source material, source-separated
-- `wiki/` — maintained knowledge pages (flat, project-agnostic)
-- `meta/` — schema, skills, sqlite, runtime reports (runtime reports are gitignored)
-- `agent/` — agent-facing docs (roadmap, todo, how-to-import) and per-role material
-- `scripts/` — one-off utilities
+Reading order lives in `agent/README.md`. Operator-facing architecture (file inventory, data lifecycle, troubleshooting) lives in `how-mm-works.md` at repo root. This roadmap focuses on direction and current priority order.
 
 ## Current state
 
