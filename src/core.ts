@@ -236,6 +236,11 @@ export function getStats() {
   };
 }
 
+export function getProjects(): string[] {
+  const rows = db.prepare('SELECT DISTINCT project FROM raw_entries WHERE project IS NOT NULL ORDER BY project ASC').all() as any[];
+  return rows.map(r => r.project);
+}
+
 export async function runGemini(prompt: string, yolo: boolean = false) {
   const args = yolo ? ['--yolo', `-p=${prompt}`] : [`-p=${prompt}`];
   try {

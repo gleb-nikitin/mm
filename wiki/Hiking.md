@@ -22,6 +22,8 @@ Hiking is a form of vigorous walking, typically on trails or footpaths in natura
 - [[Gleb_Nikitin|Gleb Nikitin]]
 
 ---
+
+---
 <!-- TIMELINE: append-only below this line -->
 
 - **2026-04-17**: Mentioned as an interest of [[Gleb_Nikitin|Gleb Nikitin]]. Source: `raw/2026-04-17T09-43-07-931Z.md`

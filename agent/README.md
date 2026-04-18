@@ -8,6 +8,7 @@ This directory is for agents (LLMs, autonomous sessions, reviewers) working on M
   - `roadmap.md` — current direction, state, and next steps (rolling; rewritten, not appended)
   - `todo.md` — deferred refactor and release work, in dependency order
   - `how-to-import.md` — operational guide for bringing sources into the brain (Claude sessions, Telegram, HTTP/MCP, scoping)
+  - `how-to-index.md` — what commands to run after ingest so new raw/wiki content becomes queryable (index rebuild + embed pipeline, troubleshooting)
 - `roles/` — per-role material for specialized agent sessions
   - each role has `soul.md` (values), `role.md` (scope and invariants), `handoff.md` (current state and next checks)
 

@@ -5,29 +5,44 @@ Rolling roadmap. Rewrite when it drifts — don't append.
 Project:
 - Name: `Mnemonic51`
 - Short name / repo working name: `mm`
-- Purpose: local-first memory engine, markdown is the source of truth, SQLite is the index and retrieval layer, usable as both a standalone project and a plugin/integration surface (HTTP + MCP)
+- Purpose: local-first **project-management primitive**. Input is conversation; durable artifact is markdown; mechanism is LLM-mediated extraction driven by skill files.
+
+## What mm actually is
+
+mm is not a memory engine that happens to be useful for project management. mm is a project-management primitive whose value lives in **skills + ingestion practices**, not in any specific runtime.
+
+Three layers, produced by three classes of skill against the same conversational input:
+
+- **Knowledge layer** → `wiki/` (compiled truth, extracted by `ingest`).
+- **Action layer** → `agent/docs/*.md` (todos, bugs, decisions, corrections, friction — each extracted by a dedicated `derive-*` skill).
+- **Provenance layer** → `raw/<source_type>/<project>/` + `claims` table — every artifact traceable to its source.
+
+Projects using mm become **self-reflective**: a session produces raw → ingest produces wiki → derivation skills produce proposed actions → the next agent reads those actions and moves the project forward.
 
 ## Two-track plan
 
-Mnemonic51 ships in two tracks, running in parallel, serving different purposes.
+### Track 1 — Mnemonic Light (current repo, `mm/`)
 
-### Track 1 — **Mnemonic Light** (current repo, `mm/`)
+Standalone TS/Bun project + ac plugin. Small, hackable, iterable. **This is where the methodology proves out.** Purpose:
 
-- Standalone TS/Bun project. Small, hackable, iterable.
-- Also shippable as an **ac plugin** — mount `ui/index.html` and the MCP surface into ac's shell as a Holo app.
-- Purpose: fast iteration on UX, retrieval quality, prompt/briefing shape, synthesis policy. This is where product ideas get validated.
-- Out-of-scope here: heavy perf, Rust-native packaging, polished installer.
+- Prove that LLM-mediated extraction + markdown artifacts is a useful project-management primitive.
+- Ship the skill library (derivation + maintenance) against a working data model.
+- Validate retrieval-quality and ingestion practices on real usage.
 
-### Track 2 — **Mnemonic Hardcore** (planned)
+Out of scope for Light: heavy perf, Rust-native packaging, polished installer.
 
-- Rust workspace. Not a from-scratch rewrite — an assembly on top of two existing codebases:
-  - **ac's Rust + Tauri shell** — app frame, windowing, dock, theme system, Alpine app hosting, MCP wiring.
-  - **[tabularium](https://github.com/eva-ics/tabularium)** (Apache-2.0) — markdown store with Tantivy search, SQLite, embedded web UI, REST, JSON-RPC, MCP, `tb` CLI.
-- Purpose: production, performance, distributable app, real stemming/faceting, offline-first installer.
-- Inherits validated concepts and prompt/briefing contracts from Light.
-- Detailed migration shape in `agent/docs/todo.md` step 5e.
+### Track 2 — Mnemonic Hardcore (deferred, planned downstream)
 
-**Why two tracks, not one:** Light moves at product velocity; Hardcore moves at systems velocity. Coupling them would slow both. Light's tests (todo.md step 1) define correctness; Hardcore must pass the same tests before flipping default.
+Rust workspace on top of two existing codebases:
+
+- **ac's Rust + Tauri shell** — app frame, windowing, dock, theme system.
+- **[tabularium](https://github.com/eva-ics/tabularium)** (Apache-2.0) — markdown store with Tantivy, SQLite, web UI, REST, JSON-RPC, MCP, `tb` CLI.
+
+Purpose: production performance, distributable app, real stemming/faceting, offline-first installer.
+
+**Hardcore is not parallel to Light — it's downstream.** It only makes sense once Light has proven the methodology is worth scaling. Detailed migration shape: `agent/docs/todo.md` step 7.
+
+**Why:** if the methodology doesn't pan out, Hardcore would have optimized the wrong thing. If it does, Hardcore becomes a natural scaling migration that gbrain has already demonstrated works.
 
 ## Read order for a fresh session
 
@@ -48,28 +63,38 @@ Code lives in `src/`. Data dirs sit at repo root by default but any directory wi
 - `src/mcp.ts` — MCP stdio server
 - `src/core.ts` — shared runtime: DB bootstrap, paths, hybrid search, query, validate, add, embed, stats
 - `ui/index.html` — single-page Alpine UI, aurora theme
-- `raw/` — immutable source material
-- `wiki/` — maintained knowledge pages
+- `raw/<source_type>/<project>/` — immutable source material, source-separated
+- `wiki/` — maintained knowledge pages (flat, project-agnostic)
 - `meta/` — schema, skills, sqlite, runtime reports (runtime reports are gitignored)
-- `agent/` — agent-facing docs and role material
+- `agent/` — agent-facing docs (roadmap, todo, how-to-import) and per-role material
 - `scripts/` — one-off utilities
 
 ## Current state
 
 - Phase 0–5: landed and stable.
-- Phase 6 (external surface refresh): committed and verified. API and MCP share `core.ts`, both call `initDb()`, no CLI shell-outs.
+- Phase 6 (external surface refresh): committed and verified.
 - Structural cleanup + `src/` move: committed (`c210c1e`).
-- Aurora web UI + async Gemini (no event-loop blocking): committed (`ed3eaf2`).
-- Source-separation (raw/type/project taxonomy + filtered retrieval): landed.
-- Two-track plan named: Light (this repo) + Hardcore (Rust on ac shell + tabularium).
+- Aurora web UI + async Gemini: committed (`ed3eaf2`).
+- Source-separation (raw/source_type/project taxonomy + filtered retrieval): landed.
+- `derive-todos` skill shipped — first member of the derivation-skill family.
+- Research ingested as canonical wiki pages: `[[LLM_Wiki]]`, `[[GBrain]]`, `[[Cross_Chat_Knowledge_Base]]`.
+- **Reframing landed:** mm is a project-management primitive, not a memory engine. Skills library is the product; code is infrastructure.
 
 ## Near-term direction
 
-Next deferred work is tracked in `agent/docs/todo.md`. Order: tests → readability pass on `src/brain.ts` → architectural refactor → external-dep hygiene (including briefing-based synthesis) → retrieval quality → public-release polish.
+`agent/docs/todo.md` is the prioritized list. New order after the reframing:
 
-Parallel track (not blocked by the numbered sequence): **ac plugin packaging** — wrap `ui/index.html` + the MCP server as a Holo app inside ac. Small surface, validates the plugin-surface promise of Light without touching Hardcore.
+1. **Tests** (behavior + quality evals + skill-output tests).
+2. **Skills library & extensibility** — the product. Build out the derivation-skill family (`derive-bugs`, `derive-corrections`, `derive-decisions`, `derive-skipped`, `derive-friction`) alongside maintenance skills (citation-fixer, signal detector, tier auto-promotion, research recipes).
+3. **Refactor** (readability + architectural + pluggable storage trait).
+4. **External-dependency hygiene** (provider abstractions + briefing + streaming).
+5. **Retrieval quality** (chunking, dedup, rerank, intent, expansion).
+6. **Public-release polish** of Mnemonic Light 0.1.
+7. **Mnemonic Hardcore** migration, once Light proves out.
 
-Before any new feature: keep CLI/API/MCP surfaces stable, keep bootstrap reliable on fresh `MT_BRAIN_ROOT`, keep `core.ts` as the single source of shared logic.
+Parallel track not gated by the numbered sequence: **ac plugin packaging** — wrap `ui/index.html` + MCP surface as a Holo app inside ac. Validates the plugin-surface promise of Light.
+
+Before any new feature: keep CLI/API/MCP surfaces stable, keep bootstrap reliable on fresh `MT_BRAIN_ROOT`, keep `core.ts` as single source of shared logic.
 
 ## Public repo direction
 

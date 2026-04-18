@@ -3,6 +3,10 @@
     "aurora": {
       "type": "http",
       "url": "http://127.0.0.1:9704/mcp"
+    },
+    "mm": {
+      "command": "bun",
+      "args": ["src/mcp.ts"]
     }
   }
 }

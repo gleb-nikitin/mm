@@ -5,7 +5,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { 
-  initDb, hybridSearch, queryBrain, validateClaim, addToBrain, embedBrain, getStats 
+  initDb, hybridSearch, queryBrain, validateClaim, addToBrain, embedBrain, getStats, getProjects 
 } from './core.ts';
 
 const server = new Server(
@@ -85,6 +85,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: { type: "object", properties: {} },
       },
       {
+        name: "list_projects",
+        description: "List all unique project slugs in the brain.",
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
         name: "embed_brain",
         description: "Run incremental embedding.",
         inputSchema: {
@@ -137,6 +142,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case "brain_stats": {
       const stats = getStats();
       return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
+    }
+    case "list_projects": {
+      const projects = getProjects();
+      return { content: [{ type: "text", text: JSON.stringify(projects, null, 2) }] };
     }
     case "embed_brain": {
       const res = await embedBrain(request.params.arguments?.slug as string);

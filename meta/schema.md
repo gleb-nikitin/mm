@@ -90,8 +90,8 @@ A concise paragraph representing the **Compiled Truth**. This section is rewritt
 ---
 <!-- TIMELINE: append-only below this line -->
 
-- **2026-04-17**: Fact or observation. Source: `raw/example.md`
-- **2026-04-18**: New evidence added here. Source: `raw/new_evidence.md`
+- **2026-04-17**: Fact or observation. Source: `raw/docs/mm/2026-04-17T10-00-00-000Z.md`
+- **2026-04-18**: New evidence from a Claude session. Source: `raw/claude/mm/2026-04-18T14-23-45-000Z.md`
 ```
 
 ### Required Frontmatter
@@ -124,7 +124,7 @@ A concise paragraph representing the **Compiled Truth**. This section is rewritt
 
 ## Provenance
 
-Every bullet in the **Timeline** must cite a `raw/` file path.
+Every bullet in the **Timeline** must cite a `raw/` file by its full current path (e.g. `raw/claude/mm/2026-04-18T….md`). Flat legacy paths (`raw/example.md`) are allowed only for pre-migration files that still sit at the top of `raw/`.
 Every claim in the **Compiled Truth** must be derivable from the Timeline.
 
 ## Contradictions

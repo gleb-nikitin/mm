@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import yaml from 'js-yaml';
 import {
-  db, PATHS, initDb, getHash, slugify, hybridSearch, getStats,
+  db, PATHS, initDb, getHash, slugify, hybridSearch, getStats, getProjects,
   queryBrain, validateClaim, addToBrain, embedBrain, runGemini, cosine_sim
 } from './core.ts';
 
@@ -170,6 +170,15 @@ program.command('search').argument('<query>', 'Search term').action(async (query
   } else {
     const results = db.prepare('SELECT slug, title FROM search_index WHERE search_index MATCH ?').all(`"${query}"`) as any[];
     if (results.length > 0) results.forEach(r => console.log(`[[${r.slug}|${r.title}]]`)); else console.log('No matches.');
+  }
+});
+
+program.command('projects').description('List all unique project slugs in the brain').action(() => {
+  const projects = getProjects();
+  if (projects.length === 0) console.log('No projects found.');
+  else {
+    console.log('📂 Projects in the brain:');
+    projects.forEach(p => console.log(`- ${p}`));
   }
 });
 
