@@ -1,23 +1,34 @@
 # Handoff — mm_devops
 
-Last updated 2026-04-18 after refining agent activity snippets.
+Last updated 2026-04-18 after establishing behavioral tests and event provenance.
 
 ## Current state
 
-- **Schema v8 live** (adds real-time agent sightings).
-- **Active Agents Dashboard** live at `http://localhost:3000/active-ui`.
-- **Importer snippets refined** to ensure any recent text (user or assistant) shows up in the dashboard, skipping tool-only turns.
+- **Schema v9 live** (adds `claim_sources_event` for clean FK integrity between claims and events).
+- **Behavioral Tests established** (`tests/behavior.test.ts`). Run with `bun test`.
+- **`brain process` (v0.9.0)**: Supports dual retro-sweep (raw files + events).
+- **`brain ingest-event`**: Targeted CLI tool for processing specific LLM sessions.
+- **API**: Now honors `MT_PORT`.
 
 ## What this session changed
 
-- **Importers**: Updated `scripts/import-*.ts` to scan backwards for the most recent turn with text content when generating the `last_user_snippet` (now more of a `last_text_snippet`) for the dashboard.
+- **Refactor**: Lifted multi-signal provenance helpers (`snapshotWiki`, `detectWikiChanges`, `timelineCitesRaw`, `timelineCitesEvent`, `backfillClaimsFromTimeline*`) into `src/core.ts` for reuse by tests and other surfaces.
+- **Testing**: Implemented a comprehensive behavioral test suite that exercises:
+  - Fresh-root bootstrap to latest schema.
+  - Phase 1 retro-sweep for both files and events.
+  - Negative paths (failing LLM synthesis).
+  - Search result ranking (event lane).
+  - API `/active` endpoint shape.
+  - Importer deduplication logic.
+- **Core**: Added `refreshSourceCount(slug)` to ensure `source_count` correctly sums both entries and events.
 
 ## Verification this session (all green)
 
 - `bun run typecheck` green.
-- Verified importers correctly skip tool-only turns and pick up assistant text if it's the most recent.
+- `bun test` passes all suites.
+- Schema v9 migration verified correctly.
 
 ## Next steps
 
-1. Follow `agent/docs/todo.md` step 1 — **tests**.
-2. Once tests provide a safety net, proceed to step 2 (readability pass on `src/brain.ts`).
+1. Follow `agent/docs/todo.md` step 2 (readability pass on `src/brain.ts`). Now safe to refactor thanks to the behavioral test suite.
+2. Wire up ac-chain importer once the schema proves out.

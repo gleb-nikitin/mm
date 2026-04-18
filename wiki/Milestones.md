@@ -20,3 +20,4 @@ This page tracks the architectural evolution of Mnemonic51. It is automatically 
 - **2026-04-18**: Add Gemini session importer
 - **2026-04-18**: Add Active Agents dashboard and real-time activity tracking
 - **2026-04-18**: Refine agent activity dashboard snippets to capture most recent text turn
+- **2026-04-18**: Establish behavioral test suite and implement event-based provenance

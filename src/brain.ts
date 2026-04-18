@@ -8,7 +8,9 @@ import * as path from 'path';
 import yaml from 'js-yaml';
 import {
   db, PATHS, BRAIN_ROOT, initDb, getHash, slugify, hybridSearch, getStats, getProjects,
-  queryBrain, validateClaim, addToBrain, embedBrain, runGemini, cosine_sim
+  queryBrain, validateClaim, addToBrain, embedBrain, runGemini, cosine_sim,
+  snapshotWiki, detectWikiChanges, timelineCitesRaw, timelineCitesEvent,
+  backfillClaimsFromTimeline, backfillClaimsFromTimelineEvent, refreshSourceCount,
 } from './core.ts';
 
 const program = new Command();
@@ -23,69 +25,7 @@ function internalRecordClaim(slug: string, claim: string, raw_id: number) {
   const res = db.prepare('INSERT INTO claims (wiki_slug, claim_text) VALUES (?, ?)').run(slug, claim);
   const claim_id = res.lastInsertRowid;
   db.prepare('INSERT INTO claim_sources (claim_id, raw_id) VALUES (?, ?)').run(claim_id, raw_id);
-  db.prepare(`UPDATE wiki_pages SET source_count = (SELECT COUNT(DISTINCT raw_id) FROM claim_sources WHERE claim_id IN (SELECT id FROM claims WHERE wiki_slug = ?)) WHERE slug = ?`).run(slug, slug);
-}
-
-// --- Timeline-citation provenance (Option A) ---
-// Markdown is the source of truth. If a modified wiki timeline cites a raw
-// entry's path, that's provenance — even if the agent didn't call the CLI.
-
-function snapshotWiki(): Map<string, number> {
-  const snap = new Map<string, number>();
-  for (const f of fs.readdirSync(PATHS.wiki)) {
-    if (!f.endsWith('.md')) continue;
-    try { snap.set(f, fs.statSync(path.join(PATHS.wiki, f)).mtimeMs); } catch {}
-  }
-  return snap;
-}
-
-function detectWikiChanges(before: Map<string, number>): string[] {
-  const changed: string[] = [];
-  for (const f of fs.readdirSync(PATHS.wiki)) {
-    if (!f.endsWith('.md')) continue;
-    const full = path.join(PATHS.wiki, f);
-    const now = fs.statSync(full).mtimeMs;
-    const prev = before.get(f);
-    if (prev === undefined || now > prev) changed.push(full);
-  }
-  return changed;
-}
-
-function timelineCitesRaw(wikiFilePath: string, rawSourcePath: string): boolean {
-  const rel = path.relative(BRAIN_ROOT, rawSourcePath);
-  const content = fs.readFileSync(wikiFilePath, 'utf-8');
-  const parts = content.split('<!-- TIMELINE: append-only below this line -->');
-  const timeline = parts[1] || '';
-  return timeline.includes(rel);
-}
-
-function backfillClaimsFromTimeline(rawId: number, rawSourcePath: string, wikiFiles: string[]): number {
-  const rel = path.relative(BRAIN_ROOT, rawSourcePath);
-  let inserted = 0;
-  for (const wikiFile of wikiFiles) {
-    const slug = path.basename(wikiFile, '.md');
-    const pageExists = db.prepare('SELECT 1 FROM wiki_pages WHERE slug = ?').get(slug);
-    if (!pageExists) continue;
-    const content = fs.readFileSync(wikiFile, 'utf-8');
-    const parts = content.split('<!-- TIMELINE: append-only below this line -->');
-    const timeline = parts[1] || '';
-    for (const rawLine of timeline.split('\n')) {
-      if (!rawLine.includes(rel)) continue;
-      if (!rawLine.trim().startsWith('-')) continue;
-      const claimText = rawLine
-        .replace(/^\s*-\s*/, '')
-        .replace(/^\*\*[^*]+\*\*:\s*/, '')
-        .replace(/\s*Source:.*$/, '')
-        .trim();
-      if (!claimText) continue;
-      const existing = db.prepare('SELECT id FROM claims WHERE wiki_slug = ? AND claim_text = ?').get(slug, claimText) as any;
-      const claimId = existing ? existing.id : db.prepare('INSERT INTO claims (wiki_slug, claim_text) VALUES (?, ?)').run(slug, claimText).lastInsertRowid;
-      const linkRes = db.prepare('INSERT OR IGNORE INTO claim_sources (claim_id, raw_id) VALUES (?, ?)').run(claimId, rawId);
-      if (linkRes.changes > 0) inserted++;
-    }
-    db.prepare(`UPDATE wiki_pages SET source_count = (SELECT COUNT(DISTINCT raw_id) FROM claim_sources WHERE claim_id IN (SELECT id FROM claims WHERE wiki_slug = ?)) WHERE slug = ?`).run(slug, slug);
-  }
-  return inserted;
+  refreshSourceCount(slug);
 }
 
 function collectRawFiles(): string[] {
@@ -200,7 +140,7 @@ function internalRebuildTimeline() {
 
 // --- CLI Definitions ---
 
-program.name('brain').version('0.7.3');
+program.name('brain').version('0.9.0');
 
 program.command('add').argument('<content>', 'Raw content').option('-t, --title <title>', 'Title').action((content, options) => {
   const res = addToBrain(content, options.title);
@@ -260,24 +200,42 @@ program.command('query').argument('<question>', 'The question').option('--save',
 });
 
 program.command('process').action(async () => {
-  // Phase 1 — retroactive sweep. Any unprocessed raw entry already cited in a
-  // wiki timeline is provenance-linked: backfill claim_sources and mark
-  // processed without spending an LLM call. Self-heals stuck queues whenever
-  // an agent edits wiki markdown directly instead of using `page create/update`.
+  // Phase 1 — retroactive sweep. Any unprocessed raw_entry or raw_event already
+  // cited in a wiki timeline is provenance-linked: backfill claim_sources and
+  // mark processed without spending an LLM call. Self-heals stuck queues
+  // whenever an agent edits wiki markdown directly instead of using the CLI.
   const allWikiFiles = fs.readdirSync(PATHS.wiki)
     .filter(f => f.endsWith('.md'))
     .map(f => path.join(PATHS.wiki, f));
-  const preSweep = db.prepare('SELECT id, source_path FROM raw_entries WHERE processed = 0').all() as any[];
-  let retroCount = 0;
-  for (const entry of preSweep) {
+
+  const rawSweep = db.prepare('SELECT id, source_path FROM raw_entries WHERE processed = 0').all() as any[];
+  let retroRaw = 0;
+  for (const entry of rawSweep) {
     const cited = allWikiFiles.filter(f => timelineCitesRaw(f, entry.source_path));
     if (cited.length === 0) continue;
     backfillClaimsFromTimeline(entry.id, entry.source_path, cited);
     db.prepare('UPDATE raw_entries SET processed = 1 WHERE id = ?').run(entry.id);
     db.prepare('INSERT INTO operations_log (operation, details) VALUES (?, ?)').run('process', `Retro-linked raw ${entry.id} via timeline citation in ${cited.map(c => path.basename(c)).join(', ')}`);
-    retroCount++;
+    retroRaw++;
   }
-  if (retroCount > 0) console.log(`📎 Retro-linked ${retroCount} stuck ${retroCount === 1 ? 'entry' : 'entries'} via existing timeline citations.`);
+
+  const eventSweep = db.prepare('SELECT id, external_id FROM raw_events WHERE processed = 0').all() as any[];
+  let retroEvent = 0;
+  for (const evt of eventSweep) {
+    const cited = allWikiFiles.filter(f => timelineCitesEvent(f, evt.external_id));
+    if (cited.length === 0) continue;
+    backfillClaimsFromTimelineEvent(evt.id, evt.external_id, cited);
+    db.prepare('UPDATE raw_events SET processed = 1 WHERE id = ?').run(evt.id);
+    db.prepare('INSERT INTO operations_log (operation, details) VALUES (?, ?)').run('process', `Retro-linked event ${evt.id} (${evt.external_id}) via timeline citation in ${cited.map(c => path.basename(c)).join(', ')}`);
+    retroEvent++;
+  }
+
+  if (retroRaw > 0 || retroEvent > 0) {
+    const parts: string[] = [];
+    if (retroRaw > 0) parts.push(`${retroRaw} raw`);
+    if (retroEvent > 0) parts.push(`${retroEvent} event`);
+    console.log(`📎 Retro-linked ${parts.join(', ')} via existing timeline citations.`);
+  }
 
   // Phase 2 — LLM loop for anything still unprocessed.
   const unprocessed = db.prepare('SELECT * FROM raw_entries WHERE processed = 0').all() as any[];
@@ -313,6 +271,74 @@ program.command('process').action(async () => {
     db.prepare('INSERT INTO operations_log (operation, details) VALUES (?, ?)').run('process', `Processed raw entry ${entry.id}`);
   }
 });
+
+program.command('ingest-event')
+  .argument('<external_id>', 'External ID of the raw_event to ingest')
+  .description('Targeted ingestion: pull a single raw_event into the wiki via the ingest skill. Provenance comes from a Timeline citation of the form `event:<external_id>`.')
+  .action(async (externalId: string) => {
+    const event = db.prepare('SELECT id, external_id, source_type, project, title, content, metadata FROM raw_events WHERE external_id = ?').get(externalId) as any;
+    if (!event) { console.error(`❌ Not found: ${externalId}`); process.exit(1); }
+    if (event.processed === 1) {
+      // Already processed — nothing to do, but report it.
+      console.log(`ℹ️ Event ${externalId} already processed.`);
+      return;
+    }
+
+    const ingestSkill = fs.readFileSync(path.join(PATHS.meta, 'skills', 'ingest.md'), 'utf-8');
+    const schema = fs.readFileSync(path.join(PATHS.meta, 'schema.md'), 'utf-8');
+    const meta = event.metadata ? JSON.parse(event.metadata) : {};
+    const provider = meta.provider || event.source_type;
+    const cwd = meta.cwd || '';
+    const wikiSnapshot = snapshotWiki();
+
+    const prompt = `${ingestSkill}
+
+# CONTEXT
+
+## SCHEMA
+${schema}
+
+## RAW EVENT
+External ID: ${event.external_id}
+Provider: ${provider}
+Project: ${event.project}
+CWD: ${cwd}
+Title: ${event.title || ''}
+
+Content:
+${event.content}
+
+# INSTRUCTIONS
+You are an AI Lib. This raw is an LLM chat event (not a markdown file).
+Edit wiki files directly AND append a Timeline bullet citing \`event:${event.external_id}\` as the source (in place of a \`raw/…\` path).
+Timeline citations of the form \`event:<external_id>\` are sufficient provenance.`;
+
+    console.log(`🧠 Ingesting event ${externalId} (${provider} · ${event.project})...`);
+    const result = await runGemini(prompt, true);
+    if (result.status !== 0) {
+      console.error(`❌ Synthesis failed: ${(result as any).stderr || ''}`);
+      process.exit(1);
+    }
+
+    const changedFiles = detectWikiChanges(wikiSnapshot);
+    const wikiChanged = changedFiles.length > 0;
+    const timelineCited = changedFiles.some(f => timelineCitesEvent(f, event.external_id));
+
+    if (wikiChanged && !timelineCited) {
+      console.error(`❌ Wiki mod without provenance for event ${event.external_id}. No Timeline citation of \`event:${event.external_id}\` found in modified pages.`);
+      internalRebuildIndex();
+      process.exit(1);
+    }
+
+    let linked = 0;
+    if (timelineCited) {
+      linked = backfillClaimsFromTimelineEvent(event.id, event.external_id, changedFiles);
+    }
+    db.prepare('UPDATE raw_events SET processed = 1 WHERE id = ?').run(event.id);
+    internalRebuildIndex(); internalRebuildMarkdownIndex(); internalRebuildTimeline();
+    db.prepare('INSERT INTO operations_log (operation, details) VALUES (?, ?)').run('ingest-event', `Ingested event ${event.id} (${event.external_id}); linked ${linked} claims`);
+    console.log(`✅ Ingested event ${externalId}. Linked ${linked} timeline ${linked === 1 ? 'claim' : 'claims'}.`);
+  });
 
 program.command('lint').option('--fix', 'Safe fixes only').action((options) => {
   console.log('🧹 Linting Brain...');

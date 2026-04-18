@@ -45,8 +45,10 @@ async function serveUiFile(relPath: string): Promise<Response> {
   return new Response(file);
 }
 
+const PORT = parseInt(process.env.MT_PORT || '3000', 10);
+
 const server = Bun.serve({
-  port: 3000,
+  port: PORT,
   idleTimeout: 180,
   async fetch(req) {
     const url = new URL(req.url);

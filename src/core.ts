@@ -118,7 +118,18 @@ export function initDb() {
   if (!importColNames.has('last_user_snippet')) db.run(`ALTER TABLE import_state ADD COLUMN last_user_snippet TEXT`);
   if (!importColNames.has('min_turns_ok'))      db.run(`ALTER TABLE import_state ADD COLUMN min_turns_ok INTEGER DEFAULT 1`);
 
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 8)');
+  // v9: claim_sources_event — provenance table for events (parallel to claim_sources).
+  // Events can't share claim_sources.raw_id because raw_entries.id and raw_events.id are
+  // independent ID spaces. Two tables keep FK integrity clean; source_count unions them.
+  db.run(`CREATE TABLE IF NOT EXISTS claim_sources_event (
+    claim_id INTEGER NOT NULL,
+    event_id INTEGER NOT NULL,
+    PRIMARY KEY (claim_id, event_id),
+    FOREIGN KEY(claim_id) REFERENCES claims(id) ON DELETE CASCADE,
+    FOREIGN KEY(event_id) REFERENCES raw_events(id) ON DELETE CASCADE
+  )`);
+
+  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 9)');
 }
 
 // --- Common Logic ---
@@ -226,6 +237,112 @@ export function chunkText(text: string, maxTokens = 400, overlapFraction = 0.2):
   }
   if (currentWordCount > 0) chunks.push(currentChunkWords.join(''));
   return chunks;
+}
+
+// --- Provenance helpers (Option A: timeline citations = provenance) ---
+//
+// Markdown is the source of truth. If a wiki timeline cites a raw file's path
+// or an event's external_id, that's provenance — even if the agent didn't call
+// the CLI. Used by `brain process` retro-sweep and by `brain ingest-event`.
+
+export function snapshotWiki(): Map<string, number> {
+  const snap = new Map<string, number>();
+  for (const f of fs.readdirSync(PATHS.wiki)) {
+    if (!f.endsWith('.md')) continue;
+    try { snap.set(f, fs.statSync(path.join(PATHS.wiki, f)).mtimeMs); } catch {}
+  }
+  return snap;
+}
+
+export function detectWikiChanges(before: Map<string, number>): string[] {
+  const changed: string[] = [];
+  for (const f of fs.readdirSync(PATHS.wiki)) {
+    if (!f.endsWith('.md')) continue;
+    const full = path.join(PATHS.wiki, f);
+    const now = fs.statSync(full).mtimeMs;
+    const prev = before.get(f);
+    if (prev === undefined || now > prev) changed.push(full);
+  }
+  return changed;
+}
+
+function readTimeline(wikiFilePath: string): string {
+  const content = fs.readFileSync(wikiFilePath, 'utf-8');
+  const parts = content.split('<!-- TIMELINE: append-only below this line -->');
+  return parts[1] || '';
+}
+
+export function timelineCitesRaw(wikiFilePath: string, rawSourcePath: string): boolean {
+  const rel = path.relative(BRAIN_ROOT, rawSourcePath);
+  return readTimeline(wikiFilePath).includes(rel);
+}
+
+export function timelineCitesEvent(wikiFilePath: string, externalId: string): boolean {
+  return readTimeline(wikiFilePath).includes(`event:${externalId}`);
+}
+
+export function refreshSourceCount(slug: string) {
+  db.prepare(`UPDATE wiki_pages SET source_count = (
+    SELECT COUNT(*) FROM (
+      SELECT 'r' || raw_id AS s FROM claim_sources
+        WHERE claim_id IN (SELECT id FROM claims WHERE wiki_slug = ?)
+      UNION
+      SELECT 'e' || event_id AS s FROM claim_sources_event
+        WHERE claim_id IN (SELECT id FROM claims WHERE wiki_slug = ?)
+    )
+  ) WHERE slug = ?`).run(slug, slug, slug);
+}
+
+function claimTextFromTimelineLine(rawLine: string): string {
+  return rawLine
+    .replace(/^\s*-\s*/, '')
+    .replace(/^\*\*[^*]+\*\*:\s*/, '')
+    .replace(/\s*Source:.*$/, '')
+    .trim();
+}
+
+export function backfillClaimsFromTimeline(rawId: number, rawSourcePath: string, wikiFiles: string[]): number {
+  const rel = path.relative(BRAIN_ROOT, rawSourcePath);
+  let inserted = 0;
+  for (const wikiFile of wikiFiles) {
+    const slug = path.basename(wikiFile, '.md');
+    if (!db.prepare('SELECT 1 FROM wiki_pages WHERE slug = ?').get(slug)) continue;
+    const timeline = readTimeline(wikiFile);
+    for (const rawLine of timeline.split('\n')) {
+      if (!rawLine.includes(rel)) continue;
+      if (!rawLine.trim().startsWith('-')) continue;
+      const claimText = claimTextFromTimelineLine(rawLine);
+      if (!claimText) continue;
+      const existing = db.prepare('SELECT id FROM claims WHERE wiki_slug = ? AND claim_text = ?').get(slug, claimText) as any;
+      const claimId = existing ? existing.id : db.prepare('INSERT INTO claims (wiki_slug, claim_text) VALUES (?, ?)').run(slug, claimText).lastInsertRowid;
+      const linkRes = db.prepare('INSERT OR IGNORE INTO claim_sources (claim_id, raw_id) VALUES (?, ?)').run(claimId, rawId);
+      if (linkRes.changes > 0) inserted++;
+    }
+    refreshSourceCount(slug);
+  }
+  return inserted;
+}
+
+export function backfillClaimsFromTimelineEvent(eventId: number, externalId: string, wikiFiles: string[]): number {
+  const marker = `event:${externalId}`;
+  let inserted = 0;
+  for (const wikiFile of wikiFiles) {
+    const slug = path.basename(wikiFile, '.md');
+    if (!db.prepare('SELECT 1 FROM wiki_pages WHERE slug = ?').get(slug)) continue;
+    const timeline = readTimeline(wikiFile);
+    for (const rawLine of timeline.split('\n')) {
+      if (!rawLine.includes(marker)) continue;
+      if (!rawLine.trim().startsWith('-')) continue;
+      const claimText = claimTextFromTimelineLine(rawLine);
+      if (!claimText) continue;
+      const existing = db.prepare('SELECT id FROM claims WHERE wiki_slug = ? AND claim_text = ?').get(slug, claimText) as any;
+      const claimId = existing ? existing.id : db.prepare('INSERT INTO claims (wiki_slug, claim_text) VALUES (?, ?)').run(slug, claimText).lastInsertRowid;
+      const linkRes = db.prepare('INSERT OR IGNORE INTO claim_sources_event (claim_id, event_id) VALUES (?, ?)').run(claimId, eventId);
+      if (linkRes.changes > 0) inserted++;
+    }
+    refreshSourceCount(slug);
+  }
+  return inserted;
 }
 
 // --- Shared Operations ---
