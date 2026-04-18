@@ -4,7 +4,8 @@
 - `git` role established and scripts implemented.
 - Added Web UI and async refactor for `runGemini` (`ed3eaf2`).
 - Added Claude Code sessions import script and macOS run/kill commands (`dd9bba4`).
-- **Landed source-separation end-to-end** (`7b5f0ef`): schema v4, recursive indexing, filtered retrieval by source_type/project.
+- Landed source-separation end-to-end (`7b5f0ef`).
+- **Updated wiki with ingested session data and refined agent documentation** (`6a758af`).
 - Project structure refactored: core in `src/`, scripts in `scripts/`.
 - Repository is clean.
 
@@ -14,6 +15,7 @@
 - [x] Commit initial UI and async refactor.
 - [x] Commit Claude Code sessions import work and macOS commands.
 - [x] Commit source-separation feature.
+- [x] Commit ingested wiki updates and documentation refinements.
 
 ## Blockers
 - None.
