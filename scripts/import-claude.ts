@@ -303,11 +303,13 @@ async function main() {
       const userTurnCount = userTurns.length;
       const minTurnsOk = userTurnCount >= flags.minTurns ? 1 : 0;
       
+      // Snippet is the most recent turn of either role that actually has
+      // text content. Skips tool-only or otherwise text-less turns so the
+      // dashboard doesn't show a blank line.
       let lastUserSnippet: string | null = null;
-      if (userTurns.length > 0) {
-        const lastTurn = userTurns[userTurns.length - 1];
-        const text = lastTurn.blocks.filter(b => b.kind === 'text').map(b => b.text).join(' ');
-        lastUserSnippet = text.slice(0, 200).trim();
+      for (let i = session.turns.length - 1; i >= 0; i--) {
+        const text = session.turns[i].blocks.filter(b => b.kind === 'text').map(b => b.text).join(' ').trim();
+        if (text) { lastUserSnippet = text.slice(0, 200); break; }
       }
 
       if (!flags.dryRun) {
