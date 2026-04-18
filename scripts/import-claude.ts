@@ -257,11 +257,18 @@ async function main() {
 
   const selectImportState = db.prepare(`SELECT last_mtime FROM import_state WHERE source_path = ?`);
   const upsertImportState = flags.dryRun ? null : db.prepare(`INSERT INTO import_state
-    (source_path, last_mtime, last_imported_at)
-    VALUES (?, ?, CURRENT_TIMESTAMP)
+    (source_path, last_mtime, last_imported_at, provider, external_id, project, cwd, model, last_user_snippet, min_turns_ok)
+    VALUES (?, ?, CURRENT_TIMESTAMP, 'claude', ?, ?, ?, ?, ?, ?)
     ON CONFLICT(source_path) DO UPDATE SET
       last_mtime = excluded.last_mtime,
-      last_imported_at = excluded.last_imported_at`);
+      last_imported_at = excluded.last_imported_at,
+      provider = excluded.provider,
+      external_id = COALESCE(excluded.external_id, external_id),
+      project = COALESCE(excluded.project, project),
+      cwd = COALESCE(excluded.cwd, cwd),
+      model = COALESCE(excluded.model, model),
+      last_user_snippet = excluded.last_user_snippet,
+      min_turns_ok = excluded.min_turns_ok`);
   const insertEvent = flags.dryRun ? null : db.prepare(`INSERT OR IGNORE INTO raw_events
     (source_type, project, external_id, timestamp, content, title, participants, metadata, processed, deduped)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1)`);
@@ -277,36 +284,63 @@ async function main() {
   let errored = 0;
 
   for (const { path: filePath, mtimeMs } of candidateFiles) {
-    if (!flags.force) {
-      const ageSeconds = (Date.now() - mtimeMs) / 1000;
-      if (ageSeconds < flags.minAgeSeconds) {
-        skippedLive++;
-        continue;
-      }
-      const state = selectImportState.get(filePath) as { last_mtime: number } | undefined;
-      if (state && state.last_mtime === mtimeMs) {
-        skippedUnchanged++;
-        continue;
-      }
-    }
+    const isSettled = (Date.now() - mtimeMs) / 1000 >= flags.minAgeSeconds;
+    const state = selectImportState.get(filePath) as { last_mtime: number } | undefined;
+    const isChanged = !state || state.last_mtime !== mtimeMs;
 
     let sessions: Session[];
     try { sessions = parseJsonlFile(filePath, flags.includeThinking); }
     catch (e: any) { errored++; console.error(`  ✗ parse error: ${filePath}: ${e.message}`); continue; }
 
+    if (sessions.length === 0) {
+      if (!flags.dryRun) upsertImportState!.run(filePath, mtimeMs, null, 'unknown', null, null, null, 0);
+      continue;
+    }
+
     for (const session of sessions) {
+      const projectSlug = projectSlugFromCwd(session.cwd);
+      const userTurns = session.turns.filter(t => t.role === 'user');
+      const userTurnCount = userTurns.length;
+      const minTurnsOk = userTurnCount >= flags.minTurns ? 1 : 0;
+      
+      let lastUserSnippet: string | null = null;
+      if (userTurns.length > 0) {
+        const lastTurn = userTurns[userTurns.length - 1];
+        const text = lastTurn.blocks.filter(b => b.kind === 'text').map(b => b.text).join(' ');
+        lastUserSnippet = text.slice(0, 200).trim();
+      }
+
+      if (!flags.dryRun) {
+        upsertImportState!.run(
+          filePath, 
+          mtimeMs, 
+          session.sessionId, 
+          projectSlug, 
+          session.cwd, 
+          session.model, 
+          lastUserSnippet, 
+          minTurnsOk
+        );
+      }
+
+      if (!flags.force && isSettled && !isChanged) {
+        skippedUnchanged++;
+        continue;
+      }
       if (flags.project && !(session.cwd || '').includes(flags.project)) {
         skippedProject++;
         continue;
       }
-      const userTurnCount = session.turns.filter(t => t.role === 'user').length;
       if (userTurnCount < flags.minTurns) {
         skippedMinTurns++;
         continue;
       }
+      if (!flags.force && !isSettled) {
+        skippedLive++;
+        continue;
+      }
 
       const { title, content, started, ended } = flattenSession(session);
-      const projectSlug = projectSlugFromCwd(session.cwd);
       if (flags.dryRun) {
         console.log(`  [dry-run] ${title}  →  raw_events  (${session.turns.length} turns, ${content.length} chars)`);
         imported++;
@@ -340,8 +374,6 @@ async function main() {
         duplicate++;
       }
     }
-
-    if (!flags.dryRun) upsertImportState!.run(filePath, mtimeMs);
   }
 
   console.log();

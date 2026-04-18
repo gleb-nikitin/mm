@@ -107,10 +107,70 @@ export function initDb() {
     last_imported_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );`);
 
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 7)');
+  // v8: extend import_state for live-agent dashboard
+  const importCols = db.prepare(`PRAGMA table_info(import_state)`).all() as Array<{ name: string }>;
+  const importColNames = new Set(importCols.map(c => c.name));
+  if (!importColNames.has('provider'))          db.run(`ALTER TABLE import_state ADD COLUMN provider TEXT`);
+  if (!importColNames.has('external_id'))       db.run(`ALTER TABLE import_state ADD COLUMN external_id TEXT`);
+  if (!importColNames.has('project'))           db.run(`ALTER TABLE import_state ADD COLUMN project TEXT`);
+  if (!importColNames.has('cwd'))               db.run(`ALTER TABLE import_state ADD COLUMN cwd TEXT`);
+  if (!importColNames.has('model'))             db.run(`ALTER TABLE import_state ADD COLUMN model TEXT`);
+  if (!importColNames.has('last_user_snippet')) db.run(`ALTER TABLE import_state ADD COLUMN last_user_snippet TEXT`);
+  if (!importColNames.has('min_turns_ok'))      db.run(`ALTER TABLE import_state ADD COLUMN min_turns_ok INTEGER DEFAULT 1`);
+
+  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 8)');
 }
 
 // --- Common Logic ---
+
+export function renderActiveAgentsMarkdown(maxAgeSeconds: number = 300): string {
+  const rows = db.prepare(`
+    SELECT 
+      provider, 
+      project, 
+      cwd, 
+      external_id, 
+      model, 
+      last_user_snippet,
+      CAST(strftime('%s', 'now') - (last_mtime / 1000.0) AS INTEGER) as seconds_ago
+    FROM import_state
+    WHERE (strftime('%s', 'now') - (last_mtime / 1000.0)) <= ?
+      AND provider IS NOT NULL AND provider != 'unknown'
+      AND project IS NOT NULL AND project != 'unknown'
+      AND (min_turns_ok = 1 OR last_user_snippet IS NOT NULL)
+    ORDER BY seconds_ago ASC
+  `).all(maxAgeSeconds) as any[];
+
+  const nowIso = new Date().toISOString();
+  let md = `# Active agents (last ${Math.floor(maxAgeSeconds / 60)} min)\n\n`;
+  md += `_Generated: ${nowIso}_\n\n`;
+
+  if (rows.length === 0) {
+    md += `_No agents active._\n`;
+    return md;
+  }
+
+  for (const row of rows) {
+    const timeStr = formatRelativeTime(row.seconds_ago);
+    md += `- **${row.provider || 'unknown'}** · \`${row.project || 'unknown'}\` · ${timeStr} ago · \`${row.model || 'unknown'}\`\n`;
+    md += `  cwd: \`${row.cwd || 'unknown'}\`\n`;
+    md += `  external_id: \`${row.external_id || 'unknown'}\`\n`;
+    if (row.last_user_snippet) {
+      md += `  last user turn: "${row.last_user_snippet}"\n`;
+    }
+    md += `\n`;
+  }
+
+  return md.trim();
+}
+
+function formatRelativeTime(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  if (secs === 0) return `${mins}m`;
+  return `${mins}m ${secs}s`;
+}
 
 export function cosine_sim(a: Buffer | null | undefined, b: Buffer | null | undefined): number {
   if (!a || !b) return 0;

@@ -19,6 +19,9 @@
       --r: 8px;
       --f: 'Monaco', 'Menlo', 'Consolas', monospace;
       --tr: 150ms ease-out;
+      
+      --btn-hover: rgba(255, 255, 255, 0.04);
+      --search-hit: rgba(163, 113, 247, 0.4);
     }
 
     * { box-sizing: border-box; }
@@ -101,11 +104,11 @@
       font-weight: 600;
       border-radius: var(--r);
       cursor: pointer;
-      box-shadow: inset 0 0 12px var(--accent-glow);
+      box-shadow: inset 0 0 12px rgba(122, 190, 212, 0.15);
       transition: background var(--tr);
       letter-spacing: 0.04em;
     }
-    .btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.04); }
+    .btn:hover:not(:disabled) { background: var(--btn-hover); }
     .btn:disabled { opacity: 0.35; cursor: default; }
 
     .results { padding: var(--sp-2); display: flex; flex-direction: column; gap: 2px; }
@@ -115,7 +118,7 @@
       cursor: pointer;
       transition: background var(--tr);
     }
-    .result:hover { background: rgba(255, 255, 255, 0.035); }
+    .result:hover { background: var(--btn-hover); }
     .result-line1 { display: flex; align-items: baseline; gap: var(--sp-2); }
     .result-source {
       font-size: 11px;
@@ -186,9 +189,9 @@
       font-style: italic;
     }
 
-    /* markdown highlighting — adapted from ac/ui/apps/chains.html */
+    /* markdown highlighting — syntax highlighting, not parsing */
     .md-mark { color: var(--text-muted); opacity: 0.35; }
-    .md-list { color: var(--accent); font-weight: 600; }
+    .md-list { color: var(--accent); font-weight: 700; }
     .md-h1 { font-size: 1.35em; font-weight: 700; color: var(--text); }
     .md-h2 { font-size: 1.18em; font-weight: 700; color: var(--accent); }
     .md-h3 { font-size: 1.08em; font-weight: 700; color: var(--accent); opacity: 0.85; }

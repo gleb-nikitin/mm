@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  initDb, hybridSearch, getStats, queryBrain, validateClaim, addToBrain, PATHS
+  initDb, hybridSearch, getStats, queryBrain, validateClaim, addToBrain, PATHS,
+  renderActiveAgentsMarkdown
 } from './core.ts';
 
 // Ensure DB is ready on fresh roots
@@ -9,11 +10,12 @@ initDb();
 
 const UI_DIR = path.resolve(new URL('../ui', import.meta.url).pathname);
 
-const HELP_MD = `# Brain API v0.7.3
+const HELP_MD = `# Brain API v0.8.0
 
 Endpoints:
 - \`/\`: Web UI (aurora theme).
 - \`/help\`: This markdown endpoint list.
+- \`/active?max_age_seconds=N\`: List currently-active agent sessions (Claude, Codex, Gemini).
 - \`/query?q=<question>[&source=a,b&project=x,y]\`: Ask a synthesis question, optionally scoped.
 - \`/validate?q=<claim>\`: Fact-check a specific claim.
 - \`/wiki/:slug\`: Read a specific wiki page.
@@ -52,11 +54,20 @@ const server = Bun.serve({
     if (url.pathname === "/") {
       return serveUiFile("/index.html");
     }
+    if (url.pathname === "/active-ui") {
+      return serveUiFile("/active.html");
+    }
     if (url.pathname.startsWith("/ui/")) {
       return serveUiFile(url.pathname.replace(/^\/ui/, ""));
     }
     if (url.pathname === "/help") {
       return new Response(HELP_MD, { headers: { "Content-Type": "text/markdown" } });
+    }
+
+    if (url.pathname === "/active") {
+      const maxAge = parseInt(url.searchParams.get("max_age_seconds") || "300", 10);
+      const md = renderActiveAgentsMarkdown(maxAge);
+      return new Response(md, { headers: { "Content-Type": "text/markdown" } });
     }
 
     if (url.pathname === "/query") {

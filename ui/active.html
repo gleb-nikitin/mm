@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mnemonic · Active Agents</title>
+  <style>
+    :root {
+      --bg: #0a0e14;
+      --panel-bg: rgba(255, 255, 255, 0.035);
+      --panel-border: rgba(255, 255, 255, 0.08);
+      --text: #e6edf3;
+      --text-muted: rgba(230, 237, 243, 0.5);
+      --accent: #7ec8e3;
+      --accent-glow: rgba(126, 200, 227, 0.15);
+      --blur: 16px;
+      --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-6: 24px;
+      --r: 8px;
+      --f: 'Monaco', 'Menlo', 'Consolas', monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; min-height: 100vh; }
+
+    body {
+      background:
+        radial-gradient(ellipse 800px 600px at 15% 10%, rgba(126, 200, 227, 0.10) 0%, transparent 55%),
+        radial-gradient(ellipse 700px 500px at 85% 90%, rgba(183, 148, 246, 0.10) 0%, transparent 55%),
+        var(--bg);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: var(--f);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      max-width: 820px;
+      margin: 0 auto;
+      padding: var(--sp-6) var(--sp-4);
+      gap: var(--sp-4);
+    }
+
+    .title {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.28em;
+      color: var(--accent);
+      text-shadow: 0 0 12px var(--accent-glow);
+      padding: 0 var(--sp-2);
+    }
+
+    .status-line {
+      font-size: 11px;
+      color: var(--text-muted);
+      padding: 0 var(--sp-2);
+      margin-top: calc(-1 * var(--sp-2));
+      margin-bottom: var(--sp-2);
+    }
+
+    .panel {
+      background: var(--panel-bg);
+      backdrop-filter: blur(var(--blur));
+      -webkit-backdrop-filter: blur(var(--blur));
+      border: 1px solid var(--panel-border);
+      border-radius: var(--r);
+      box-shadow: 0 4px 32px rgba(0, 0, 0, 0.35);
+      min-height: 100px;
+    }
+
+    .agents-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-2);
+      padding: var(--sp-4);
+    }
+
+    .agent-row {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: var(--sp-2) var(--sp-3);
+      border-radius: var(--r);
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .agent-header {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+    }
+    .agent-provider {
+      display: inline-block;
+      width: 9ch;
+      text-align: center;
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      padding: 0 4px;
+    }
+    .agent-project { font-weight: 600; color: var(--text); }
+    .agent-time { color: var(--text-muted); font-size: 11px; }
+    .agent-model { color: var(--text-muted); font-size: 11px; opacity: 0.7; }
+    .agent-snippet {
+      color: var(--text-muted);
+      font-style: italic;
+      margin-top: 2px;
+      border-left: 2px solid var(--panel-border);
+      padding-left: var(--sp-2);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .empty-state, .error-state {
+      padding: var(--sp-6);
+      color: var(--text-muted);
+      text-align: center;
+      font-style: italic;
+    }
+    .error-state { color: #f87171; }
+
+    .output {
+      padding: var(--sp-4);
+      font-size: 14px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+    }
+
+    /* markdown highlighting */
+    .md-mark { color: var(--text-muted); opacity: 0.35; }
+    .md-list { color: var(--accent); font-weight: 700; }
+    .md-h1 { font-size: 1.35em; font-weight: 700; color: var(--text); }
+    .md-h2 { font-size: 1.18em; font-weight: 700; color: var(--accent); }
+    .md-h3 { font-size: 1.08em; font-weight: 700; color: var(--accent); opacity: 0.85; }
+    .md-bold { color: var(--text); font-weight: 600; }
+    .md-code { color: var(--accent); }
+    .md-quote { color: var(--accent); opacity: 0.85; }
+    .md-hr { display: block; border-bottom: 1px solid var(--accent); padding-bottom: var(--sp-2); margin-bottom: var(--sp-2); color: var(--text-muted); opacity: 0.35; }
+  </style>
+</head>
+<body x-data="app()" x-init="init()" @beforeunload.window="destroy()">
+  <div class="app">
+    <div class="title">MNEMONIC · ACTIVE AGENTS</div>
+    <div class="status-line">
+      Last updated: <span x-text="lastUpdatedStr"></span>
+    </div>
+
+    <div class="panel">
+      <div x-show="error" class="error-state" x-text="error"></div>
+      
+      <div x-show="!error && agents.length > 0" class="agents-list">
+        <template x-for="a in agents" :key="a.external_id">
+          <div class="agent-row" :title="'ID: ' + a.external_id">
+            <div class="agent-header">
+              <span class="agent-provider" x-text="a.provider"></span>
+              <span class="agent-project" x-text="a.project"></span>
+              <span class="agent-time" x-text="a.time + ' ago'"></span>
+              <span class="agent-model" x-text="a.model"></span>
+            </div>
+            <template x-if="a.snippet">
+              <div class="agent-snippet" x-text="a.snippet"></div>
+            </template>
+          </div>
+        </template>
+      </div>
+
+      <div x-show="!error && agentsMd && agents.length === 0" class="output" x-html="rendered(agentsMd)"></div>
+
+      <div x-show="!error && !agentsMd" class="empty-state">
+        Initializing...
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/alpine/cdn.min.js" defer></script>
+  <script>
+    function app() {
+      return {
+        agents: [],
+        agentsMd: '',
+        lastFetch: null,
+        lastUpdatedStr: 'never',
+        error: null,
+        _poll: null,
+        _timer: null,
+
+        init() {
+          this.fetchAgents();
+          this._poll = setInterval(() => this.fetchAgents(), 15000);
+          this._timer = setInterval(() => this.updateTimer(), 1000);
+        },
+
+        destroy() {
+          if (this._poll) clearInterval(this._poll);
+          if (this._timer) clearInterval(this._timer);
+        },
+
+        async fetchAgents() {
+          try {
+            const r = await fetch('/active?max_age_seconds=300');
+            if (!r.ok) throw new Error('Fetch failed: ' + r.status);
+            const md = await r.text();
+            this.agentsMd = md;
+            this.agents = parseActiveMd(md);
+            this.lastFetch = Date.now();
+            this.error = null;
+            this.updateTimer();
+          } catch (e) {
+            this.error = e.message;
+            console.error(e);
+          }
+        },
+
+        updateTimer() {
+          if (!this.lastFetch) return;
+          const diff = Math.floor((Date.now() - this.lastFetch) / 1000);
+          this.lastUpdatedStr = diff + 's ago';
+        },
+
+        rendered(text) {
+          if (!text) return '';
+          // Simple markdown highlighter for fallback
+          const esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          return esc.split('\n').map(line => {
+            if (/^\s*###\s/.test(line)) return line.replace(/^(\s*)(###)(\s)(.*)/, '$1<span class="md-mark">$2</span>$3<span class="md-h3">$4</span>');
+            if (/^\s*##\s/.test(line)) return line.replace(/^(\s*)(##)(\s)(.*)/, '$1<span class="md-mark">$2</span>$3<span class="md-h2">$4</span>');
+            if (/^\s*#\s/.test(line))  return line.replace(/^(\s*)(#)(\s)(.*)/,  '$1<span class="md-mark">$2</span>$3<span class="md-h1">$4</span>');
+            if (/^(\s*)-\s/.test(line)) return line.replace(/^(\s*)(-)(\s)(.*)/, '$1<span class="md-list">$2</span>$3$4');
+            return line;
+          }).map(line => {
+            line = line.replace(/\*\*([^*]+)\*\*/g, '<span class="md-mark">**</span><span class="md-bold">$1</span><span class="md-mark">**</span>');
+            line = line.replace(/`([^`]+)`/g, '<span class="md-mark">`</span><span class="md-code">$1</span><span class="md-mark">`</span>');
+            return line;
+          }).join('\n');
+        }
+      };
+    }
+
+    function parseActiveMd(md) {
+      const out = [];
+      const blocks = md.split('\n\n');
+      for (const block of blocks) {
+        // - **claude** · `mm` · 19s ago · `claude-opus-4-7`
+        const m = block.match(/^- \*\*([^*]+)\*\* · `([^`]+)` · ([^·]+) ago · `([^`]+)`/);
+        if (m) {
+          const provider = m[1];
+          const project = m[2];
+          const time = m[3].trim();
+          const model = m[4];
+          
+          let snippet = null;
+          const snippetMatch = block.match(/last user turn: "([^"]+)"/);
+          if (snippetMatch) snippet = snippetMatch[1];
+
+          let extId = null;
+          const idMatch = block.match(/external_id: `([^`]+)`/);
+          if (idMatch) extId = idMatch[1];
+
+          out.push({ provider, project, time, model, snippet, external_id: extId || 'unknown' });
+        }
+      }
+      return out;
+    }
+  </script>
+</body>
+</html>

@@ -5,13 +5,14 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { 
-  initDb, hybridSearch, queryBrain, validateClaim, addToBrain, embedBrain, getStats, getProjects 
+  initDb, hybridSearch, queryBrain, validateClaim, addToBrain, embedBrain, getStats, getProjects,
+  renderActiveAgentsMarkdown 
 } from './core.ts';
 
 const server = new Server(
   {
     name: "brain-mcp",
-    version: "0.7.3",
+    version: "0.8.0",
   },
   {
     capabilities: {
@@ -90,6 +91,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: { type: "object", properties: {} },
       },
       {
+        name: "list_active_agents",
+        description: "List currently-active agent sessions (Claude Code, Codex, Gemini CLI) with project, last-activity age, and the most recent user turn. Call when asked who's working, where, on what.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            max_age_seconds: { type: "number", description: "Filter for activity within the last N seconds (default: 300)." }
+          }
+        },
+      },
+      {
         name: "embed_brain",
         description: "Run incremental embedding.",
         inputSchema: {
@@ -146,6 +157,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case "list_projects": {
       const projects = getProjects();
       return { content: [{ type: "text", text: JSON.stringify(projects, null, 2) }] };
+    }
+    case "list_active_agents": {
+      const args = request.params.arguments || {};
+      const md = renderActiveAgentsMarkdown((args.max_age_seconds as number) || 300);
+      return { content: [{ type: "text", text: md }] };
     }
     case "embed_brain": {
       const res = await embedBrain(request.params.arguments?.slug as string);
