@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import yaml from 'js-yaml';
 import {
-  db, PATHS, initDb, getHash, slugify, hybridSearch, getStats, getProjects,
+  db, PATHS, BRAIN_ROOT, initDb, getHash, slugify, hybridSearch, getStats, getProjects,
   queryBrain, validateClaim, addToBrain, embedBrain, runGemini, cosine_sim
 } from './core.ts';
 
@@ -24,6 +24,68 @@ function internalRecordClaim(slug: string, claim: string, raw_id: number) {
   const claim_id = res.lastInsertRowid;
   db.prepare('INSERT INTO claim_sources (claim_id, raw_id) VALUES (?, ?)').run(claim_id, raw_id);
   db.prepare(`UPDATE wiki_pages SET source_count = (SELECT COUNT(DISTINCT raw_id) FROM claim_sources WHERE claim_id IN (SELECT id FROM claims WHERE wiki_slug = ?)) WHERE slug = ?`).run(slug, slug);
+}
+
+// --- Timeline-citation provenance (Option A) ---
+// Markdown is the source of truth. If a modified wiki timeline cites a raw
+// entry's path, that's provenance — even if the agent didn't call the CLI.
+
+function snapshotWiki(): Map<string, number> {
+  const snap = new Map<string, number>();
+  for (const f of fs.readdirSync(PATHS.wiki)) {
+    if (!f.endsWith('.md')) continue;
+    try { snap.set(f, fs.statSync(path.join(PATHS.wiki, f)).mtimeMs); } catch {}
+  }
+  return snap;
+}
+
+function detectWikiChanges(before: Map<string, number>): string[] {
+  const changed: string[] = [];
+  for (const f of fs.readdirSync(PATHS.wiki)) {
+    if (!f.endsWith('.md')) continue;
+    const full = path.join(PATHS.wiki, f);
+    const now = fs.statSync(full).mtimeMs;
+    const prev = before.get(f);
+    if (prev === undefined || now > prev) changed.push(full);
+  }
+  return changed;
+}
+
+function timelineCitesRaw(wikiFilePath: string, rawSourcePath: string): boolean {
+  const rel = path.relative(BRAIN_ROOT, rawSourcePath);
+  const content = fs.readFileSync(wikiFilePath, 'utf-8');
+  const parts = content.split('<!-- TIMELINE: append-only below this line -->');
+  const timeline = parts[1] || '';
+  return timeline.includes(rel);
+}
+
+function backfillClaimsFromTimeline(rawId: number, rawSourcePath: string, wikiFiles: string[]): number {
+  const rel = path.relative(BRAIN_ROOT, rawSourcePath);
+  let inserted = 0;
+  for (const wikiFile of wikiFiles) {
+    const slug = path.basename(wikiFile, '.md');
+    const pageExists = db.prepare('SELECT 1 FROM wiki_pages WHERE slug = ?').get(slug);
+    if (!pageExists) continue;
+    const content = fs.readFileSync(wikiFile, 'utf-8');
+    const parts = content.split('<!-- TIMELINE: append-only below this line -->');
+    const timeline = parts[1] || '';
+    for (const rawLine of timeline.split('\n')) {
+      if (!rawLine.includes(rel)) continue;
+      if (!rawLine.trim().startsWith('-')) continue;
+      const claimText = rawLine
+        .replace(/^\s*-\s*/, '')
+        .replace(/^\*\*[^*]+\*\*:\s*/, '')
+        .replace(/\s*Source:.*$/, '')
+        .trim();
+      if (!claimText) continue;
+      const existing = db.prepare('SELECT id FROM claims WHERE wiki_slug = ? AND claim_text = ?').get(slug, claimText) as any;
+      const claimId = existing ? existing.id : db.prepare('INSERT INTO claims (wiki_slug, claim_text) VALUES (?, ?)').run(slug, claimText).lastInsertRowid;
+      const linkRes = db.prepare('INSERT OR IGNORE INTO claim_sources (claim_id, raw_id) VALUES (?, ?)').run(claimId, rawId);
+      if (linkRes.changes > 0) inserted++;
+    }
+    db.prepare(`UPDATE wiki_pages SET source_count = (SELECT COUNT(DISTINCT raw_id) FROM claim_sources WHERE claim_id IN (SELECT id FROM claims WHERE wiki_slug = ?)) WHERE slug = ?`).run(slug, slug);
+  }
+  return inserted;
 }
 
 function collectRawFiles(): string[] {
@@ -138,7 +200,7 @@ function internalRebuildTimeline() {
 
 // --- CLI Definitions ---
 
-program.name('brain').version('0.7.2');
+program.name('brain').version('0.7.3');
 
 program.command('add').argument('<content>', 'Raw content').option('-t, --title <title>', 'Title').action((content, options) => {
   const res = addToBrain(content, options.title);
@@ -201,29 +263,57 @@ program.command('query').argument('<question>', 'The question').option('--save',
 });
 
 program.command('process').action(async () => {
+  // Phase 1 — retroactive sweep. Any unprocessed raw entry already cited in a
+  // wiki timeline is provenance-linked: backfill claim_sources and mark
+  // processed without spending an LLM call. Self-heals stuck queues whenever
+  // an agent edits wiki markdown directly instead of using `page create/update`.
+  const allWikiFiles = fs.readdirSync(PATHS.wiki)
+    .filter(f => f.endsWith('.md'))
+    .map(f => path.join(PATHS.wiki, f));
+  const preSweep = db.prepare('SELECT id, source_path FROM raw_entries WHERE processed = 0').all() as any[];
+  let retroCount = 0;
+  for (const entry of preSweep) {
+    const cited = allWikiFiles.filter(f => timelineCitesRaw(f, entry.source_path));
+    if (cited.length === 0) continue;
+    backfillClaimsFromTimeline(entry.id, entry.source_path, cited);
+    db.prepare('UPDATE raw_entries SET processed = 1 WHERE id = ?').run(entry.id);
+    db.prepare('INSERT INTO operations_log (operation, details) VALUES (?, ?)').run('process', `Retro-linked raw ${entry.id} via timeline citation in ${cited.map(c => path.basename(c)).join(', ')}`);
+    retroCount++;
+  }
+  if (retroCount > 0) console.log(`📎 Retro-linked ${retroCount} stuck ${retroCount === 1 ? 'entry' : 'entries'} via existing timeline citations.`);
+
+  // Phase 2 — LLM loop for anything still unprocessed.
   const unprocessed = db.prepare('SELECT * FROM raw_entries WHERE processed = 0').all() as any[];
   if (unprocessed.length === 0) { console.log('✨ Empty.'); return; }
   const ingestSkill = fs.readFileSync(path.join(PATHS.meta, 'skills', 'ingest.md'), 'utf-8');
   const schema = fs.readFileSync(path.join(PATHS.meta, 'schema.md'), 'utf-8');
   for (const entry of unprocessed) {
     console.log(`🧠 Processing: ${entry.title}`);
-    const initialClaims = db.prepare('SELECT COUNT(*) as count FROM claim_sources WHERE raw_id = ?').get(entry.id) as any;
-    const initialWikiMtime = fs.readdirSync(PATHS.wiki).reduce((max, f) => Math.max(max, fs.statSync(path.join(PATHS.wiki, f)).mtimeMs), 0);
-    const prompt = `${ingestSkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n## RAW ENTRY\nID: ${entry.id}\nFile: ${entry.source_path}\nContent:\n${entry.content}\n\n# INSTRUCTIONS\nYou are an AI Lib. Use 'bun run brain page create/update' with --source ${entry.id} and --claim \"...\".`;
+    const initialClaims = (db.prepare('SELECT COUNT(*) as count FROM claim_sources WHERE raw_id = ?').get(entry.id) as any).count;
+    const wikiSnapshot = snapshotWiki();
+    const rawRel = path.relative(BRAIN_ROOT, entry.source_path);
+    const prompt = `${ingestSkill}\n\n# CONTEXT\n\n## SCHEMA\n${schema}\n\n## RAW ENTRY\nID: ${entry.id}\nFile: ${entry.source_path}\nContent:\n${entry.content}\n\n# INSTRUCTIONS\nYou are an AI Lib. Either call 'bun run brain page create/update' with --source ${entry.id} and --claim "...", OR edit wiki files directly AND append a Timeline bullet citing \`${rawRel}\`. Timeline citations are sufficient provenance.`;
     const result = await runGemini(prompt, true);
-    if (result.status === 0) {
-      const finalClaims = db.prepare('SELECT COUNT(*) as count FROM claim_sources WHERE raw_id = ?').get(entry.id) as any;
-      const finalWikiMtime = fs.readdirSync(PATHS.wiki).reduce((max, f) => Math.max(max, fs.statSync(path.join(PATHS.wiki, f)).mtimeMs), 0);
-      const claimsAdded = finalClaims.count > initialClaims.count;
-      const wikiChanged = finalWikiMtime > initialWikiMtime;
-      if (wikiChanged && !claimsAdded) { console.error(`❌ ERR: Wiki mod without provenance.`); internalRebuildIndex(); }
-      else {
-        db.prepare('UPDATE raw_entries SET processed = 1 WHERE id = ?').run(entry.id);
-        internalRebuildIndex(); internalRebuildMarkdownIndex(); internalRebuildTimeline();
-        const logMsg = `Processed raw entry ${entry.id}`;
-        db.prepare('INSERT INTO operations_log (operation, details) VALUES (?, ?)').run('process', logMsg);
-      }
+    if (result.status !== 0) continue;
+
+    const finalClaims = (db.prepare('SELECT COUNT(*) as count FROM claim_sources WHERE raw_id = ?').get(entry.id) as any).count;
+    const claimsAdded = finalClaims > initialClaims;
+    const changedFiles = detectWikiChanges(wikiSnapshot);
+    const wikiChanged = changedFiles.length > 0;
+    const timelineCited = changedFiles.some(f => timelineCitesRaw(f, entry.source_path));
+
+    if (wikiChanged && !claimsAdded && !timelineCited) {
+      console.error(`❌ ERR: Wiki mod without provenance for raw ${entry.id}.`);
+      internalRebuildIndex();
+      continue;
     }
+    if (timelineCited && !claimsAdded) {
+      const n = backfillClaimsFromTimeline(entry.id, entry.source_path, changedFiles);
+      console.log(`  📎 Linked ${n} timeline ${n === 1 ? 'claim' : 'claims'} to raw ${entry.id}.`);
+    }
+    db.prepare('UPDATE raw_entries SET processed = 1 WHERE id = ?').run(entry.id);
+    internalRebuildIndex(); internalRebuildMarkdownIndex(); internalRebuildTimeline();
+    db.prepare('INSERT INTO operations_log (operation, details) VALUES (?, ?)').run('process', `Processed raw entry ${entry.id}`);
   }
 });
 

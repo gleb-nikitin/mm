@@ -2,16 +2,14 @@
 
 ## Current State
 - **Schema v5 landed** (`raw_events` table for streaming data).
-- **Tiered Compute Philosophy** and **Dual-Root Raw Architecture** added to `todo.md`.
-- **Role Briefings** added for `devops` and `git`.
-- **Summarize-event skill** added for low-latency extraction.
-- **Valhalla wiki page** added.
-- **Milestone Log (`wiki/Milestones.md`) automated** (`c88c4f1`).
+- **Dual-Root Raw Architecture** (MD + SQLite) defined in `todo.md`.
+- **Milestone Log (`wiki/Milestones.md`) automated**.
+- **`process` command rewritten to version 0.7.3** — adds Phase 1 retro-sweep and Phase 2 dual-provenance signal (CLI or timeline citation).
 
 ## Tasks
 - [x] Land Schema v5 and Dual-Root architecture docs.
-- [x] Add role briefings and summarize-event skill.
-- [x] Commit the architectural evolution pass.
+- [x] Automate Milestone Log.
+- [x] Refactor `process` command for more robust provenance.
 
 ## Blockers
 - None.

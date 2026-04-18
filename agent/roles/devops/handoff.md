@@ -1,26 +1,26 @@
 # Handoff — mm_devops
 
-Last updated 2026-04-18 after landing Schema v5 and Dual-Root Raw architecture.
+Last updated 2026-04-18 after the `process` command refactor.
 
 ## Current state
 
 - **Schema v5 landed** (added `raw_events` table for streaming chats/chains).
 - **Dual-Root Raw Architecture** (MD + SQLite) defined in `todo.md`.
-- **Tiered Compute Philosophy** (Simple/Stupid/Serious) documented forLib vs Processor split.
-- Role Briefings established for `devops` and `git` for faster context loading.
+- **`process` command refactored to version 0.7.3**.
+- **Tiered Compute Philosophy** documented.
 
 ## What this session changed
 
-- (See roadmap for earlier work)
-- **Implemented `raw_events` in `src/core.ts`**.
-- Refined `agent/docs/todo.md` with detailed architecture and metadata hygiene rules.
-- Added `meta/skills/summarize-event.md` for low-latency pre-processing.
+- **Refactored `src/brain.ts` `process` command**: 
+    - Phase 1: Deterministic retro-sweep for timeline citations.
+    - Phase 2: LLM loop with dual-signal provenance (CLI or timeline).
+    - Added backfill mechanism from timeline to `claim_sources`.
+- **Gemini prompt updated** for clearer ingest rules.
 
 ## Verification this session (all green)
 
 - `bun run typecheck` green.
-- `initDb()` migrates to v5 correctly.
-- All docs verified.
+- Manual test on a timeline citation confirmed retro-sweep works.
 
 ## Next steps
 
