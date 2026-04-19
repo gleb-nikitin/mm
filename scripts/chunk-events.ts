@@ -15,10 +15,15 @@
 // the existing `brain index rebuild` → `raw_entries` pipeline.
 //
 // Usage:
-//   bun scripts/chunk-events.ts                    # all projects
-//   bun scripts/chunk-events.ts --project mm       # one project
+//   bun scripts/chunk-events.ts                    # all projects, unchunked + unprocessed
+//   bun scripts/chunk-events.ts --project mm       # scope to one project
 //   bun scripts/chunk-events.ts --dry-run          # preview, don't write
-//   bun scripts/chunk-events.ts --rechunk          # ignore `chunked` flag
+//   bun scripts/chunk-events.ts --rechunk          # ignore the `chunked` flag
+//   bun scripts/chunk-events.ts --include-processed
+//                                                  # chunk rows that were already
+//                                                  # wiki-ingested via `ingest-event`
+//                                                  # (useful for evaluating the new
+//                                                  # chunker against historical data)
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -33,6 +38,7 @@ const projectArg = (() => {
 })();
 const dryRun = args.includes('--dry-run');
 const rechunk = args.includes('--rechunk');
+const includeProcessed = args.includes('--include-processed');
 
 const TARGET_CHUNK = 12_000; // soft target: once we pass this at a turn boundary, close.
 const MAX_CHUNK = 18_000;    // hard ceiling: never exceed this.
@@ -47,11 +53,12 @@ type EventRow = {
   title: string | null;
 };
 
-function fetchRows(project: string | null, rechunk: boolean): EventRow[] {
+function fetchRows(project: string | null, rechunk: boolean, includeProcessed: boolean): EventRow[] {
   let sql = `SELECT id, external_id, source_type, project, timestamp, content, title
              FROM raw_events
-             WHERE processed = 0`;
+             WHERE 1 = 1`;
   const params: any[] = [];
+  if (!includeProcessed) sql += ` AND processed = 0`;
   if (!rechunk) sql += ` AND chunked = 0`;
   if (project) { sql += ` AND project = ?`; params.push(project); }
   sql += ` ORDER BY project, timestamp, id`;
@@ -191,9 +198,9 @@ function renderChunk(row: EventRow, chunkSegs: string[], index: number, total: n
   ].join('\n');
 }
 
-const rows = fetchRows(projectArg, rechunk);
+const rows = fetchRows(projectArg, rechunk, includeProcessed);
 if (rows.length === 0) {
-  console.log(`Chunker: nothing to do (project=${projectArg ?? 'all'}, rechunk=${rechunk}).`);
+  console.log(`Chunker: nothing to do (project=${projectArg ?? 'all'}, rechunk=${rechunk}, include-processed=${includeProcessed}).`);
   process.exit(0);
 }
 
