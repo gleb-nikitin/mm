@@ -62,13 +62,30 @@ librarian pays on every Gemini invocation. The chain of "read 20K of schema
   noisy if someone touches a raw file by hand. Worth a heads-up in any
   operator-facing doc.
 
+## What's staged for the next librarian run
+
+- **35 mm chunks** under `raw/events/mm/` (7 events × 1–9 chunks each,
+  sizes 2.2–18.3KB). All sitting at `raw_entries.processed = 0` alongside
+  the 14 docs / 5 claude / 3 research entries that are already ingested.
+- Committed explicitly (1398fd5) so the librarian has durable input even
+  if the DB is wiped.
+
+**Explicit scope decision**: chunker was NOT run across the other ~540
+backfilled events (ac, au, u-au, etc). Running Gemini synthesis at that
+scale today would cost more to throw away and redo once we have a
+production-grade model than to defer it. Keep the default posture of
+`--project mm` (or similar one-project scoping) until that model is
+settled.
+
 ## Next candidates (pick one per session)
 
-1. **Run chunker across all backfilled projects** and let the librarian
-   drain the queue. This is the first real end-to-end test of the new
-   flow on production data. ~550 events across ~40 projects → probably
-   1500–3000 chunks. Decide scope (all vs `--project mm` first) before
-   kicking it off.
+1. **Drain the 35 mm chunks through the librarian.** Run
+   `./process-new.command`. This is the first real end-to-end test of
+   the chunker → `raw_entries` → interactive librarian → wiki path on
+   vital data. Watch for: duplicate claims (because the 7 source events
+   were already ingested via `ingest-event`), chunk-level provenance
+   quality vs the old per-event provenance, and the librarian's own
+   feedback in `changes.md`.
 2. **Vector pass over `raw/events/*.md`** (previously-deferred "vectors
    over raw_events"). Since chunks now live as `raw_entries`, the existing
    `embedBrain()` picks them up automatically the next time it runs — so
