@@ -20,13 +20,7 @@ source_count: 6
 # Mnemonic Ingestion Pipeline
 
 ## Summary
-The Mnemonic Ingestion Pipeline manages a data lifecycle from raw input to vector search across four distinct steps:
-1. **Ingestion**: Raw data enters via Markdown files in `raw/` (organized by `source_type` and `project`), automated session imports (Claude/Codex/Gemini) into `raw_events`, HTTP API, or CLI.
-2. **Indexing**: `bun run brain index rebuild` scans the filesystem and updates the SQLite layer (`raw_entries`, `wiki_pages`) and FTS5 index. This step is required after any manual filesystem edits to make them visible to search.
-3. **Processing**: `bun run brain process` iterates over unprocessed entries using LLM Skills (e.g., `ingest.md`) to create or update wiki pages. It automatically rebuilds the index after each entry.
-4. **Embedding**: `bun run brain embed` generates embeddings for wiki chunks via Ollama, enabling hybrid search (RRF) combining FTS5 and Vector results. It depends on `wiki_pages` being populated, so `index rebuild` must run first.
-
-The pipeline utilizes a source-type/project taxonomy (e.g., `raw/docs/mm/`) to derive provenance and support scoped retrieval (`?source=...&project=...`). Troubleshooting typically involves resolving index staleness or missing embeddings via the `index rebuild` and `embed` commands.
+The Mnemonic Ingestion Pipeline manages a data lifecycle from raw input to vector search. Since Schema v5, it follows a Dual-Root Raw architecture: 1. Documents (Markdown in raw/) and 2. Events (SQLite table raw_events). Importers (Claude, Codex, Gemini) land directly in raw_events, stripping tool noise. Schema v7 introduced import_state to enable incremental, mtime-aware imports. The pipeline steps are: 1. Ingestion (ETL to raw/ or raw_events), 2. Indexing (Sync to SQLite), 3. Processing (LLM-mediated wiki synthesis), 4. Embedding (Vector search generation). Hybrid search (RRF) combines FTS5 (for wiki and events) with Vector results.
 
 ## Cross-References
 - [[Mnemonic_Light|Mnemonic Light]]
@@ -34,6 +28,8 @@ The pipeline utilizes a source-type/project taxonomy (e.g., `raw/docs/mm/`) to d
 - [[Mnemonic_Operational_Manual|Mnemonic Operational Manual]]
 - [[Mnemonic_Indexing|Mnemonic Indexing]]
 - [[Mnemonic_Importing|Mnemonic Importing]]
+
+---
 
 ---
 <!-- TIMELINE: append-only below this line -->

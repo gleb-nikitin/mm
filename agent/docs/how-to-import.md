@@ -1,6 +1,6 @@
 # How to import into the brain
 
-See also: **[`human-how-it-works.md`](../../human-how-it-works.md)** (full map: **`raw/`** vs **`raw_events`**, importers, pipelines), **[`how-to-index.md`](how-to-index.md)** (rebuild SQLite and embeddings after changes).
+See also: **[`human-how-it-works.md`](../../human-how-it-works.md)** (full map: **`raw/`**, **`raw_events`**, **`raw/events/`** chunks, importers, Librarian **`process-new.command`**), **[`how-to-index.md`](how-to-index.md)** (rebuild SQLite and embeddings after changes).
 
 Every raw markdown file is tagged with two orthogonal fields:
 
@@ -32,7 +32,9 @@ Flags (Claude script; Codex/Gemini have analogous flags — `--help` on each):
 - `--include-thinking` — include assistant thinking blocks (default: off).
 - `--dry-run` — list what would import, write nothing.
 
-**Turning sessions into wiki pages** is separate: use **`brain ingest-event <external_id>`** (Gemini + timeline `event:…` citation) or a manual workflow. Session rows are **searchable immediately** via hybrid search’s event lane.
+**Chunking sessions into normal raw files:** run **`bun scripts/chunk-events.ts`** (optionally **`--project mm`**). That writes turn-aligned markdown under **`raw/events/<project>/`**, sets **`raw_events.chunked=1`**, and lets **`brain index rebuild`** create **`raw_entries`** with `source_type=events` so **`brain process`** (or the **Librarian** in **`process-new.command`**) can ingest them like any other raw file.
+
+**Turning a single session into the wiki without chunking:** **`brain ingest-event <external_id>`** (Gemini + timeline `event:…` citation). Session rows are also **searchable immediately** via hybrid search’s event lane.
 
 Rerunning imports uses **`INSERT OR IGNORE`** / dedup on **`external_id`** — safe to repeat.
 

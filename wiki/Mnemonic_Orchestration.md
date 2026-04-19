@@ -16,9 +16,11 @@ source_count: 1
 # Mnemonic Orchestration
 
 ## Summary
-Mnemonic Orchestration constitutes the declarative scheduling layer for automated LLM batch operations in Mnemonic51. It plans to abandon manual crontabs in favor of a `meta/config.toml` specification that defines import triggers, LLM batch execution, and ingestion pipelines. To optimize LLM context, batch ingestion will use git-backed diffs in the `raw/` directory, allowing projects to be fully observable and LLM-editable.
+Reframed Mnemonic Orchestration as the declarative scheduling layer for automated LLM batch operations, utilizing meta/config.toml for import triggers and git-backed diffs in the raw/ directory to optimize LLM context.
 
 ## Cross-References
+
+---
 
 ---
 <!-- TIMELINE: append-only below this line -->

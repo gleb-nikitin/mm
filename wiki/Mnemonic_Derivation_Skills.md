@@ -18,10 +18,12 @@ source_count: 2
 # Mnemonic Derivation Skills
 
 ## Summary
-Derivation Skills form the core product of Mnemonic51, transforming it into a project-management primitive. The system relies on families of skills—such as `derive-todos` (actions), `derive-bugs` (defects), `derive-decisions` (architectural choices), and `derive-friction` (pain points)—to autonomously extract and maintain project state directly from conversations and research. This methodology proves out the value before any Rust migration.
+Derivation Skills are the core product of Mnemonic51, enabling it to function as a project-management primitive. The full family includes: 1. derive-todos (actions), 2. derive-bugs (defects), 3. derive-corrections (lessons/reframing), 4. derive-decisions (architectural/product choices), 5. derive-skipped (ignored todos), and 6. derive-friction (repeated pain points). These skills read opinionated sources + current project state to produce grounded, de-duped diffs for specific artifacts (todo.md, bugs.md, decisions.md, etc.).
 
 ## Cross-References
 - [[Mnemonic51|Mnemonic51]]
+
+---
 
 ---
 <!-- TIMELINE: append-only below this line -->

@@ -16,9 +16,11 @@ source_count: 1
 # Mnemonic Todo & Backlog
 
 ## Summary
-The Mnemonic51 Backlog is governed by a **Tiered Compute Philosophy**, which delegates tasks across three levels: **Simple Jobs** (deterministic scripts for ETL/metadata), **Stupid Jobs** (local LLMs for fast classification/tagging), and **Serious Tasks** (reasoning models for wiki synthesis). This model ensures metadata hygiene by automating metric derivation (source counts, mentions) and minimizing manual reasoning surface. Future priorities include a declarative orchestration layer (`config.toml`), an automatic 'Observer' mode for index synchronization, and the expansion of the derivation-skill library (`derive-bugs`, `derive-decisions`, etc.) to automate project-management artifact creation.
+The Mnemonic51 Backlog is governed by a Tiered Compute Philosophy and the 'Skills as Product' reframing. Key priorities: 1. Tests & Eval Harness. 2. Derive-family skills (derive-todos, derive-bugs, derive-corrections, derive-decisions, derive-skipped, derive-friction) for automated project-management artifacts. 3. Maintenance skills (Citation-fixer, Signal detector, Tier auto-promotion). 4. Declarative Orchestration via config.toml and the self-evolution loop (Exit Interview -> Ingest -> Derive-Todos).
 
 ## Cross-References
+
+---
 
 ---
 <!-- TIMELINE: append-only below this line -->- **2026-04-19**: Introduced the Tiered Compute Philosophy, metadata hygiene rules for responsibility splitting, and documented planned improvements for orchestration and derivation skills. Source: `raw/docs/mm/todo.md`

@@ -20,10 +20,12 @@ source_count: 3
 # Mnemonic UI
 
 ## Summary
-The Mnemonic UI is a single-page web interface built with Alpine.js and styled with an Aurora-inspired dark glassmorphism theme. It serves as a Holo app/ac plugin component for the Mnemonic Light track. The UI is served from the `GET /` endpoint of the Mnemonic51 HTTP API. The backend utilizes asynchronous `Bun.spawn` for Gemini calls to ensure the event loop is never blocked, maintaining a highly responsive experience.
+The Mnemonic UI follows the 'Holo UI' design philosophy: a holographic glass interface utilizing translucent panels (backdrop-filter: blur), ghost accent buttons, and a strict 4/8px rhythm. The surface area includes: 1. Search UI (GET /) for hybrid search and synthesis, and 2. Active Agents Dashboard (GET /active-ui), a standalone polling interface that tracks live agent activity from the import_state sightings log. Typography is monospace (Monaco/Menlo) with dimmed markdown syntax markers.
 
 ## Cross-References
 - [[Mnemonic_Light|Mnemonic Light]]
+
+---
 
 ---
 <!-- TIMELINE: append-only below this line -->

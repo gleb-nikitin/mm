@@ -19,28 +19,7 @@ source_count: 5
 # Mnemonic Operational Manual
 
 ## Summary
-The Mnemonic Operational Manual provides guidance on the maintenance, automation, and troubleshooting of the Mnemonic51 system. It defines a two-lane input model: **Markdown** (manual notes/files in `raw/`) and **Agent sessions** (automated imports into `raw_events`). Knowledge ownership is strictly tiered to minimize redundancy:
-- **`agent/README.md`**: Canonical reading order for developers and agents.
-- **`how-mm-works.md`**: Single-page operator manual for the data lifecycle.
-- **`agent/docs/roadmap.md`**: Direction, priorities, and sequence.
-- **`agent/docs/todo.md`**: Brainstorm surface and aggregation of ideas.
-- **`meta/schema.md`**: Canonical definition of the data model and wiki anatomy.
-
-### 4-Step Data Lifecycle
-1. **Ingestion**: Raw material enters via Markdown (`raw/`), session imports (`raw_events`), or the HTTP/MCP `/add` tools. Session imports include a "settled" check to ensure data stability.
-2. **Indexing**: `bun run brain index rebuild` synchronizes the filesystem with the SQLite layer (FTS5, links, raw entries). Required after manual edits.
-3. **Processing**: `bun run brain process` invokes LLM Skills to transform raw material into Compiled Truth. Direct wiki edits with Timeline citations now close the loop without LLM cost.
-4. **Embedding**: `bun run brain embed` generates semantic vector embeddings via Ollama for hybrid search.
-
-### Repository Inventory
-- **`src/`**: Runtime application with a shared-logic invariant in `core.ts`.
-- **`meta/`**: Brain index (`brain.db`), `schema.md`, and runtime **Instruction Markdown** (`skills/*.md`).
-- **`scripts/`**: Session importers and utility scripts.
-- **`wiki/` & `raw/`**: Curated knowledge and source material.
-- **`agent/`**: Playbooks and development-only documentation.
-
-### Automation & Troubleshooting
-Automation is achieved via crontab tasks for session imports, queue processing, and maintenance passes. Wiki pages follow a strict anatomy: YAML frontmatter, `## Summary` (Compiled Truth), and an append-only **Timeline** citing raw source paths or event IDs.
+The Mnemonic Operational Manual defines a 4-step data lifecycle (Ingest, Index, Process, Embed) and provides a multi-lane automation toolkit. 1. process-new.command: A sequential 5-step interactive pipeline (Import -> Index -> Queue Preview -> Process -> Embed) with dry-run support. 2. Projects Discovery: CLI (brain projects) and MCP (list_projects) tools enable agents to discover and target project slugs (e.g., mm, ac, mt). 3. Automation: Crontab templates for settled-session imports and incremental indexing. The shared-logic invariant in core.ts ensures that all surfaces (CLI, API, MCP, UI) operate on the same state.
 
 ## Cross-References
 - [[Mnemonic51|Mnemonic51]]
@@ -48,6 +27,8 @@ Automation is achieved via crontab tasks for session imports, queue processing, 
 - [[Mnemonic_Indexing|Mnemonic Indexing]]
 - [[Mnemonic_Importing|Mnemonic Importing]]
 - [[Mnemonic_Roadmap|Mnemonic Roadmap]]
+
+---
 
 ---
 <!-- TIMELINE: append-only below this line -->

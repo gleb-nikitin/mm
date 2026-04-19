@@ -67,7 +67,7 @@ Responses are mostly **markdown**. **`GET /`** serves the **web UI** (`ui/index.
 
 | Doc | Purpose |
 |-----|---------|
-| [`human-how-it-works.md`](human-how-it-works.md) | **Start here** — repository map, pipelines, instruction files |
+| [`human-how-it-works.md`](human-how-it-works.md) | **Start here** — repository map, **`chunk-events`**, Librarian **`process-new.command`**, instruction files |
 | [`how-mm-works.md`](how-mm-works.md) | Operator manual (lifecycle, cron ideas, troubleshooting) |
-| [`agent/docs/how-to-import.md`](agent/docs/how-to-import.md) | Importing and scoping |
+| [`agent/docs/how-to-import.md`](agent/docs/how-to-import.md) | Importing, scoping, **`raw_events`** vs **`raw/events/`** |
 | [`agent/docs/how-to-index.md`](agent/docs/how-to-index.md) | Index rebuild vs embed |

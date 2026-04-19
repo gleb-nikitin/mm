@@ -4,21 +4,21 @@
     "type": "split",
     "children": [
       {
-        "id": "c0cb65c7c58b7f41",
+        "id": "1d635cf8340d9d3f",
         "type": "tabs",
         "children": [
           {
-            "id": "91b9c873fc7c59bb",
+            "id": "b35de6f93e46ad66",
             "type": "leaf",
             "state": {
               "type": "markdown",
               "state": {
-                "file": "Mnemonic_Indexing.md",
+                "file": "Mnemonic_Roadmap.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "Mnemonic_Indexing"
+              "title": "Mnemonic_Roadmap"
             }
           }
         ]
@@ -183,8 +183,10 @@
       "bases:Create new base": false
     }
   },
-  "active": "91b9c873fc7c59bb",
+  "active": "b35de6f93e46ad66",
   "lastOpenFiles": [
+    "Untitled 1.canvas",
+    "Mnemonic_Indexing.md",
     "Mnemonic51.md",
     "Mnemonic_Synthesis_Briefing.md",
     "Mnemonic_Roadmap.md",
@@ -193,7 +195,6 @@
     "Mnemonic_Operational_Manual.md",
     "Mnemonic_Light.md",
     "Mnemonic_Ingestion_Pipeline.md",
-    "Mnemonic_Indexing.md",
     "Mnemonic_Importing.md",
     "Mnemonic_Hardcore.md",
     "Mnemonic_Derivation_Skills.md",
@@ -210,7 +211,6 @@
     "Claude_Session_Importer.md",
     "Andrej_Karpathy.md",
     "2026-04-19.md",
-    "Provenance_Test.md",
     "Untitled.canvas"
   ]
 }

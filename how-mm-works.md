@@ -14,7 +14,7 @@ Data flows through three distinct layers: **Raw**, **Indexed**, and **Compiled**
 Data enters via overlapping paths:
 
 - **Markdown → `raw/`** — `POST /add`, `bun run brain add`, or files under `raw/<source_type>/<project>/`. These become **`raw_entries`** when indexed.
-- **Claude / Codex / Gemini sessions** — `bun scripts/import-claude.ts` (and the Codex/Gemini scripts) read vendor logs and insert rows into **`raw_events`** + **`events_fts`** (searchable; Active Agents via **`import_state`**). They do **not** by default write session text as files under `raw/claude/...`. To fold a session into the wiki, use **`brain ingest-event <external_id>`** or a manual export workflow.
+- **Claude / Codex / Gemini sessions** — `bun scripts/import-claude.ts` (and the Codex/Gemini scripts) read vendor logs and insert rows into **`raw_events`** + **`events_fts`** (searchable; Active Agents via **`import_state`**). **`bun scripts/chunk-events.ts`** turns unchunked events into markdown under **`raw/events/<project>/`**, which **`brain index rebuild`** then indexes as **`raw_entries`** (`source_type` **`events`**). For ad-hoc single-session wiki ingest without chunking, **`brain ingest-event <external_id>`** still works.
 - **HTTP API**: `POST /add` with `{content, title, source_type, project}` for structured raw capture.
 - **Manual/CLI**: `bun run brain add "some text" --title "My Note"`.
 
@@ -54,6 +54,7 @@ To enable semantic "meaning-based" search, the wiki content must be vectorized.
 
 ### Scripts (`scripts/`)
 - `import-claude.ts` / `import-codex.ts` / `import-gemini.ts`: Session importers → **`raw_events`** (not `raw/` markdown by default).
+- **`chunk-events.ts`**: **`raw_events`** → turn-aligned chunks under **`raw/events/<project>/`** for the normal **`raw_entries`** pipeline.
 - `import-chats.ts`: Legacy Telegram one-off → flat **`raw/`** + SQL.
 - `ingest-manual.ts`: Optional ingest of **`how-mm-works.md`** via `addToBrain`.
 
@@ -68,13 +69,16 @@ To make MM a "living" system, you should automate the import and processing step
 # 1. Import new Claude sessions every hour
 0 * * * * cd /path/to/mm && /usr/local/bin/bun scripts/import-claude.ts --days 1 --project mm >> meta/import.log 2>&1
 
-# 2. Process the queue (Ingest Skill) every 2 hours
-0 */2 * * * cd /path/to/mm && /usr/local/bin/bun run brain process >> meta/process.log 2>&1
+# 2. Chunk sessions into raw/events/ (optional; before index + process)
+15 * * * * cd /path/to/mm && /usr/local/bin/bun scripts/chunk-events.ts --project mm >> meta/chunk.log 2>&1
 
-# 3. Refresh embeddings and Timeline daily at 3 AM
-0 3 * * * cd /path/to/mm && /usr/local/bin/bun run brain embed && /usr/local/bin/bun run brain timeline >> meta/maintenance.log 2>&1
+# 3. Rebuild index then process the queue (Ingest Skill) every 2 hours
+0 */2 * * * cd /path/to/mm && /usr/local/bin/bun run brain index rebuild && /usr/local/bin/bun run brain process >> meta/process.log 2>&1
 
-# 4. Weekly "Dream" (Full maintenance + LLM-assisted merge)
+# 4. Refresh embeddings and Timeline daily at 3 AM
+0 3 * * * cd /path/to/mm && /usr/local/bin/bun run brain embed && /usr/local/bin/bun run brain timeline rebuild >> meta/maintenance.log 2>&1
+
+# 5. Weekly "Dream" (Full maintenance + LLM-assisted merge)
 0 4 * * 0 cd /path/to/mm && /usr/local/bin/bun run brain dream >> meta/dream.log 2>&1
 ```
 

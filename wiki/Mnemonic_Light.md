@@ -19,7 +19,7 @@ source_count: 3
 # Mnemonic Light
 
 ## Summary
-Mnemonic Light is the TypeScript/Bun-based track of Mnemonic51, optimized for rapid iteration and packaged as an ac plugin (Holo app). It acts as the primary track where the 'skills as product' methodology is validated before any downstream Rust migration. Recent structural cleanups include a single-page Alpine.js Aurora UI, async `runGemini` execution, and a formalized 7-step roadmap prioritizing tests and skills over external dependencies.
+Mnemonic Light is the TypeScript/Bun implementation of Mnemonic51, serving as a standalone, fast-iterating prototype and a plugin for the ac system. It follows the Tiered Compute Philosophy: Simple Jobs (scripts), Stupid Jobs (local 8B LLMs), and Serious Tasks (reasoning models). It utilizes a Dual-Root Raw architecture (Markdown/Git for docs, SQLite for events) and prioritizes methodology over premature optimization.
 
 ## Cross-References
 - [[Mnemonic_Hardcore|Mnemonic Hardcore]]
@@ -27,6 +27,8 @@ Mnemonic Light is the TypeScript/Bun-based track of Mnemonic51, optimized for ra
 - [[Mnemonic_UI|Mnemonic UI]]
 - [[LLM_Wiki|LLM Wiki]]
 - [[Cross_Chat_Knowledge_Base|Cross-Chat Knowledge Base]]
+
+---
 
 ---
 

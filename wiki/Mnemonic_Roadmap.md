@@ -16,9 +16,11 @@ source_count: 1
 # Mnemonic Roadmap
 
 ## Summary
-The Mnemonic51 roadmap is organized into a 7-step sequence prioritizing methodology and skill extraction. Step 1: Tests & Eval Harness. Step 2: Skills Library (the product). Step 3: Architectural Refactor. Step 4: External Dependencies. Step 5: Retrieval Quality. Step 6: Public-release polish. Step 7: Hardcore (Rust) migration. This sequence ensures the project proves its value before premature optimization.
+The Mnemonic51 roadmap is organized into a 7-step sequence prioritizing methodology and skill extraction over premature optimization. Step 1: Tests & Eval Harness. Step 2: Skills Library (the product - including the derive-* family). Step 3: Architectural Refactor (Store trait). Step 4: External Dependencies (Async Gemini/Ollama). Step 5: Retrieval Quality (Reranking/Multi-query). Step 6: Public-release polish. Step 7: Hardcore (Rust) migration. mm is framed as a project-management primitive whose input is conversation, artifact is markdown, and mechanism is LLM-mediated extraction.
 
 ## Cross-References
+
+---
 
 ---
 

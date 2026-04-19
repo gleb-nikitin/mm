@@ -16,19 +16,13 @@ source_count: 2
 # Mnemonic Indexing
 
 ## Summary
-Indexing in Mnemonic51 synchronizes the filesystem and session events with the SQLite layer and vector chunks. Markdown on disk remains the source of truth, but derived layers must be refreshed to be searchable. The system uses two distinct FTS5 indices:
-- **`search_index`**: Indices wiki pages and raw markdown entries. Used in the vector arm of hybrid search.
-- **`events_fts`**: Indices automated session transcripts (`raw_events`). Used in a dedicated FTS arm.
-
-### Hybrid Search (RRF)
-Search results are merged using Reciprocal Rank Fusion (RRF). To prevent wiki pages from systematically outranking sessions (due to wiki pages appearing in both FTS and vector lists), the system implements a **reserved event lane**. This guarantees that a portion of the top results (up to 30%) are allocated to events if they match the query.
-
-### FTS Query Normalization
-To support broad matching, user queries are sanitized into a **bag-of-words** format for FTS, stripping special operators and avoiding over-strict phrase quoting. This ensures that sessions and wiki pages match based on term presence rather than verbatim sequence.
+Indexing in Mnemonic51 synchronizes the filesystem and session events with the SQLite layer. As of v0.7.3, the 'brain process' command includes a Phase 1 Retroactive Sweep that deterministically links unprocessed raw entries to wiki pages if their paths appear in a timeline citation, backfilling claims without LLM calls. Phase 2 extends the LLM loop to accept timeline citations as valid provenance signals. Search uses dual FTS5 indices: 'search_index' for wiki/raw markdown and 'events_fts' for sessions (raw_events). Results are merged via Hybrid Search (RRF) with a reserved event lane (30%) and bag-of-words FTS normalization.
 
 ## Cross-References
 - [[Mnemonic_Ingestion_Pipeline|Mnemonic Ingestion Pipeline]]
 - [[Claude_Session_Importer|Claude Session Importer]]
+
+---
 
 ---
 <!-- TIMELINE: append-only below this line -->

@@ -20,13 +20,15 @@ source_count: 3
 # Mnemonic Hardcore
 
 ## Summary
-Mnemonic Hardcore is the high-performance Rust track of Mnemonic51, conceived as an assembly of the ac Rust + Tauri shell and the tabularium storage substrate. It is formally deferred as a downstream milestone until the skills-based methodology is proven in Mnemonic Light. Future plans include a pluggable `Store` trait and an HNSW vector index to cleanly swap the SQLite base.
+Mnemonic Hardcore is the planned high-performance Rust implementation of Mnemonic51, designed to use the ac Rust shell and the tabularium library as a substrate. While deferred until the methodology proves out in the Light track, the Hardcore implementation is envisioned as a High-Speed Event Bus for agent communication, leveraging a Relational Raw architecture and HNSW for vector indexing.
 
 ## Cross-References
 - [[Mnemonic_Light|Mnemonic Light]]
 - [[Tabularium|Tabularium]]
 - [[LLM_Wiki|LLM Wiki]]
 - [[GBrain|GBrain]]
+
+---
 
 ---
 <!-- TIMELINE: append-only below this line -->

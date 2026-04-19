@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "raw/docs/mm/2026-04-17T21-35-18-141Z.md",
+                "file": "meta/schema.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "2026-04-17T21-35-18-141Z"
+              "title": "schema"
             }
           }
         ]
@@ -185,6 +185,13 @@
   },
   "active": "33f4b6e68f1f9b01",
   "lastOpenFiles": [
+    "meta/remaining-gaps.md",
+    "meta/lint-report.md",
+    "meta/index.md",
+    "meta/dream-report.md",
+    "meta/doctor-report.md",
+    "wiki/Mnemonic_Refactor_Plan.md",
+    "raw/docs/mm/2026-04-17T21-35-18-141Z.md",
     "raw/claude/mm/2026-04-17T21-06-05-140Z.md",
     "wiki/Dup_1.md",
     "raw/2026-04-17T13-44-01-805Z-save.md",
@@ -196,7 +203,6 @@
     "raw/research/mm/2026-04-18-wizrag-cross-chat.md",
     "raw/research/mm/2026-04-18-karpathy-llm-os.md",
     "raw/research/mm/2026-04-18-gbrain.md",
-    "meta/remaining-gaps.md",
     "wiki/Tabularium.md"
   ]
 }
