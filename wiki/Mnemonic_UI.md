@@ -9,18 +9,18 @@ tags:
   - frontend
 type: entity
 confidence: 0.9
-mentions: 5
+mentions: 7
 tier: 2
 status: active
 created_at: '2026-04-17T21:29:34.203Z'
-updated_at: '2026-04-18T10:54:00.000Z'
-source_count: 2
+updated_at: '2026-04-19T15:40:00.000Z'
+source_count: 3
 ---
 
 # Mnemonic UI
 
 ## Summary
-The Mnemonic UI is a single-page web interface built with Alpine.js and styled with an Aurora-inspired dark glassmorphism theme. It serves as a Holo app/ac plugin component for the Mnemonic Light track. The UI features debounced search and asynchronous query handling via `Bun.spawn` to ensure a responsive, non-blocking experience. Entry points are simplified through `run.command` and `kill.command` scripts.
+The Mnemonic UI is a single-page web interface built with Alpine.js and styled with an Aurora-inspired dark glassmorphism theme. It serves as a Holo app/ac plugin component for the Mnemonic Light track. The UI is served from the `GET /` endpoint of the Mnemonic51 HTTP API. The backend utilizes asynchronous `Bun.spawn` for Gemini calls to ensure the event loop is never blocked, maintaining a highly responsive experience.
 
 ## Cross-References
 - [[Mnemonic_Light|Mnemonic Light]]
@@ -33,3 +33,8 @@ The Mnemonic UI is a single-page web interface built with Alpine.js and styled w
 - **2026-04-18**: Designated the Aurora-themed web UI as a shippable ac plugin component (Holo app) for the Mnemonic Light track. Source: `raw/docs/mm/2026-04-17T21-35-18-141Z.md`
 - **2026-04-18**: Optimized UI backend with asynchronous 'Bun.spawn' execution for Gemini synthesis, preventing event-loop blocking and improving stability. Source: `raw/claude/mm/2026-04-17T21-36-21-543Z.md`
 - **2026-04-18**: Optimized the UI backend by making `runGemini` asynchronous with `Bun.spawn`, resolving event-loop blocking issues and improving frontend responsiveness. Source: `raw/claude/mm/2026-04-18T07-38-44-360Z.md`
+
+- **2026-04-18**: Added debounced search, async Bun.spawn execution for Gemini synthesis, and fixed idle timeouts for stable query delivery. Source: `raw/claude/mm/2026-04-18T13-17-59-097Z.md`
+- **2026-04-19**: Documented the HTTP API surface, identifying `GET /` as the Aurora-themed web UI and mapping other functional endpoints for search, query, and validation. Source: `raw/docs/mm/2026-04-19T12-26-57-622Z.md`
+mapping other functional endpoints for search, query, and validation. Source: `raw/docs/mm/2026-04-19T12-26-57-622Z.md`
+- **2026-04-19**: Developed the single-page Alpine.js Aurora UI, implemented debounced search, and fixed event-loop blocking by making `runGemini` asynchronous using `Bun.spawn`. Source: `event:75cb839d-179a-4ceb-943b-f15902342cf8`

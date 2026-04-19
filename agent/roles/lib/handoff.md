@@ -1,17 +1,18 @@
 # Handoff: mm_lib
 
 ## Current State
-- **Wiki**: 12 pages total. New research foundations (LLM_Wiki, GBrain, Cross-Chat) ingested.
-- **Schema**: v4 (Source/Project separation) landed and verified.
-- **Architecture**: Decided on Dual-Root Raw (Docs=MD, Chats=DB).
-- **UI**: Aurora-themed Alpine UI serving at `/`.
+- **Wiki**: 16 pages total.
+- **Events**: All 4 mm-events from 2026-04-18 (0acb5c2b, ea79e001, 28035305, 12d68fba) processed.
+- **Queue**: Empty (Both files and mm-events).
+- **Milestones**: `wiki/Milestones.md` is now the source of truth for repository evolution.
+- **Architecture**: Dual-Root Raw (Docs/Events) and Tiered Compute Philosophy codified in `todo.md`.
 
 ## Blockers
-- **Preamble Tax**: Still reading `ingest.md` and `schema.md` on every turn.
-- **Sync Friction**: No automatic file-watcher for `raw/` updates.
+- **CLI Friction**: Argument vs Option confusion in `brain page create`.
+- **Sync Friction**: Still need "Observer Mode" for automatic index rebuilding.
 
 ## Next Steps
-1. Implement the `raw_events` table for direct-to-DB chat imports.
-2. Port the `process-new.command` logic into a production-ready `scheduler.ts`.
-3. Add the `fresh-session` stop-marker logic to the `brain` CLI.
-4. **Briefing Ownership**: I have created and now own `agent/roles/lib/briefing.md`. All future mm_lib agents should update this file when the foundational mission or core workflows evolve.
+1. Implement the **Tiered Compute Philosophy**: Automate metric derivation (source_count, mentions) to reduce manual metadata maintenance.
+2. Build the **Derivation-Skill family**: Start with `derive-bugs` or `derive-decisions` to automate artifact creation from session logs.
+3. Port `process-new.command` logic into a production-ready `scheduler.ts` using `meta/config.toml`.
+4. Implement **Observer Mode** to eliminate manual `index rebuild` calls.

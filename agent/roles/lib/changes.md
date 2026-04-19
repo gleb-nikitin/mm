@@ -17,3 +17,15 @@ These are the architectural and operational changes I want to see implemented to
 ## 4. Context-Aware Stopping
 - **Change**: A `brain session stop` command that writes a `RELAUNCH_NEEDED` marker to the DB.
 - **Why**: Currently, I have to "guess" when my context is full. The system should track token usage and prompt me to retire when I'm becoming inefficient.
+
+## 5. CLI Argument Clarity
+- **Change**: Normalize `brain page create/update` to use consistent flags for title and content, or update help docs to clarify argument vs option usage.
+- **Why**: Trial and error with CLI commands wastes tokens and creates friction.
+
+## 6. Batch Processing in `brain process`
+- **Change**: Update the `process` command to handle multiple unprocessed entries in a single Gemini call (e.g., `--batch 10`).
+- **Why**: Reduces the "preamble tax" (schema + skills) and speeds up queue drainage.
+
+## 7. Observer Mode (Auto-Index)
+- **Change**: Background file-watcher to trigger `index rebuild` when `raw/` or `wiki/` change.
+- **Why**: Manual sync is the #1 cause of "missing" data during agent sessions.

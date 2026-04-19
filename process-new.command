@@ -1,8 +1,5 @@
 #!/bin/zsh
-# Double-click to run the full Mnemonic51 ingestion pipeline:
-# 1. Index Rebuild (Sync filesystem to SQLite)
-# 2. Process (Run LLM-mediated ingest skill)
-# 3. Embed (Generate vector search chunks)
+# Double-click to launch the Librarian (Gemini) for autonomous ingestion and wiki maintenance.
 
 set -e
 
@@ -18,24 +15,45 @@ if ! command -v bun >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "📥 Step 1/5: Previewing Claude Sessions (Dry Run)..."
-bun scripts/import-claude.ts --days 1 --project mm --dry-run
+echo "🧠 Handing over to the Librarian..."
 
-echo "\n🚀 Step 2/5: Importing Claude Sessions..."
-bun scripts/import-claude.ts --days 1 --project mm
+# Clean start
+rm -f meta/RELAUNCH_NEEDED
 
-echo "\n🏗️  Step 3/5: Rebuilding Index..."
-bun run brain index rebuild
+while true; do
+  # Build the prompt dynamically
+  PROMPT=$(cat <<EOF
+$(cat agent/roles/lib/soul-interactive.md)
 
-echo "\n📋 Step 4/5: Current Queue (Unprocessed Entries)..."
-bun run brain queue
+# CURRENT CONTEXT
 
-echo "\n🧠 Step 5/5: Processing Queue (Skill: ingest)..."
-bun run brain process
+## Handoff
+$(cat agent/roles/lib/handoff.md 2>/dev/null || echo "No previous handoff.")
 
-echo "\n🛰️  Refresh: Updating Embeddings..."
-bun run brain embed
+## Unprocessed Queue (Markdown Files)
+$(bun run brain queue)
 
-echo "\n✅ Pipeline complete. Your brain is up to date."
+## Unprocessed Events (Chats - mm project)
+$(bun run brain queue-events -p mm)
+
+# OBJECTIVE
+Perform your autonomous lifecycle: Import sessions, rebuild the index, process the queues (both files and mm events), and update your role instructions if needed.
+EOF
+)
+
+  # Launch Gemini in interactive mode
+  gemini -i="$PROMPT" --yolo
+
+  # Check if a relaunch was requested
+  if [[ -f meta/RELAUNCH_NEEDED ]]; then
+    echo "\n🔄 Librarian requested a fresh session. Relaunching..."
+    rm meta/RELAUNCH_NEEDED
+    continue
+  else
+    break
+  fi
+done
+
+echo "\n✅ Librarian has finished the shift."
 echo "Press any key to close..."
 read -k 1

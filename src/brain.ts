@@ -8,7 +8,7 @@ import * as path from 'path';
 import yaml from 'js-yaml';
 import {
   db, PATHS, BRAIN_ROOT, initDb, getHash, slugify, hybridSearch, getStats, getProjects,
-  queryBrain, validateClaim, addToBrain, embedBrain, runGemini, cosine_sim,
+  queryBrain, validateClaim, addToBrain, embedBrain, runGemini, runGeminiInteractive, cosine_sim,
   snapshotWiki, detectWikiChanges, timelineCitesRaw, timelineCitesEvent,
   backfillClaimsFromTimeline, backfillClaimsFromTimelineEvent, refreshSourceCount,
 } from './core.ts';
@@ -19,12 +19,22 @@ initDb();
 
 // --- Internal Deterministic Logic ---
 
-function internalRecordClaim(slug: string, claim: string, raw_id: number) {
+function internalRecordClaim(slug: string, claim: string, source: string) {
   const pageExists = db.prepare('SELECT 1 FROM wiki_pages WHERE slug = ?').get(slug);
   if (!pageExists) throw new Error(`Page not found: ${slug}`);
   const res = db.prepare('INSERT INTO claims (wiki_slug, claim_text) VALUES (?, ?)').run(slug, claim);
   const claim_id = res.lastInsertRowid;
-  db.prepare('INSERT INTO claim_sources (claim_id, raw_id) VALUES (?, ?)').run(claim_id, raw_id);
+
+  if (source.startsWith('event:')) {
+    const extId = source.replace('event:', '');
+    const event = db.prepare('SELECT id FROM raw_events WHERE external_id = ? OR id = ?').get(extId, extId) as { id: number } | undefined;
+    if (!event) throw new Error(`Event not found: ${extId}`);
+    db.prepare('INSERT INTO claim_sources_event (claim_id, event_id) VALUES (?, ?)').run(claim_id, event.id);
+  } else {
+    const rawId = Number(source);
+    if (isNaN(rawId)) throw new Error(`Invalid raw_id: ${source}`);
+    db.prepare('INSERT INTO claim_sources (claim_id, raw_id) VALUES (?, ?)').run(claim_id, rawId);
+  }
   refreshSourceCount(slug);
 }
 
@@ -74,7 +84,8 @@ function internalRebuildIndex() {
                   content = excluded.content,
                   hash = excluded.hash,
                   source_type = excluded.source_type,
-                  project = excluded.project`).run(title, content, filePath, hash, sourceType, project);
+                  project = excluded.project,
+                  processed = CASE WHEN hash != excluded.hash THEN 0 ELSE processed END`).run(title, content, filePath, hash, sourceType, project);
   }
   const allRaw = db.prepare('SELECT id, source_path FROM raw_entries').all() as any[];
   for (const r of allRaw) if (!foundRawPaths.has(r.source_path)) db.prepare('DELETE FROM raw_entries WHERE id = ?').run(r.id);
@@ -163,6 +174,29 @@ program.command('queue').action(() => {
   if (unprocessed.length === 0) console.log('✨ Empty.'); else console.table(unprocessed);
 });
 
+program.command('mark-processed').argument('<id>', 'Raw entry ID').action((id) => {
+  db.prepare('UPDATE raw_entries SET processed = 1 WHERE id = ?').run(id);
+  console.log(`✅ Marked raw entry ${id} as processed.`);
+});
+
+program.command('queue-events').option('-p, --project <project>', 'Filter by project').action((options) => {
+  let sql = 'SELECT id, external_id, source_type, project, created_at FROM raw_events WHERE processed = 0';
+  const params = [];
+  if (options.project) { sql += ' AND project = ?'; params.push(options.project); }
+  const unprocessed = db.prepare(sql).all(...params);
+  if (unprocessed.length === 0) console.log('✨ Empty.'); else console.table(unprocessed);
+});
+
+program.command('read-event').argument('<external_id>', 'External ID').action((externalId) => {
+  const event = db.prepare('SELECT content FROM raw_events WHERE external_id = ?').get(externalId) as any;
+  if (event) console.log(event.content); else console.error(`❌ 404: ${externalId}`);
+});
+
+program.command('mark-event-processed').argument('<external_id>', 'External ID').action((externalId) => {
+  db.prepare('UPDATE raw_events SET processed = 1 WHERE external_id = ?').run(externalId);
+  console.log(`✅ Marked event ${externalId} as processed.`);
+});
+
 program.command('search').argument('<query>', 'Search term').action(async (query) => {
   const results = await hybridSearch(query);
   if (results.length === 0) { console.log('No matches.'); return; }
@@ -184,6 +218,11 @@ program.command('projects').description('List all unique project slugs in the br
 program.command('read').argument('<slug>', 'Slug').action((slug) => {
   const filePath = path.join(PATHS.wiki, `${slug}.md`);
   if (fs.existsSync(filePath)) console.log(fs.readFileSync(filePath, 'utf-8')); else console.error(`❌ 404: ${slug}`);
+});
+
+program.command('read-raw').argument('<id>', 'Raw entry ID').action((id) => {
+  const entry = db.prepare('SELECT content FROM raw_entries WHERE id = ?').get(id) as any;
+  if (entry) console.log(entry.content); else console.error(`❌ 404: ${id}`);
 });
 
 program.command('query').argument('<question>', 'The question').option('--save', 'Save as analysis page').action(async (question, options) => {
@@ -488,7 +527,7 @@ page.command('create').argument('<slug>', 'Slug').argument('<title>', 'Title').o
   const aliases = options.aliases ? options.aliases.split(',').map((a: string) => a.trim()) : [];
   const body = ['---', yaml.dump({ title, slug, aliases, tags, type: options.type, confidence: Number(options.confidence), mentions: Number(options.mentions), tier: Number(options.tier), status: 'active', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), source_count: options.source ? 1 : 0 }).trim(), '---', '', `# ${title}`, '', '## Summary', options.content, '', '## Cross-References', '', '---', '<!-- TIMELINE: append-only below this line -->'].join('\n');
   fs.writeFileSync(filePath, body);
-  if (options.source && options.claim) { internalRebuildIndex(); internalRecordClaim(slug, options.claim, Number(options.source)); }
+  if (options.source && options.claim) { internalRebuildIndex(); internalRecordClaim(slug, options.claim, options.source); }
   console.log(`✅ Created ${slug}`);
 });
 
@@ -514,7 +553,7 @@ page.command('update').argument('<slug>', 'Slug').argument('<content>', 'Content
   } else {
     fs.writeFileSync(filePath, headerAndTruth + '<!-- TIMELINE: append-only below this line -->' + existingTimeline + '\n' + content);
   }
-  if (options.source && options.claim) internalRecordClaim(slug, options.claim, Number(options.source));
+  if (options.source && options.claim) internalRecordClaim(slug, options.claim, options.source);
   console.log(`✅ Updated ${slug}`);
 });
 

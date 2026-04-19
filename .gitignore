@@ -3,6 +3,15 @@ node_modules/
 tsconfig.tsbuildinfo
 *.log
 
+# Gemini CLI scratch state
+.gemini/
+
+# Obsidian session junk (empty drafts)
+wiki/Untitled.canvas
+
+# Librarian relaunch marker
+meta/RELAUNCH_NEEDED
+
 # SQLite
 meta/brain.db
 meta/brain.db-wal

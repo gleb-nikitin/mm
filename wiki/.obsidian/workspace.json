@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "Tabularium.md",
+                "file": "Mnemonic_Indexing.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "Tabularium"
+              "title": "Mnemonic_Indexing"
             }
           }
         ]
@@ -40,7 +40,7 @@
             "state": {
               "type": "file-explorer",
               "state": {
-                "sortOrder": "alphabetical",
+                "sortOrder": "byModifiedTime",
                 "autoReveal": false
               },
               "icon": "lucide-folder-closed",
@@ -53,7 +53,7 @@
             "state": {
               "type": "search",
               "state": {
-                "query": "tag:rust",
+                "query": "",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -74,8 +74,7 @@
               "title": "Bookmarks"
             }
           }
-        ],
-        "currentTab": 1
+        ]
       }
     ],
     "direction": "horizontal",
@@ -184,12 +183,34 @@
       "bases:Create new base": false
     }
   },
-  "active": "23daaa1128073243",
+  "active": "91b9c873fc7c59bb",
   "lastOpenFiles": [
-    "Claude_Session_Importer.md",
-    "LLM_Wiki.md",
+    "Mnemonic51.md",
+    "Mnemonic_Synthesis_Briefing.md",
+    "Mnemonic_Roadmap.md",
+    "Mnemonic_Refactor_Plan.md",
+    "Mnemonic_Orchestration.md",
+    "Mnemonic_Operational_Manual.md",
     "Mnemonic_Light.md",
+    "Mnemonic_Ingestion_Pipeline.md",
+    "Mnemonic_Indexing.md",
+    "Mnemonic_Importing.md",
+    "Mnemonic_Hardcore.md",
+    "Mnemonic_Derivation_Skills.md",
+    "Milestones.md",
+    "LLM_Wiki.md",
+    "Hiking.md",
+    "Gleb_Nikitin.md",
     "GBrain.md",
-    "Provenance_Test.md"
+    "Garry_Tan.md",
+    "Eugene_Gordeev.md",
+    "Dup_1.md",
+    "Cross_Chat_Knowledge_Base.md",
+    "Codex_Session_Importer.md",
+    "Claude_Session_Importer.md",
+    "Andrej_Karpathy.md",
+    "2026-04-19.md",
+    "Provenance_Test.md",
+    "Untitled.canvas"
   ]
 }

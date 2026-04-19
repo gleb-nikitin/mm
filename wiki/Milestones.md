@@ -1,10 +1,30 @@
-# Milestones
-
-This page tracks the architectural evolution of Mnemonic51. It is automatically maintained by the `git` role to ensure every significant commit leaves a durable trace for synthesis context.
-
+---
+title: Milestones
+slug: Milestones
+aliases: []
+tags:
+  - project
+  - mnemonic
+type: analysis
+confidence: 1
+mentions: 1
+tier: 2
+status: active
+created_at: '2026-04-18T12:00:00.000Z'
+updated_at: '2026-04-19T12:21:00.000Z'
+source_count: 0
 ---
 
-<!-- MILESTONES: append-only below this line -->
+# Milestones
+
+## Summary
+This page tracks the architectural evolution of Mnemonic51. It is maintained by the `git` role to provide a durable trace of significant commits for synthesis context.
+
+## Cross-References
+- [[Mnemonic51|Mnemonic51]]
+
+---
+<!-- TIMELINE: append-only below this line -->
 - **2026-04-17 (6a758af)**: Completed the full recursive ingest pass. Every durable subject from the initial Claude sessions is now represented in the wiki with Timeline citations. Refined the roadmap to reflect the two-track (Light/Hardcore) plan.
 - **2026-04-17 (7b5f0ef)**: Landed source-separation end-to-end. Implemented Schema v4 with `source_type` and `project` columns and established the `raw/<type>/<project>/` filesystem layout.
 - **2026-04-17 (ed3eaf2)**: Added the Aurora web UI (Alpine.js) and refactored `runGemini` to be async, preventing event-loop blocking during synthesis.

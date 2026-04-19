@@ -581,6 +581,21 @@ export async function runGemini(prompt: string, yolo: boolean = false) {
   }
 }
 
+export async function runGeminiInteractive(prompt: string, yolo: boolean = false) {
+  const args = yolo ? ['--yolo', `-i=${prompt}`] : [`-i=${prompt}`];
+  try {
+    const proc = Bun.spawn(['gemini', ...args], {
+      stdin: 'inherit',
+      stdout: 'inherit',
+      stderr: 'inherit',
+    });
+    const exit = await proc.exited;
+    return { status: exit || 0 };
+  } catch (e: any) {
+    return { status: 1, stderr: e.message || String(e) };
+  }
+}
+
 export async function queryBrain(question: string, opts: SearchOpts = {}) {
   const hasEmbeddings = (db.prepare('SELECT COUNT(*) as count FROM chunks WHERE embedding IS NOT NULL').get() as any).count > 0;
   let context = "";
