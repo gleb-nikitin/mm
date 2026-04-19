@@ -15,7 +15,16 @@ if ! command -v bun >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "🧠 Handing over to the Librarian..."
+echo "📥 Step 1/3: Importing recent Claude sessions (mm, 1d)..."
+bun scripts/import-claude.ts --days 1 --project mm
+
+echo "\n🧩 Step 2/3: Chunking raw_events into raw/events/mm/*.md..."
+bun scripts/chunk-events.ts --project mm
+
+echo "\n🏗️  Step 3/3: Rebuilding index so chunks surface as raw_entries..."
+bun run brain index rebuild
+
+echo "\n🧠 Handing over to the Librarian..."
 
 # Clean start
 rm -f meta/RELAUNCH_NEEDED
@@ -30,14 +39,11 @@ $(cat agent/roles/lib/soul-interactive.md)
 ## Handoff
 $(cat agent/roles/lib/handoff.md 2>/dev/null || echo "No previous handoff.")
 
-## Unprocessed Queue (Markdown Files)
+## Unprocessed Queue (Markdown Files — includes event chunks under raw/events/)
 $(bun run brain queue)
 
-## Unprocessed Events (Chats - mm project)
-$(bun run brain queue-events -p mm)
-
 # OBJECTIVE
-Perform your autonomous lifecycle: Import sessions, rebuild the index, process the queues (both files and mm events), and update your role instructions if needed.
+Drain the unprocessed queue. Each entry is either a document or a chat-session chunk under raw/events/<project>/. Read with \`brain read-raw <id>\`, synthesize per meta/schema.md, update the wiki with \`brain page create|update --source <id> --claim "..."\`, and mark with \`brain mark-processed <id>\`. Evolve your role docs when useful. Exit when the queue is empty or you hit ~80% context.
 EOF
 )
 

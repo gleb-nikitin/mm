@@ -54,6 +54,7 @@ For a short README-style overview, see **[`README.md`](README.md)**. For behavio
 | DB, search, embeddings, Gemini | `src/core.ts` |
 | MCP tools | `src/mcp.ts` |
 | Claude / Codex / Gemini importers | `scripts/import-claude.ts`, `import-codex.ts`, `import-gemini.ts` |
+| Narrative chunker (events → raw) | `scripts/chunk-events.ts` |
 | Telegram one-off | `scripts/import-chats.ts` |
 | Tests | `tests/behavior.test.ts` |
 | macOS shortcuts | `run.command`, `kill.command`, `watch-agents.command`, `refresh-agents.command`, `process-new.command` |
@@ -97,7 +98,7 @@ These files are **part of the product**: runtime code **reads** several of them 
 | Concept | Meaning |
 |---------|---------|
 | **`raw_entries`** | Rows mirroring files under `raw/`; **`processed`** flag; queue for **`brain process`**. |
-| **`raw_events`** | Imported **session transcripts** (Claude/Codex/Gemini importers); **`external_id`** unique; searchable via **`events_fts`**. |
+| **`raw_events`** | Imported **session transcripts** (Claude/Codex/Gemini importers); **`external_id`** unique; searchable via **`events_fts`**. **`chunked=1`** once `scripts/chunk-events.ts` has digested a row into files under `raw/events/<project>/`. |
 | **`wiki_pages`** + `wiki/*.md` | Curated pages; **Timeline** may cite a path under brain root or **`event:<external_id>`**. |
 | **Claims / `claim_sources` / `claim_sources_event`** | Provenance links; **`source_count`** on pages. |
 | **`import_state`** | Per-path/session sightings for **Active Agents** (`/active`, MCP `list_active_agents`). |
@@ -121,11 +122,12 @@ These files are **part of the product**: runtime code **reads** several of them 
 ### Ingestion chain (not one button)
 
 1. **Import sessions (optional)** — refresh dashboard / searchable events.
-2. **`brain index rebuild`** — sync `raw/` + `wiki/` into SQLite (FTS, links, raw rows).
-3. **`brain process`** — retro-link timeline citations (no LLM), then Gemini **ingest** for unprocessed **`raw_entries`**.
-4. **`brain embed`** — Ollama at **`http://localhost:11434`**, model **`nomic-embed-text`**. If Ollama is down: FTS + events still work; vector arm missing.
+2. **`bun scripts/chunk-events.ts [--project <p>]`** — digest un-chunked **`raw_events`** rows into ~12KB turn-aligned markdown chunks under **`raw/events/<project>/`**. Sets **`chunked=1`**.
+3. **`brain index rebuild`** — sync `raw/` (including the new event chunks) + `wiki/` into SQLite (FTS, links, raw rows).
+4. **`brain process`** — retro-link timeline citations (no LLM), then Gemini **ingest** for unprocessed **`raw_entries`**.
+5. **`brain embed`** — Ollama at **`http://localhost:11434`**, model **`nomic-embed-text`**. If Ollama is down: FTS + events still work; vector arm missing.
 
-**Targeted chat → wiki:** **`brain ingest-event <external_id>`** with timeline citation **`event:…`**.
+**Ad-hoc chat → wiki (rare):** **`brain ingest-event <external_id>`** with timeline citation **`event:…`**. Prefer the chunker path above for production work.
 
 ### Day-to-day rhythm
 

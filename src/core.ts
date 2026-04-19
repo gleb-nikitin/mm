@@ -129,7 +129,15 @@ export function initDb() {
     FOREIGN KEY(event_id) REFERENCES raw_events(id) ON DELETE CASCADE
   )`);
 
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 9)');
+  // v10: raw_events.chunked — set by `scripts/chunk-events.ts` once a session has
+  // been written to disk as one or more `raw/events/<project>/*.md` chunks. Distinct
+  // from `processed` (which means "ingested into the wiki") so that ad-hoc
+  // `brain ingest-event <id>` and the chunker→raw_entries pipeline can coexist.
+  const evCols2 = db.prepare(`PRAGMA table_info(raw_events)`).all() as Array<{ name: string }>;
+  if (!evCols2.some(c => c.name === 'chunked')) db.run(`ALTER TABLE raw_events ADD COLUMN chunked INTEGER DEFAULT 0`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_event_chunked ON raw_events(chunked)`);
+
+  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 10)');
 }
 
 // --- Common Logic ---

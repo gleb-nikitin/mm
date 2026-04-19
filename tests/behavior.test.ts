@@ -19,6 +19,7 @@ const REPO = path.resolve(new URL('..', import.meta.url).pathname);
 const BRAIN_TS = path.join(REPO, 'src', 'brain.ts');
 const API_TS   = path.join(REPO, 'src', 'api.ts');
 const IMPORT_CLAUDE_TS = path.join(REPO, 'scripts', 'import-claude.ts');
+const CHUNK_EVENTS_TS = path.join(REPO, 'scripts', 'chunk-events.ts');
 
 let tmpRoot: string;
 let shimDir: string;
@@ -98,16 +99,19 @@ ${opts.timeline ?? ''}
 // ---------- SCHEMA ----------
 
 describe('schema migration', () => {
-  test('fresh root bootstraps to v9', async () => {
+  test('fresh root bootstraps to v10', async () => {
     await brain(['queue']);
     const db = openDb();
     const version = (db.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any).version;
-    expect(version).toBe(9);
+    expect(version).toBe(10);
     // Spot-check the tables that should exist.
     const tbls = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r: any) => r.name);
     for (const name of ['raw_entries', 'raw_events', 'wiki_pages', 'claims', 'claim_sources', 'claim_sources_event', 'import_state']) {
       expect(tbls).toContain(name);
     }
+    // v10: chunked column on raw_events
+    const evCols = db.prepare("PRAGMA table_info(raw_events)").all().map((c: any) => c.name);
+    expect(evCols).toContain('chunked');
     db.close();
   });
 });
@@ -278,6 +282,101 @@ describe('GET /active markdown shape', () => {
       api.kill();
       await api.exited;
     }
+  });
+});
+
+// ---------- CHUNKER ----------
+
+describe('chunk-events — raw_events to raw/events/*.md', () => {
+  async function chunker(args: string[] = []) {
+    const proc = Bun.spawn(['bun', CHUNK_EVENTS_TS, ...args], {
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
+      stdout: 'pipe', stderr: 'pipe',
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { code: code || 0, stdout, stderr };
+  }
+
+  test('splits a session at turn boundaries and marks chunked=1', async () => {
+    await brain(['queue']); // bootstrap
+
+    // Build a session large enough to need splitting: 4 big turns of ~6KB each.
+    const bigTurn = (role: string, tag: string) => `${role}: ${tag} `.padEnd(6_000, 'x');
+    const content = [
+      bigTurn('User', 'Q1'),
+      bigTurn('Assistant', 'A1'),
+      bigTurn('User', 'Q2'),
+      bigTurn('Assistant', 'A2'),
+    ].join('\n\n');
+
+    const db = openDb();
+    db.prepare(`INSERT INTO raw_events
+      (source_type, project, external_id, timestamp, content, title, processed, chunked)
+      VALUES ('llm_chat', 'testproj', 'evt-chunk-1', '2026-04-18T10:00:00Z', ?, 'Test', 0, 0)`).run(content);
+    db.close();
+
+    const res = await chunker(['--project', 'testproj']);
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain('1 events');
+
+    const chunkDir = path.join(tmpRoot, 'raw', 'events', 'testproj');
+    const files = fs.readdirSync(chunkDir).sort();
+    expect(files.length).toBeGreaterThanOrEqual(2); // at least two chunks
+
+    // Every chunk carries correct frontmatter + the same event_external_id.
+    for (const f of files) {
+      const body = fs.readFileSync(path.join(chunkDir, f), 'utf-8');
+      expect(body).toContain('source_type: events');
+      expect(body).toContain('project: testproj');
+      expect(body).toContain('event_external_id: evt-chunk-1');
+      expect(body).toContain('## Provenance');
+    }
+
+    const db2 = openDb();
+    const row = db2.prepare(`SELECT chunked FROM raw_events WHERE external_id = 'evt-chunk-1'`).get() as any;
+    expect(row.chunked).toBe(1);
+    db2.close();
+  });
+
+  test('re-running is idempotent (chunked rows skipped; files not overwritten)', async () => {
+    await brain(['queue']);
+    const db = openDb();
+    db.prepare(`INSERT INTO raw_events
+      (source_type, project, external_id, timestamp, content, title, processed, chunked)
+      VALUES ('llm_chat', 'idem', 'evt-idem-1', '2026-04-18T11:00:00Z',
+              'User: hi\n\nAssistant: hello', 'Test', 0, 0)`).run();
+    db.close();
+
+    const first = await chunker(['--project', 'idem']);
+    expect(first.code).toBe(0);
+    expect(first.stdout).toContain('1 events');
+
+    const second = await chunker(['--project', 'idem']);
+    expect(second.code).toBe(0);
+    expect(second.stdout).toContain('nothing to do');
+  });
+
+  test('chunks become raw_entries with source_type=events after index rebuild', async () => {
+    await brain(['queue']);
+    const db = openDb();
+    db.prepare(`INSERT INTO raw_events
+      (source_type, project, external_id, timestamp, content, title, processed, chunked)
+      VALUES ('llm_chat', 'flow', 'evt-flow-1', '2026-04-18T12:00:00Z',
+              'User: hi\n\nAssistant: ok', 'Test', 0, 0)`).run();
+    db.close();
+
+    await chunker(['--project', 'flow']);
+    await brain(['index', 'rebuild']);
+
+    const db2 = openDb();
+    const count = (db2.prepare(`SELECT COUNT(*) AS c FROM raw_entries
+                                 WHERE source_type = 'events' AND project = 'flow'`).get() as any).c;
+    expect(count).toBe(1);
+    db2.close();
   });
 });
 
