@@ -63,10 +63,7 @@ The `raw_events` table (landed in `src/core.ts` v5) requires operational scripts
 - **Signal Filter**: Optional filter to drop mechanical turns (`[tool: Bash]`) and keep only reasoning/decisions.
 
 ### 3. Production Ingestion Pipeline
-The logic from `process-new.command` must be ported to a robust, unattended service:
-- **Atomic Batches**: Grouping imports, indexing, and processing into single transactions.
-- **Context Awareness**: The processor should track token limits and output `[STOP: relaunch_needed]` when context saturates, triggering the creation of a `RELAUNCH_NEEDED` marker in the DB.
-- **Auto-Sync**: Background file-watching (Observer Mode) to eliminate the need for manual `index rebuild`.
+`process-new.command` is the canonical shape (import → chunk → index → interactive librarian → embed). Hardening it into an unattended service needs mostly **Auto-Sync**: background file-watching (Observer Mode) to eliminate the need for manual `index rebuild`. The earlier "atomic batches" framing and the context-watchdog relaunch loop presumed many short `-p` sessions; a single interactive librarian session handles a project's worth of work with room to spare (empirical: 35 mm chunks ≈ 8% of Gemini's context), so that design pressure is gone.
 
 ## 1. Tests
 
@@ -185,52 +182,32 @@ All `derive-*` skills share structure (documented canonically in `meta/skills/de
 
 When we write `derive-bugs`, `derive-corrections`, etc., they follow this same template — only the target artifact and extraction focus differ.
 
-### Orchestration — running skills at scale
+### Orchestration — how skills get invoked in production
 
-Skills are the product; this subsection is how they actually get invoked in production. Informed by direct experience: `brain process` already iterates `WHERE processed = 0`, so batch ingestion is a solved primitive — what's missing is the operational harness around it.
+The empirical result of the chunker + interactive librarian pass (2026-04-19) collapsed a lot of the orchestration framing that was here previously. Keeping only what survives.
 
-**Synthesis mode decision: `-p` only.** No interactive sessions for production runs. All skill invocations go through one-shot `gemini -p` (or provider equivalent). Deterministic, scriptable, crontab-friendly. Interactive mode remains a dev tool for skill prototyping only.
+**Synthesis mode: interactive, one session per project.** A single interactive Gemini session drains a project's chunked queue end-to-end. 35 mm chunks cost ~8% of context — so the old "`-p` only, many small batches" plan, the `--batch N` argument, and the context-saturation relaunch loop are all overbuilt for what the system actually needs. `process-new.command` is the canonical invocation shape; it does: import → chunk-events → index rebuild → interactive librarian → embed.
 
-#### Git-aware `raw/`
+**Outstanding automation gap** (the only real hole now that the chunker landed): firing `process-new.command` on a schedule or a filesystem trigger, rather than by double-click. Small job.
+
+#### Git-aware `raw/` (still valid, still deferred)
 
 - `git init raw/` with a baseline commit. Commit = "batch ingested." Staged = "in flight." Untracked/modified = "pending."
-- Combine with **stable-filename-per-session**: `raw/claude/mm/<session-id>.md` instead of timestamp-per-import. Re-imports overwrite the same file; `git diff` gives the per-file delta. Gemini processes diffs, not whole files. Massive token savings on growing session transcripts.
-- `processed=1` flag in SQLite becomes redundant (or a derived cache) — git log is authoritative. One state system, not two.
+- Combine with **stable-filename-per-session**: `raw/claude/mm/<session-id>.md` instead of timestamp-per-import. Re-imports overwrite the same file; `git diff` gives the per-file delta. Token savings on growing session transcripts.
+- `processed=1` flag in SQLite becomes a derived cache rather than source of truth — git log is authoritative. One state system, not two.
 
-#### Batching
+#### Scheduler (`meta/config.toml` + `bun src/scheduler.ts`)
 
-- `brain process` today processes one raw entry per Gemini call. Extend with:
-  - `--batch N` — group N raw entries into one Gemini `-p` call (amortizes the skill+schema preamble across entries).
-  - `--source-type X` / `--project Y` — filter the queue so cron jobs can target specific streams independently.
-  - `--dry-run` — list entries that would be processed, skip Gemini.
-- Sweet spot around `--batch 10`, per empirical data (1 session ≈ 3% of Gemini's context window).
+**Manual cron lines rot.** Users don't maintain them, LLMs can't inspect or mutate them safely, and one forgotten line silently breaks the auto-ingest promise. Declarative config that both humans and LLMs can read and write.
 
-#### Declarative orchestration config (`meta/config.toml`)
-
-**Manual cron lines rot.** Users don't maintain them, LLMs can't inspect or mutate them safely, and one forgotten line silently breaks the auto-ingest promise. Replace the entire manual layer with a declarative config that both humans and LLMs can read and write.
-
-**Format.** TOML at `meta/config.toml` — ships with the brain root, diffable, human-friendly, Rust-native for Hardcore. Example shape:
+**Scope, smaller than before.** The scheduler fires one `process-new.command` invocation per configured project, on a cron schedule or a filesystem watcher. It does not compose custom pipelines of importers + flags; the pipeline lives in `process-new.command` and is the same for every project. Config shape collapses accordingly:
 
 ```toml
-[[imports]]
-name          = "mm-claude-daily"
-source_type   = "claude"
-project       = "mm"
-schedule      = "0 9 * * *"          # cron expression, local TZ
-importer      = "scripts/import-claude.ts"
-args          = ["--days", "1", "--project", "mm"]
-post_ingest   = ["derive-todos"]     # chain after `brain process`
-
-[[imports]]
-name        = "research-inbox-watch"
-source_type = "research"
-project     = "mm"
-watch_dir   = "~/research-inbox"     # alternative to schedule: fs watcher
-post_ingest = ["derive-todos"]
-
-[ingest]
-batch_size   = 10                    # entries per `brain process` call
-embed_after  = true
+[[projects]]
+name        = "mm"
+schedule    = "0 9 * * *"            # cron expression, local TZ; optional
+watch_dir   = "~/.claude/projects"   # fs-trigger instead of schedule; optional
+enabled     = true
 
 [synthesis]
 provider = "gemini"
@@ -238,35 +215,13 @@ model    = "gemini-2.5-pro"
 timeout  = 180
 ```
 
-**Scheduler.** `bun src/scheduler.ts` runs as a long-lived process (started by `run.command` or launchd on macOS / systemd on Linux), parses `meta/config.toml`, fires jobs at scheduled times. On file change → hot-reload, no restart. Each run appends a one-line entry to `meta/log.md`. Failed runs get retried with backoff, not silently dropped.
+`bun src/scheduler.ts` parses the TOML, fires `process-new.command` when a schedule or watcher triggers, appends one-line entries to `meta/log.md`. Hot-reload on config change. Retry with backoff on failure.
 
-**Settings UI.** New **Settings** view in `ui/index.html`:
+**Settings UI.** Project list with Add / Edit / Remove / Enable-toggle + "Raw TOML" textarea. `GET /config` + `PUT /config` for humans and LLMs. MCP tools: `list_projects_scheduled`, `enable_project`, `disable_project`, `set_schedule`, scoped behind a capability flag.
 
-- Form-driven list of imports with Add / Edit / Remove / Enable-toggle. Schedule picker, source_type enum, project free-text, post_ingest multi-select.
-- "Raw TOML" textarea for power users who prefer direct editing — validates on save.
-- Everything goes through `/config` HTTP API so validation is authoritative server-side.
+**Boundaries.** The scheduler never reaches inside the pipeline — it only fires `process-new.command`. Keeps the scheduler small and the pipeline discoverable in one place.
 
-**LLM / MCP surface.** So `derive-friction` can propose "your Claude import runs too often, reduce to every 3h" and the LLM can actually carry the change out:
-
-- `GET /config` — returns current TOML + parsed JSON.
-- `PUT /config` — validates, writes TOML, triggers scheduler reload.
-- MCP tools: `list_imports`, `add_import`, `update_import`, `remove_import`, `enable_import`, `disable_import`. Scoped behind a capability flag so not every client can mutate scheduling.
-
-**Validation.** JSON schema for the TOML; invalid configs rejected with clear errors. Ship `meta/config.example.toml` as the reference. First-run bootstrap copies example → config if config absent.
-
-**Boundaries.** The scheduler does NOT do ingestion work itself — it invokes existing scripts + `brain process` + `brain derive-todos` + `brain embed`. Keeps the scheduler focused on timing + config + logging, leaves ingestion logic where it already lives.
-
-**Canonical job shape** (what each scheduled run executes internally):
-
-```sh
-<importer>  <args...>                                      # fetch source → raw/
-git -C raw add . && git -C raw commit -m "ingest: <name>"  # git-aware batch identity
-bun run brain process --source-type <src> --batch <N>      # skill-driven ingest
-bun run brain embed                                        # refresh vectors
-<for each post_ingest step> bun run brain <step>           # derive-todos / derive-bugs / etc.
-```
-
-This replaces `agent/docs/how-to-cron.md` as a manual-crontab guide. The doc that ships instead is `agent/docs/how-to-schedule.md` — how to *configure* imports via the UI or TOML, not how to write crontab lines.
+Ships with `agent/docs/how-to-schedule.md`, not `how-to-cron.md` — users configure schedules via UI or TOML, not by writing crontab.
 
 #### Sources to wire up (targets for the config above)
 
