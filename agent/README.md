@@ -1,6 +1,6 @@
 # Agent-facing documentation
 
-This directory is for agents (LLMs, autonomous sessions, reviewers) working on Mnemonic51, not for end users. End-user docs live in the repo root.
+This directory is for agents (LLMs, autonomous sessions, reviewers) working on Mnemonic51, not for end users. **Repository-wide entry point:** [`../human-how-it-works.md`](../human-how-it-works.md) (layout, data flow, every `.ts` file, instruction markdown index).
 
 ## Layout
 
@@ -14,10 +14,11 @@ This directory is for agents (LLMs, autonomous sessions, reviewers) working on M
 
 ## Reading order for a fresh session
 
-1. The relevant role's files in the order the role prescribes (typically `soul.md` → `role.md` → `handoff.md`)
-2. `agent/docs/roadmap.md`
-3. `how-mm-works.md` at repo root — operator manual (data lifecycle, commands, troubleshooting)
-4. Code: `src/brain.ts`, `src/core.ts`, `src/api.ts`, `src/mcp.ts`; schema: `meta/schema.md`; delta tracker: `meta/remaining-gaps.md`
+1. [`human-how-it-works.md`](../human-how-it-works.md) — what lives where, pipelines, **`meta/`** instruction files (§2.3)
+2. The relevant role's files in the order the role prescribes (typically `soul.md` → `role.md` → `handoff.md`)
+3. `agent/docs/roadmap.md`
+4. [`how-mm-works.md`](../how-mm-works.md) — operator manual (data lifecycle, cron ideas, troubleshooting)
+5. Code: `src/brain.ts`, `src/core.ts`, `src/api.ts`, `src/mcp.ts`; schema: `meta/schema.md`; delta tracker: `meta/remaining-gaps.md`
 
 ## Rules
 

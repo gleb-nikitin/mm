@@ -1,6 +1,6 @@
 # Todo
 
-**Brainstorm aggregation.** Ideas under discussion that may become roadmap items. Not a sequenced plan — committed sequence and state live in `agent/docs/roadmap.md`. Framing and product shape live in `agent/docs/roadmap.md` and `how-mm-works.md`. Keep each entry small enough that a future session can pick it up without re-deriving context. Rewrite when it drifts — don't append forever.
+**See also:** [`human-how-it-works.md`](../../human-how-it-works.md) (full project map). **Brainstorm aggregation.** Ideas under discussion that may become roadmap items. Not a sequenced plan — committed sequence and state live in `agent/docs/roadmap.md`. Framing and product shape live in `agent/docs/roadmap.md` and `how-mm-works.md`. Keep each entry small enough that a future session can pick it up without re-deriving context. Rewrite when it drifts — don't append forever.
 
 ## Tiered Compute Philosophy
 

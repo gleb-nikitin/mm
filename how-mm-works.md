@@ -1,5 +1,7 @@
 # How Mnemonic51 (`mm`) Works: Operational Manual
 
+**See first:** **[`human-how-it-works.md`](human-how-it-works.md)** — codebase map, **`raw_events`** vs **`raw/`**, every entrypoint, and **`meta/`** instruction files (what each tells an LLM).
+
 Mnemonic51 is a local-first persistent knowledge base that serves as a **project-management primitive**. It uses LLM-mediated extraction (Skills) to turn conversation and research into durable Markdown artifacts.
 
 ---
@@ -9,9 +11,11 @@ Mnemonic51 is a local-first persistent knowledge base that serves as a **project
 Data flows through three distinct layers: **Raw**, **Indexed**, and **Compiled**.
 
 ### Step 1: Ingestion (Importing Data)
-Data enters the system via three channels, landing in `raw/<source_type>/<project>/`:
-- **Claude Sessions**: `bun scripts/import-claude.ts --project mm`. This scrapes local Claude Code logs, normalizes them, and writes Markdown to `raw/claude/mm/`.
-- **HTTP API**: `POST /add` with `{content, title, source_type, project}`. Used by external tools or browser extensions.
+Data enters via overlapping paths:
+
+- **Markdown → `raw/`** — `POST /add`, `bun run brain add`, or files under `raw/<source_type>/<project>/`. These become **`raw_entries`** when indexed.
+- **Claude / Codex / Gemini sessions** — `bun scripts/import-claude.ts` (and the Codex/Gemini scripts) read vendor logs and insert rows into **`raw_events`** + **`events_fts`** (searchable; Active Agents via **`import_state`**). They do **not** by default write session text as files under `raw/claude/...`. To fold a session into the wiki, use **`brain ingest-event <external_id>`** or a manual export workflow.
+- **HTTP API**: `POST /add` with `{content, title, source_type, project}` for structured raw capture.
 - **Manual/CLI**: `bun run brain add "some text" --title "My Note"`.
 
 ### Step 2: Indexing (The SQLite Layer)
@@ -49,8 +53,9 @@ To enable semantic "meaning-based" search, the wiki content must be vectorized.
 - `log.md`: An append-only audit trail of every ingest and update.
 
 ### Scripts (`scripts/`)
-- `import-claude.ts`: Specialized importer for Claude Code session logs.
-- `import-chats.ts`: Importer for Telegram/Chat logs.
+- `import-claude.ts` / `import-codex.ts` / `import-gemini.ts`: Session importers → **`raw_events`** (not `raw/` markdown by default).
+- `import-chats.ts`: Legacy Telegram one-off → flat **`raw/`** + SQL.
+- `ingest-manual.ts`: Optional ingest of **`how-mm-works.md`** via `addToBrain`.
 
 ---
 

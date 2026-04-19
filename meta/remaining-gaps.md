@@ -22,6 +22,6 @@ This file tracks the delta between the implemented system and the current roadma
 ## External Surfaces
 
 - [x] **Markdown HTTP API**: Implemented as requested in Phase 6.
-- [x] **Upgraded MCP**: Exposes full V2 toolset (search, query, validate, stats).
+- [x] **Upgraded MCP**: Exposes tools: `search_brain`, `query_brain`, `add_to_brain`, `validate_claim`, `brain_stats`, `list_projects`, `list_active_agents`, `embed_brain` (see `src/mcp.ts`).
 - [ ] **Web UI**: The system lacks a dedicated stylized frontend (HTTP surface is Markdown-only).
 - [ ] **Interactive MCP**: Search results return structured data, but could support richer "follow-up" actions (like reading a specific chunk's parent page).

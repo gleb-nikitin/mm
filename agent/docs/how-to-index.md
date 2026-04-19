@@ -1,5 +1,7 @@
 # How to index
 
+**See also:** **[`human-how-it-works.md`](../../human-how-it-works.md)** (brain root, `raw_entries` vs `raw_events`, when to run importers vs `index rebuild`).
+
 Raw files on disk aren't queryable until mm's SQLite tables + vector chunks are rebuilt from them. This guide covers the three scenarios you'll hit.
 
 ## Pipeline at a glance

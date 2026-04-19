@@ -1,5 +1,7 @@
 # Mnemonic51 Roadmap
 
+**See also:** [`human-how-it-works.md`](../../human-how-it-works.md) (codebase entry, pipelines, instruction files).
+
 Rolling roadmap. Rewrite when it drifts — don't append.
 
 Project:

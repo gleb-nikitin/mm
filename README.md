@@ -4,22 +4,25 @@ Local-first persistent knowledge base. Markdown is the source of truth; SQLite i
 
 Short name: `mm`.
 
+**Project entry (layout, data flow, every `.ts` file, configuration):** [`human-how-it-works.md`](human-how-it-works.md)
+
 ## Layout
 
 - `src/brain.ts` — CLI entrypoint (commander-based, the main way you drive the brain)
-- `src/api.ts` — HTTP surface (markdown-first endpoints)
+- `src/api.ts` — HTTP server + static UI under `ui/`
 - `src/mcp.ts` — MCP stdio surface (for MCP-capable clients)
 - `src/core.ts` — shared runtime logic used by all three entrypoints
-- `raw/` — immutable source material (one markdown file per snippet)
+- `raw/` — immutable source material (markdown; queued as `raw_entries`)
 - `wiki/` — maintained knowledge pages
-- `meta/` — schema, skills, sqlite DB, runtime reports
-- `agent/` — documentation for agents working on this codebase (see `agent/README.md`)
-- `scripts/` — one-off utilities, not runtime entrypoints
+- `meta/` — schema, skills (LLM instructions), sqlite DB, runtime reports — see [`human-how-it-works.md`](human-how-it-works.md) §2.3
+- `agent/` — documentation for agents working on this codebase (see [`agent/README.md`](agent/README.md))
+- `scripts/` — importers and one-off utilities
 
 ## Requirements
 
 - [Bun](https://bun.sh) 1.1+
-- [Ollama](https://ollama.com) running at `localhost:11434` for embeddings and synthesis
+- **Gemini CLI** — `gemini` on `PATH` (see your environment’s install docs) — used by `brain process`, `brain query`, `brain validate`, `brain ingest-event` (see `src/core.ts`)
+- [Ollama](https://ollama.com) at `localhost:11434` — embeddings (`nomic-embed-text`) for `brain embed` and the vector arm of hybrid search
 
 ## Quick start
 
@@ -27,30 +30,44 @@ Short name: `mm`.
 bun install
 bun run typecheck
 bun run brain -- queue    # list pending raw entries
-bun run api               # HTTP API on :3000
+bun run api               # HTTP API + UI on :3000 (override with MT_PORT)
 bun run mcp               # MCP stdio server
 ```
 
 ## Configuration
 
-Set `MT_BRAIN_ROOT` to point at any directory with `raw/ wiki/ meta/`. If unset, the current working directory is used. Fresh roots are bootstrapped automatically on first run.
+Set `MT_BRAIN_ROOT` to point at any directory with `raw/`, `wiki/`, and `meta/`. If unset, the current working directory is used. Fresh roots are bootstrapped automatically on first run.
 
 ```sh
 MT_BRAIN_ROOT=~/my-brain bun run api
 ```
 
+`MT_PORT` sets the HTTP port for `bun run api` (default **3000**).
+
 ## HTTP API
 
-All responses are markdown.
+Responses are mostly **markdown**. **`GET /`** serves the **web UI** (`ui/index.html`). For a markdown list of routes, use **`GET /help`**.
 
-- `GET /` — endpoint list
+- `GET /help` — endpoint list (markdown)
+- `GET /` — web UI (Aurora-themed index)
+- `GET /active-ui` — Active Agents HTML view
 - `GET /stats` — brain health and schema version
-- `GET /search?q=...` — hybrid search (FTS5 + vector)
+- `GET /search?q=...` — hybrid search (FTS5 + vector + events); optional `source` / `project` filters
 - `GET /query?q=...` — synthesized answer with citations
 - `GET /validate?q=...` — fact-check a specific claim
 - `GET /wiki/:slug` — read a wiki page
-- `POST /add` with `{ content, title }` — ingest a raw snippet
+- `GET /active` — active agents (markdown)
+- `POST /add` with `{ content, title, source_type?, project? }` — ingest a raw snippet
 
 ## MCP tools
 
-`search_brain`, `query_brain`, `add_to_brain`, `validate_claim`, `brain_stats`, `embed_brain`.
+`search_brain`, `query_brain`, `add_to_brain`, `validate_claim`, `brain_stats`, `list_projects`, `list_active_agents`, `embed_brain`.
+
+## More documentation
+
+| Doc | Purpose |
+|-----|---------|
+| [`human-how-it-works.md`](human-how-it-works.md) | **Start here** — repository map, pipelines, instruction files |
+| [`how-mm-works.md`](how-mm-works.md) | Operator manual (lifecycle, cron ideas, troubleshooting) |
+| [`agent/docs/how-to-import.md`](agent/docs/how-to-import.md) | Importing and scoping |
+| [`agent/docs/how-to-index.md`](agent/docs/how-to-index.md) | Index rebuild vs embed |
