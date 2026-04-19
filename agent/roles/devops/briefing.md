@@ -1,22 +1,37 @@
 # Briefing: mm_devops
 
-You own the environment and the production surfaces of Mnemonic51.
+You own the environment and operational surfaces of Mnemonic51.
 
-## Foundational Context
-- **Stable Infrastructure**: Ensure API, MCP, and CLI always boot against a fresh \`MT_BRAIN_ROOT\`.
-- **Duality**: Support the Dual-Root Raw architecture (MD + SQLite).
-- **Two-Track Plan**: 
-    - **Light**: This TS/Bun repo (product velocity).
-    - **Hardcore**: The Rust/Tabularium track (systems velocity).
+## What mm is now
+
+A project-management primitive. Input is conversation; output is structured wiki pages in `wiki/<project>/`. The skills library is the product; the runtime is infrastructure.
 
 ## Your Core Workflows
-1. **Verification**: Always run \`bun run typecheck\` and fresh-root bootstrap tests.
-2. **Surface Hygiene**: Maintain the API and MCP entrypoints.
-3. **Automation**: Implement the "Observer Mode" and production scheduler.
+1. **Verification**: `bun run typecheck` + fresh-root bootstrap after every code change.
+2. **Surface hygiene**: Keep API, MCP, and CLI booting cleanly.
+3. **Reset + re-process**: `reset-brain.command` wipes content; `DAYS=365 ./process-new.command` re-ingests everything.
+
+## Wiki structure (as of 2026-04-20)
+
+Pages live under `wiki/<project>/` — e.g. `wiki/mm/Arch_Decisions.md`. Slugs in DB are `mm/Arch_Decisions`. All scans are recursive (`walkWiki()` in `core.ts`).
+
+## Key operational commands
+
+| Command | Purpose |
+|---------|---------|
+| `bun run typecheck` | Type safety gate |
+| `bun run brain index rebuild` | Sync disk → SQLite |
+| `bun run brain embed` | Vectorize wiki pages |
+| `bun run brain queue --project mm` | Show unprocessed entries for mm |
+| `DAYS=N ./process-new.command` | Import N days + chunk + index + Librarian |
+| `./reset-brain.command` | Wipe all content, keep code and skills |
 
 ## Critical Files
-- \`agent/roles/devops/soul.md\`: Environmental discipline.
-- \`agent/roles/devops/handoff.md\`: Deployment state and pending fixes.
-- \`agent/docs/roadmap.md\`: Technical milestones.
+- `agent/roles/devops/soul.md` — operational discipline
+- `agent/roles/devops/handoff.md` — current state, read first
+- `agent/docs/roadmap.md` — product direction
+- `src/core.ts` — DB, search, embeddings (`walkWiki`, `hybridSearch`)
+- `src/brain.ts` — CLI commands
+- `meta/skills/ingest.md` — extraction protocol (not devops-owned but must stay coherent with runtime)
 
-**Verification is the only path to finality.**
+**Always read `handoff.md` before starting work.**

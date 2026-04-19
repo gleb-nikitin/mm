@@ -60,6 +60,7 @@ Reading order lives in `agent/README.md`. Operator-facing architecture (file inv
 - `derive-todos` skill shipped — first member of the derivation-skill family.
 - Research ingested as canonical wiki pages: `[[LLM_Wiki]]`, `[[GBrain]]`, `[[Cross_Chat_Knowledge_Base]]`.
 - **Reframing landed:** mm is a project-management primitive, not a memory engine. Skills library is the product; code is infrastructure.
+- **Interactive librarian + narrative chunker** (2026-04-19): `scripts/chunk-events.ts` digests `raw_events` into turn-aligned ~12KB markdown chunks under `raw/events/<project>/`. `process-new.command` now runs import → chunk → index → one interactive Gemini session → embed. Empirical: 35 mm chunks cost ~8% of context, so **one session per project** is the operating assumption — the earlier many-small-sessions + `--batch N` + relaunch-loop orchestration is retired.
 
 ## Near-term direction
 

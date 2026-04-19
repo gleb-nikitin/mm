@@ -1,96 +1,47 @@
 # Handoff — mm_devops
 
-Last updated 2026-04-19. End of session that retired the per-event librarian
-flow and replaced it with a mechanical Narrative Chunker.
+Last updated 2026-04-20. Session focused on search quality, wiki extraction model, and project-scoped wiki namespacing.
 
-## Why this session existed
+## What changed this session
 
-Last session shipped schema v9 + `ingest-event <external_id>` — targeted
-wiki synthesis from a single DB event. In practice that unit is wrong:
-individual chat sessions (one `raw_events` row) are either too big (up to
-120KB) to digest cleanly or too small to be worth the preamble tax the
-librarian pays on every Gemini invocation. The chain of "read 20K of schema
-+ skills to ingest 1K of text" was the core friction.
+### Search fixes (`src/core.ts`)
+- **FTS AND→OR**: `buildFtsQuery` now joins terms with `OR` — natural language queries work.
+- **Wiki FTS filter bug fixed**: wiki pages were excluded from search whenever any filter was set. Now only excluded when `source_types` explicitly omits `wiki`.
+- **Vector arm filter bug fixed**: vector search was forcing `owner_type='raw'` when any filter set, silently skipping all wiki embeddings. Fixed to always include wiki chunks unless `source_types` excludes `wiki`.
+- **`walkWiki()` + `wikiPath()`**: new helpers in `core.ts` for recursive wiki traversal and path resolution. All scan sites updated to use them.
 
-## What changed
+### Wiki extraction model (`meta/skills/ingest.md`)
+- Completely rewritten. Old: "find named entities → Wikipedia articles." New: "scan 9 categories per chunk, append to bucket pages, one pass per read."
+- 9 extraction buckets: `Arch_Decisions`, `Known_Bugs`, `Future_Tasks`, `Friction_Points`, `Code_Changes`, `How_It_Works_Now`, `User_Notes`, `Corrections`, `Future_Ideas`.
 
-- **Schema v10**: `raw_events.chunked INTEGER DEFAULT 0`. Distinct from
-  `processed`, so the targeted `ingest-event` path still works for ad-hoc
-  use while the chunker-based path becomes the default.
-- **`scripts/chunk-events.ts`**: reads `raw_events WHERE chunked=0 AND
-  processed=0`, splits content at turn boundaries ("User:" / "Assistant:"
-  / "A:" / "Human:") into ~12KB chunks (hard cap 18KB, oversized turns
-  sub-split on paragraphs → lines → hard cut as last resort), writes to
-  `raw/events/<project>/<ts>-<idprefix>[-NNofMM].md` with frontmatter
-  (source_type: events, event_external_id, chunk_index/total) and a
-  Provenance footer. Marks `chunked=1`. Idempotent; `--rechunk` to force.
-  Flags: `--project <p>`, `--dry-run`, `--rechunk`.
-- **`process-new.command`**: now runs `import-claude → chunk-events →
-  index rebuild` before launching the interactive librarian. The librarian
-  no longer needs to know about `raw_events` at all in the normal path —
-  chat sessions surface as ordinary `raw_entries` with `source_type=events`.
-- **`agent/roles/lib/soul-interactive.md`**: simplified lifecycle. One
-  queue, one loop (`read-raw` → synthesize → `page create|update --source
-  <id> --claim` → `mark-processed`). Event-side CLI demoted to "ad-hoc
-  fallback".
-- **Behavior tests**: 3 new chunker tests (split + idempotent + rebuild →
-  raw_entries). Schema version test bumped from v9 to v10 and asserts
-  the `chunked` column.
+### Project-scoped wiki namespacing
+- Wiki pages now live under `wiki/<project>/` (e.g. `wiki/mm/Arch_Decisions.md`).
+- Slugs in DB are `mm/Arch_Decisions` — the slug IS the relative subpath.
+- `internalRebuildIndex`, `lint`, `process`, `embedBrain` all updated to use `walkWiki()`.
+- `page create` now calls `mkdirSync(..., { recursive: true })` before writing.
 
-## Verification (all green)
+### CLI improvements (`src/brain.ts`)
+- `brain add` / `brain save`: added `--project` and `--source-type` flags.
+- `brain queue`: added `--project` filter (was unscoped, now mirrors `queue-events`).
+
+### Operational scripts
+- `scripts/reset-brain.ts`: wipes `raw/**`, `wiki/*.md`, `meta/brain.db*`, generated reports. Recreates empty raw subdirs.
+- `reset-brain.command`: double-click macOS shortcut for the above.
+- `process-new.command`: now imports all 3 providers (claude + codex + gemini), respects `DAYS` env var (default 1), passes `--project mm` to queue in Librarian prompt, runs `brain embed` after Librarian finishes.
+
+### Lib role files + ingest skill
+- `agent/roles/lib/soul.md`, `soul-interactive.md`, `briefing.md`, `role.md`: rewritten around extraction model.
+
+## Verification
 
 - `bun run typecheck` ✓
-- `bun test` → 10 pass / 0 fail / 56 expect() calls (5 consecutive runs)
-- Live-data spot check: ran chunker against project `1-rust-test` (4
-  events → 31 chunks, all ≤18KB), confirmed `brain index rebuild` picks
-  them up as 31 `raw_entries` with `source_type='events'`, then reverted.
+- `bun run brain index rebuild` ✓ (8 pages indexed as `mm/*` slugs)
+- Brain reset + full re-process ran successfully (Gemini used 9% context for all mm sessions)
+- MCP search returning wiki pages correctly after restart
 
-## Known issues / gaps
+## Known issues / next candidates
 
-- **Title extraction**: `internalRebuildIndex` matches `^# ` at start of
-  content, which misses titles that sit after YAML frontmatter. All
-  chunk files (and any other frontmattered raws) fall back to filename as
-  title. Low-impact but worth fixing with a `/m` flag + skip frontmatter.
-- **`update_wiki.js` at repo root**: a scratch JS helper the librarian
-  wrote last session. Left in the baseline commit for provenance. Delete
-  when it's clear nothing depends on it (nothing should — `brain page
-  update` covers the same ground).
-- **`.gemini/system.md`** (25KB) appears on disk while Gemini is running;
-  now gitignored.
-- **`internalRebuildIndex` processed-reset**: on hash change, the rebuild
-  sets `processed=0`. Defensible (edited raws should re-ingest), but
-  noisy if someone touches a raw file by hand. Worth a heads-up in any
-  operator-facing doc.
-
-## What's staged for the next librarian run
-
-- **35 mm chunks** under `raw/events/mm/` (7 events × 1–9 chunks each,
-  sizes 2.2–18.3KB). All sitting at `raw_entries.processed = 0` alongside
-  the 14 docs / 5 claude / 3 research entries that are already ingested.
-- Committed explicitly (1398fd5) so the librarian has durable input even
-  if the DB is wiped.
-
-**Explicit scope decision**: chunker was NOT run across the other ~540
-backfilled events (ac, au, u-au, etc). Running Gemini synthesis at that
-scale today would cost more to throw away and redo once we have a
-production-grade model than to defer it. Keep the default posture of
-`--project mm` (or similar one-project scoping) until that model is
-settled.
-
-## Next candidates (pick one per session)
-
-1. **Drain the 35 mm chunks through the librarian.** Run
-   `./process-new.command`. This is the first real end-to-end test of
-   the chunker → `raw_entries` → interactive librarian → wiki path on
-   vital data. Watch for: duplicate claims (because the 7 source events
-   were already ingested via `ingest-event`), chunk-level provenance
-   quality vs the old per-event provenance, and the librarian's own
-   feedback in `changes.md`.
-2. **Vector pass over `raw/events/*.md`** (previously-deferred "vectors
-   over raw_events"). Since chunks now live as `raw_entries`, the existing
-   `embedBrain()` picks them up automatically the next time it runs — so
-   this may be free. Verify and retire the reserved-lane hack in
-   `hybridSearch` once ranking is sound.
-3. **Title extraction fix** in `internalRebuildIndex` (skip frontmatter,
-   match `# ` on first non-frontmatter line). Small, isolated, improves
-   every `brain queue` / dashboard display.
+1. **`brain embed` after Librarian**: wiki pages created by Gemini during the Librarian session aren't in `wiki_pages` when `index rebuild` runs (rebuild happens before Gemini writes pages). Workaround: manually run `brain index rebuild && brain embed` after `process-new.command` completes. Fix: add a post-Librarian rebuild step to the command.
+2. **Corrections.md not created**: Librarian didn't find corrections in the sessions. May need a hint in `ingest.md` for what counts as a correction.
+3. **`brain.ts` title extraction**: `internalRebuildIndex` uses `^# ` match that skips frontmatter — chunk files fall back to filename as title. Low-impact but noisy in queue display.
+4. **Archive-done script**: friction points marked `✅` accumulate in active pages. A sweep script to move resolved entries to `wiki/<project>/Archived_Done.md` is planned.

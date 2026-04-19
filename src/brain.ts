@@ -11,6 +11,7 @@ import {
   queryBrain, validateClaim, addToBrain, embedBrain, runGemini, runGeminiInteractive, cosine_sim,
   snapshotWiki, detectWikiChanges, timelineCitesRaw, timelineCitesEvent,
   backfillClaimsFromTimeline, backfillClaimsFromTimelineEvent, refreshSourceCount,
+  walkWiki, wikiPath,
 } from './core.ts';
 
 const program = new Command();
@@ -90,14 +91,13 @@ function internalRebuildIndex() {
   const allRaw = db.prepare('SELECT id, source_path FROM raw_entries').all() as any[];
   for (const r of allRaw) if (!foundRawPaths.has(r.source_path)) db.prepare('DELETE FROM raw_entries WHERE id = ?').run(r.id);
 
-  const wikiFiles = fs.readdirSync(PATHS.wiki).filter(f => f.endsWith('.md'));
+  const wikiEntries = walkWiki();
   const foundSlugs = new Set<string>();
   const allLinks: { source: string, target: string }[] = [];
   db.run('DELETE FROM wiki_aliases'); db.run('DELETE FROM wiki_links'); db.run('DELETE FROM search_index');
-  for (const file of wikiFiles) {
-    const slug = file.replace('.md', '');
+  for (const { fullPath, slug } of wikiEntries) {
     foundSlugs.add(slug);
-    const fileContent = fs.readFileSync(path.join(PATHS.wiki, file), 'utf-8');
+    const fileContent = fs.readFileSync(fullPath, 'utf-8');
     try {
       const parts = fileContent.split('---');
       if (parts.length >= 3) {
@@ -111,7 +111,7 @@ function internalRebuildIndex() {
         const links = body.match(/\[\[(.*?)\]\]/g);
         if (links) for (const link of links) { const target = link.slice(2, -2).split('|')[0]; allLinks.push({ source: slug, target }); }
       }
-    } catch (e) { console.error(`❌ Parse error ${file}:`, e); }
+    } catch (e) { console.error(`❌ Parse error ${slug}:`, e); }
   }
   const allPages = db.prepare('SELECT slug FROM wiki_pages').all() as any[];
   for (const p of allPages) if (!foundSlugs.has(p.slug)) db.prepare('DELETE FROM wiki_pages WHERE slug = ?').run(p.slug);
@@ -153,14 +153,14 @@ function internalRebuildTimeline() {
 
 program.name('brain').version('0.9.0');
 
-program.command('add').argument('<content>', 'Raw content').option('-t, --title <title>', 'Title').action((content, options) => {
-  const res = addToBrain(content, options.title);
+program.command('add').argument('<content>', 'Raw content').option('-t, --title <title>', 'Title').option('-p, --project <project>', 'Project slug (e.g. mm)').option('-s, --source-type <type>', 'Source type (e.g. docs, research, knowledge)').action((content, options) => {
+  const res = addToBrain(content, options.title, { project: options.project, sourceType: options.sourceType });
   if (res.status === 'duplicate') console.log(`⚠️ Duplicate content detected.`);
   else console.log(`✅ Saved ${res.path}`);
 });
 
-program.command('save').argument('<insight>', 'Freeform insight').option('-t, --title <title>', 'Title').action((insight, options) => {
-  const res = addToBrain(insight, options.title);
+program.command('save').argument('<insight>', 'Freeform insight').option('-t, --title <title>', 'Title').option('-p, --project <project>', 'Project slug (e.g. mm)').option('-s, --source-type <type>', 'Source type (e.g. docs, research, knowledge)').action((insight, options) => {
+  const res = addToBrain(insight, options.title, { project: options.project, sourceType: options.sourceType });
   if (res.status === 'duplicate') console.log(`⚠️ Duplicate content detected.`);
   else {
     console.log(`✅ Saved ${res.path}`);
@@ -169,8 +169,11 @@ program.command('save').argument('<insight>', 'Freeform insight').option('-t, --
   }
 });
 
-program.command('queue').action(() => {
-  const unprocessed = db.prepare('SELECT id, title, created_at FROM raw_entries WHERE processed = 0').all();
+program.command('queue').option('-p, --project <project>', 'Filter by project').action((options) => {
+  let sql = 'SELECT id, title, source_type, project, created_at FROM raw_entries WHERE processed = 0';
+  const params: any[] = [];
+  if (options.project) { sql += ' AND project = ?'; params.push(options.project); }
+  const unprocessed = db.prepare(sql).all(...params);
   if (unprocessed.length === 0) console.log('✨ Empty.'); else console.table(unprocessed);
 });
 
@@ -243,9 +246,7 @@ program.command('process').action(async () => {
   // cited in a wiki timeline is provenance-linked: backfill claim_sources and
   // mark processed without spending an LLM call. Self-heals stuck queues
   // whenever an agent edits wiki markdown directly instead of using the CLI.
-  const allWikiFiles = fs.readdirSync(PATHS.wiki)
-    .filter(f => f.endsWith('.md'))
-    .map(f => path.join(PATHS.wiki, f));
+  const allWikiFiles = walkWiki().map(e => e.fullPath);
 
   const rawSweep = db.prepare('SELECT id, source_path FROM raw_entries WHERE processed = 0').all() as any[];
   let retroRaw = 0;
@@ -381,17 +382,16 @@ Timeline citations of the form \`event:<external_id>\` are sufficient provenance
 
 program.command('lint').option('--fix', 'Safe fixes only').action((options) => {
   console.log('🧹 Linting Brain...');
-  const wikiFiles = fs.readdirSync(PATHS.wiki).filter(f => f.endsWith('.md'));
+  const wikiEntries = walkWiki();
   const findings: string[] = []; const aliasesFound = new Map<string, string[]>();
   const links = db.prepare('SELECT source_slug, target_slug FROM wiki_links').all() as any[];
   for (const link of links) if (!db.prepare('SELECT 1 FROM wiki_pages WHERE slug = ?').get(link.target_slug)) findings.push(`- **Broken Link**: [[${link.source_slug}]] -> [[${link.target_slug}]]`);
-  for (const file of wikiFiles) {
-    const content = fs.readFileSync(path.join(PATHS.wiki, file), 'utf-8');
-    const slug = file.replace('.md', '');
+  for (const { fullPath, slug } of wikiEntries) {
+    const content = fs.readFileSync(fullPath, 'utf-8');
     if (!content.includes('---')) findings.push(`- **Missing Header**: [[${slug}]]`);
     if (!content.includes('## Summary')) findings.push(`- **Missing Truth**: [[${slug}]]`);
     if (!content.includes('<!-- TIMELINE: append-only below this line -->')) {
-      if (options.fix) { fs.appendFileSync(path.join(PATHS.wiki, file), '\n---\n<!-- TIMELINE: append-only below this line -->\n'); console.log(`✅ Fixed separator in ${file}`); }
+      if (options.fix) { fs.appendFileSync(fullPath, '\n---\n<!-- TIMELINE: append-only below this line -->\n'); console.log(`✅ Fixed separator in ${slug}`); }
       else findings.push(`- **Missing Timeline Separator**: [[${slug}]]`);
     }
     const parts = content.split('---');
@@ -521,8 +521,9 @@ program.command('embed').description('Embed brain content').option('--all', 'Re-
 
 const page = program.command('page');
 page.command('create').argument('<slug>', 'Slug').argument('<title>', 'Title').option('-c, --content <content>', 'Truth', '').option('-t, --tags <tags>', 'Tags', '').option('-a, --aliases <aliases>', 'Aliases', '').option('-y, --type <type>', 'Type', 'concept').option('-f, --confidence <confidence>', 'Confidence', '0.5').option('-m, --mentions <mentions>', 'Mentions', '1').option('-r, --tier <tier>', 'Tier', '3').option('-s, --source <raw_id>', 'Raw source').option('-k, --claim <claim>', 'Claim').action((slug, title, options) => {
-  const filePath = path.join(PATHS.wiki, `${slug}.md`);
+  const filePath = wikiPath(slug);
   if (fs.existsSync(filePath)) { console.error(`❌ Exists`); process.exit(1); }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tags = options.tags ? options.tags.split(',').map((t: string) => t.trim()) : [];
   const aliases = options.aliases ? options.aliases.split(',').map((a: string) => a.trim()) : [];
   const body = ['---', yaml.dump({ title, slug, aliases, tags, type: options.type, confidence: Number(options.confidence), mentions: Number(options.mentions), tier: Number(options.tier), status: 'active', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), source_count: options.source ? 1 : 0 }).trim(), '---', '', `# ${title}`, '', '## Summary', options.content, '', '## Cross-References', '', '---', '<!-- TIMELINE: append-only below this line -->'].join('\n');

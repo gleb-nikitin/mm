@@ -26,7 +26,7 @@ Every raw entry is tagged with two orthogonal fields stored both in `raw_entries
 
 Filesystem layout mirrors these: `raw/<source_type>/<project>/<timestamp>.md`. Legacy flat files under `raw/*.md` are read as `source_type='raw'`, `project='unknown'`.
 
-Search and query endpoints accept optional `source_types` and `projects` filters; when either is set the wiki FTS arm is skipped and only raw-owned chunks participate (wiki pages are compiled truth and not scoped to a single project).
+Search and query endpoints accept optional `source_types` and `projects` filters. Wiki pages are compiled truth and always participate in both FTS and vector search unless `source_types` is set and explicitly excludes `wiki`. Raw chunks are filtered by `source_type` and `project` as specified.
 
 ## Operating Rules
 

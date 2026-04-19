@@ -253,23 +253,40 @@ export function chunkText(text: string, maxTokens = 400, overlapFraction = 0.2):
 // or an event's external_id, that's provenance — even if the agent didn't call
 // the CLI. Used by `brain process` retro-sweep and by `brain ingest-event`.
 
+export function wikiPath(slug: string): string {
+  return path.join(PATHS.wiki, `${slug}.md`);
+}
+
+export function walkWiki(): Array<{ fullPath: string; slug: string }> {
+  const results: Array<{ fullPath: string; slug: string }> = [];
+  function walk(dir: string) {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { walk(full); continue; }
+      if (!e.name.endsWith('.md')) continue;
+      const slug = path.relative(PATHS.wiki, full).replace(/\.md$/, '').replace(/\\/g, '/');
+      results.push({ fullPath: full, slug });
+    }
+  }
+  walk(PATHS.wiki);
+  return results;
+}
+
 export function snapshotWiki(): Map<string, number> {
   const snap = new Map<string, number>();
-  for (const f of fs.readdirSync(PATHS.wiki)) {
-    if (!f.endsWith('.md')) continue;
-    try { snap.set(f, fs.statSync(path.join(PATHS.wiki, f)).mtimeMs); } catch {}
+  for (const { fullPath, slug } of walkWiki()) {
+    try { snap.set(slug, fs.statSync(fullPath).mtimeMs); } catch {}
   }
   return snap;
 }
 
 export function detectWikiChanges(before: Map<string, number>): string[] {
   const changed: string[] = [];
-  for (const f of fs.readdirSync(PATHS.wiki)) {
-    if (!f.endsWith('.md')) continue;
-    const full = path.join(PATHS.wiki, f);
-    const now = fs.statSync(full).mtimeMs;
-    const prev = before.get(f);
-    if (prev === undefined || now > prev) changed.push(full);
+  for (const { fullPath, slug } of walkWiki()) {
+    const now = fs.statSync(fullPath).mtimeMs;
+    if ((before.get(slug) ?? -1) < now) changed.push(fullPath);
   }
   return changed;
 }
@@ -313,7 +330,7 @@ export function backfillClaimsFromTimeline(rawId: number, rawSourcePath: string,
   const rel = path.relative(BRAIN_ROOT, rawSourcePath);
   let inserted = 0;
   for (const wikiFile of wikiFiles) {
-    const slug = path.basename(wikiFile, '.md');
+    const slug = path.relative(PATHS.wiki, wikiFile).replace(/\.md$/, '').replace(/\\/g, '/');
     if (!db.prepare('SELECT 1 FROM wiki_pages WHERE slug = ?').get(slug)) continue;
     const timeline = readTimeline(wikiFile);
     for (const rawLine of timeline.split('\n')) {
@@ -335,7 +352,7 @@ export function backfillClaimsFromTimelineEvent(eventId: number, externalId: str
   const marker = `event:${externalId}`;
   let inserted = 0;
   for (const wikiFile of wikiFiles) {
-    const slug = path.basename(wikiFile, '.md');
+    const slug = path.relative(PATHS.wiki, wikiFile).replace(/\.md$/, '').replace(/\\/g, '/');
     if (!db.prepare('SELECT 1 FROM wiki_pages WHERE slug = ?').get(slug)) continue;
     const timeline = readTimeline(wikiFile);
     for (const rawLine of timeline.split('\n')) {
@@ -385,7 +402,7 @@ function buildFtsQuery(query: string): string | null {
   const terms = sanitized.split(/\s+/).filter(Boolean);
   if (terms.length === 0) return null;
 
-  return Array.from(new Set(terms)).join(' AND ');
+  return Array.from(new Set(terms)).join(' OR ');
 }
 
 function applyEventLane(results: SearchResult[], limit: number): SearchResult[] {
@@ -438,9 +455,10 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
 
   const queryEmbedding = await embed(query);
 
-  // FTS runs over the wiki search_index only. Wiki pages are project-agnostic
-  // compiled truth, so hard source/project filters skip the wiki arm entirely.
-  const ftsResults: any[] = hasFilters
+  // FTS runs over the wiki search_index. Skip only when source_types is set
+  // and 'wiki' is not among them; project filters don't apply to wiki pages.
+  const wikiExcluded = sourceTypes !== null && !sourceTypes.includes('wiki');
+  const ftsResults: any[] = wikiExcluded
     ? []
     : db.prepare(`SELECT slug, title, content, bm25(search_index) as rank FROM search_index WHERE search_index MATCH ? ORDER BY rank LIMIT 50`).all(ftsQuery) as any[];
 
@@ -457,15 +475,30 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
                WHERE c.embedding IS NOT NULL`;
     const params: any[] = [];
     if (hasFilters) {
-      // Filters imply source provenance — only raw-owned chunks can match.
-      sql += ` AND c.owner_type = 'raw'`;
-      if (sourceTypes) {
-        sql += ` AND r.source_type IN (${sourceTypes.map(() => '?').join(',')})`;
-        params.push(...sourceTypes);
-      }
-      if (projects) {
-        sql += ` AND r.project IN (${projects.map(() => '?').join(',')})`;
-        params.push(...projects);
+      // Wiki chunks are compiled truth — always include unless source_types
+      // explicitly excludes 'wiki'. Raw chunks are filtered by source/project.
+      const includeWiki = !sourceTypes || sourceTypes.includes('wiki');
+      if (includeWiki) {
+        sql += ` AND (c.owner_type = 'wiki' OR (c.owner_type = 'raw'`;
+        if (sourceTypes) {
+          sql += ` AND r.source_type IN (${sourceTypes.filter(t => t !== 'wiki').map(() => '?').join(',')})`;
+          params.push(...sourceTypes.filter(t => t !== 'wiki'));
+        }
+        if (projects) {
+          sql += ` AND r.project IN (${projects.map(() => '?').join(',')})`;
+          params.push(...projects);
+        }
+        sql += `))`;
+      } else {
+        sql += ` AND c.owner_type = 'raw'`;
+        if (sourceTypes) {
+          sql += ` AND r.source_type IN (${sourceTypes.map(() => '?').join(',')})`;
+          params.push(...sourceTypes);
+        }
+        if (projects) {
+          sql += ` AND r.project IN (${projects.map(() => '?').join(',')})`;
+          params.push(...projects);
+        }
       }
     }
     const chunks = db.prepare(sql).all(...params) as any[];
@@ -684,7 +717,7 @@ export async function embedBrain(slug?: string) {
   let count = 0;
   const pages = slug ? db.prepare('SELECT slug FROM wiki_pages WHERE slug = ?').all(slug) : db.prepare('SELECT slug FROM wiki_pages').all();
   for (const p of pages as any[]) {
-    const content = fs.readFileSync(path.join(PATHS.wiki, `${p.slug}.md`), 'utf-8');
+    const content = fs.readFileSync(wikiPath(p.slug), 'utf-8');
     const parts = content.split('<!-- TIMELINE: append-only below this line -->');
     const sections = [{ text: parts[0], type: 'wiki_truth' }, { text: (parts[1] || '').trim(), type: 'wiki_timeline' }];
     for (const sec of sections) {
