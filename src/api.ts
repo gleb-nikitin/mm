@@ -26,6 +26,7 @@ Endpoints:
 - \`/chunks?project=&limit=\`: JSON list of pending chunks_virtual.
 - \`/chunk/:id\`: JSON — reconstructed chunk content + metadata.
 - \`/artifacts-ui\`: Artifacts browser UI.
+- \`/raw-ui\`: Plain HTML dump of every table. No filters, no JS.
 
 Scoping params:
 - \`source\`: comma-separated source_types (claude, telegram, chains, docs, research, knowledge).
@@ -160,6 +161,10 @@ const server = Bun.serve({
       return serveUiFile("/artifacts.html");
     }
 
+    if (url.pathname === "/raw-ui") {
+      return new Response(renderRawDump(), { headers: { "Content-Type": "text/html" } });
+    }
+
     if (url.pathname.startsWith("/wiki/")) {
       const slug = url.pathname.replace("/wiki/", "");
       const filePath = path.join(PATHS.wiki, `${slug}.md`);
@@ -215,3 +220,104 @@ const server = Bun.serve({
 });
 
 console.log(`🚀 Brain API listening on http://localhost:${server.port}`);
+
+// --- /raw-ui: dump every row of every table. No filters, no nav, no JS. ---
+
+function esc(s: unknown): string {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function truncate(s: unknown, max = 400): string {
+  const str = String(s ?? '');
+  return str.length > max ? str.slice(0, max) + ` … (${str.length - max} more chars)` : str;
+}
+
+function dumpTable(label: string, sql: string, opts: { truncFields?: string[]; maxBody?: number } = {}): string {
+  let rows: any[];
+  try { rows = db.prepare(sql).all() as any[]; } catch (e: any) {
+    return `<section><h2>${esc(label)}</h2><p class="err">${esc(e.message)}</p></section>`;
+  }
+  if (rows.length === 0) {
+    return `<section><h2>${esc(label)} <span class="count">(0)</span></h2><p class="empty">(empty)</p></section>`;
+  }
+  const cols = Object.keys(rows[0]);
+  const truncSet = new Set(opts.truncFields || []);
+  const maxBody = opts.maxBody ?? 400;
+  const thead = cols.map(c => `<th>${esc(c)}</th>`).join('');
+  const body = rows.map(r => {
+    const tds = cols.map(c => {
+      let v: unknown = r[c];
+      if (truncSet.has(c)) v = truncate(v, maxBody);
+      return `<td>${esc(v)}</td>`;
+    }).join('');
+    return `<tr>${tds}</tr>`;
+  }).join('');
+  const openAttr = rows.length > 50 ? '' : ' open';
+  return `<section><details${openAttr}><summary><h2>${esc(label)} <span class="count">(${rows.length})</span></h2></summary><table><thead><tr>${thead}</tr></thead><tbody>${body}</tbody></table></details></section>`;
+}
+
+function renderRawDump(): string {
+  const styles = `
+    body { background: #0a0e14; color: #e6edf3; font-family: Monaco, Menlo, Consolas, monospace; font-size: 12px; margin: 0; padding: 16px; }
+    h1 { font-size: 14px; letter-spacing: 0.2em; color: #7ec8e3; margin: 0 0 16px; }
+    h2 { font-size: 13px; color: #7ec8e3; display: inline; }
+    .count { color: rgba(230,237,243,0.4); font-weight: normal; }
+    section { margin-bottom: 24px; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 12px; background: rgba(255,255,255,0.02); }
+    summary { cursor: pointer; list-style: none; outline: none; }
+    summary::-webkit-details-marker { display: none; }
+    summary::before { content: "▸ "; color: #7ec8e3; }
+    details[open] summary::before { content: "▾ "; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; }
+    th, td { border: 1px solid rgba(255,255,255,0.06); padding: 4px 6px; text-align: left; vertical-align: top; max-width: 600px; word-break: break-word; white-space: pre-wrap; }
+    th { background: rgba(126,200,227,0.06); color: #7ec8e3; font-weight: 600; }
+    tr:nth-child(even) td { background: rgba(255,255,255,0.01); }
+    .empty { color: rgba(230,237,243,0.4); font-style: italic; margin: 8px 0 0; }
+    .err { color: #f87171; margin: 8px 0 0; }
+    nav { margin-bottom: 12px; font-size: 11px; color: rgba(230,237,243,0.5); }
+    nav a { color: #7ec8e3; text-decoration: none; margin-right: 12px; }
+    nav a:hover { text-decoration: underline; }
+  `;
+  const parts: string[] = [];
+  parts.push(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Mnemonic · Raw Dump</title><style>${styles}</style></head><body>`);
+  parts.push(`<h1>MNEMONIC · RAW DUMP</h1>`);
+  parts.push(`<nav><a href="/">home</a><a href="/artifacts-ui">artifacts</a><a href="/active-ui">active agents</a><a href="/stats">stats</a></nav>`);
+
+  parts.push(dumpTable('schema_version', 'SELECT * FROM schema_version'));
+
+  parts.push(dumpTable('artifacts', 'SELECT * FROM artifacts ORDER BY id DESC'));
+  parts.push(dumpTable('artifact_sources', 'SELECT * FROM artifact_sources ORDER BY id DESC'));
+
+  parts.push(dumpTable('chunks_virtual', 'SELECT * FROM chunks_virtual ORDER BY id DESC'));
+
+  parts.push(dumpTable(
+    'raw_events',
+    'SELECT id, source_type, project, external_id, chain_id, timestamp, title, content, processed, chunked FROM raw_events ORDER BY id DESC',
+    { truncFields: ['content'], maxBody: 400 }
+  ));
+
+  parts.push(dumpTable(
+    'raw_entries',
+    'SELECT id, title, source_path, hash, source_type, project, processed, created_at, content FROM raw_entries ORDER BY id DESC',
+    { truncFields: ['content'], maxBody: 400 }
+  ));
+
+  parts.push(dumpTable('wiki_pages', 'SELECT * FROM wiki_pages ORDER BY updated_at DESC'));
+  parts.push(dumpTable('wiki_aliases', 'SELECT * FROM wiki_aliases'));
+  parts.push(dumpTable('wiki_links', 'SELECT * FROM wiki_links'));
+
+  parts.push(dumpTable('claims', 'SELECT * FROM claims ORDER BY id DESC'));
+  parts.push(dumpTable('claim_sources', 'SELECT * FROM claim_sources'));
+  parts.push(dumpTable('claim_sources_event', 'SELECT * FROM claim_sources_event'));
+
+  parts.push(dumpTable('import_state', 'SELECT * FROM import_state ORDER BY last_mtime DESC'));
+  parts.push(dumpTable(
+    'chunks',
+    "SELECT id, owner_type, page_slug, raw_id, chunk_type, substr(text, 1, 200) as text_preview, CASE WHEN embedding IS NULL THEN 0 ELSE 1 END as has_embedding, created_at FROM chunks ORDER BY id DESC"
+  ));
+
+  parts.push(dumpTable('operations_log', 'SELECT * FROM operations_log ORDER BY id DESC LIMIT 200'));
+
+  parts.push('</body></html>');
+  return parts.join('\n');
+}
