@@ -38,9 +38,6 @@ $(cat agent/roles/lib/soul-interactive.md)
 
 # CURRENT CONTEXT
 
-## Handoff
-$(cat agent/roles/lib/handoff.md 2>/dev/null || echo "No previous handoff.")
-
 ## Active Intents (project: mm)
 Durable project-level intents. Align your extraction with them. If a chunk shows a decision that contradicts an intent, emit a supersede on the intent. If an intent is clarified or narrowed, emit a new intent and supersede the old one.
 
