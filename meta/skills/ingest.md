@@ -155,6 +155,18 @@ A candidate is a `todo` when:
 
 "We should do X" where X is a concrete action is a `todo`, not a `decision` that X should happen. Decisions weigh alternatives; todos just specify the action.
 
+### Correction test
+
+A candidate is a `correction` when:
+
+- A previously held belief or behavior is explicitly revised.
+- Two shapes are first-class:
+  1. **Factual**: "X was wrong; Y is actually true" — e.g. "the table has a FK, not a plain column."
+  2. **Behavioral**: user-to-LLM operational feedback — e.g. "don't push to main", "send via Aurora not terminal text", "always stash unrelated changes before committing." These are CEO/user preferences that should persist across sessions.
+- `previous_belief` captures what was being done wrong (behavior) or believed wrong (fact).
+- `corrected_view` captures the correct behavior or fact.
+- High-count corrections (≥3) surface in the v12 briefing, so behavioral corrections are the mechanism by which user preferences propagate without restating each session.
+
 ### Re-classification rule
 
 If your first-pass extraction produces **more than two** `decision` artifacts from a single chunk, re-read every candidate decision against the decision test before emitting. Demote failures:
@@ -184,7 +196,3 @@ Most real chunks produce 0–2 decisions. More than that is the signal that over
 - [ ] Explicit `brain artifact supersede` calls only on direct contradictions.
 - [ ] Correction duplication handled via `bump-correction`.
 - [ ] `brain chunk mark-processed <id>` called.
-
-## Token budget
-
-Target ≤5% of the session window per chunk. The v10 monolithic-wiki-page model cost ~15% (most of it was markdown formatting). If your chunk takes more than 5%, you are probably re-writing when you should be emitting JSON.
