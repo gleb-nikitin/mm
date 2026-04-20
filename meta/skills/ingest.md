@@ -42,7 +42,7 @@ Emit to `brain artifact batch` with this JSON shape per artifact:
 
 | Type | `data` fields |
 |------|---------------|
-| `decision` | `statement`, `rationale`, `alternatives_rejected: [{option, why_rejected}]`, `area` |
+| `decision` | `statement`, `rationale`, **`alternatives_rejected: [{option, why_rejected}]`** (see note below), `area` |
 | `stack_decision` | `technology`, `chosen_over: [alt]`, `rationale` |
 | `bug` | `symptom`, `context`, `severity: low|medium|high`, `status: open|fixed|wontfix` |
 | `todo` | `statement`, `effort: small|medium|large`, `area` |
@@ -56,6 +56,17 @@ Emit to `brain artifact batch` with this JSON shape per artifact:
 | `future_idea` | `statement`, `why_interesting` |
 
 Unknown types pass through — the schema does not reject. Prefer the canonical types above.
+
+### On `alternatives_rejected` (critical for `decision` artifacts)
+
+A decision without its rejected alternatives loses the "why not X" context — the most valuable part of a decision log. **Always scan the chunk for the options that were discussed and dropped.** The pattern in conversation is usually one of:
+
+- "we could do X, but let's go with Y because..." → `alternatives_rejected: [{option: "X", why_rejected: "..."}]`
+- "A vs B vs C → picked B" → `alternatives_rejected: [{option: "A", why_rejected: "..."}, {option: "C", why_rejected: "..."}]`
+- Agent proposes approach X, user redirects to Y → X is rejected
+- "thought about doing it inline but moved it to a junction table" → inline is rejected
+
+If the chunk genuinely contains no alternatives (the decision was unilateral and no options were weighed), use `alternatives_rejected: []` — an empty list is still explicit. **Do not omit the field.** The empty list tells future readers "this wasn't a weighed tradeoff" as distinct from "we don't know what was considered."
 
 ## Signal calibration
 

@@ -41,6 +41,11 @@ $(cat agent/roles/lib/soul-interactive.md)
 ## Handoff
 $(cat agent/roles/lib/handoff.md 2>/dev/null || echo "No previous handoff.")
 
+## Active Intents (project: mm)
+Durable project-level intents. Align your extraction with them. If a chunk shows a decision that contradicts an intent, emit a supersede on the intent. If an intent is clarified or narrowed, emit a new intent and supersede the old one.
+
+$(bun run brain artifact keys --project mm --type intent --status active --limit 50)
+
 ## Known Artifacts (project: mm, status=active)
 Before emitting, scan this list. If your candidate artifact's idempotency_key is already here, skip it (or call \`bump-correction\` for corrections). Supersede only when the chunk shows a direct contradiction.
 
