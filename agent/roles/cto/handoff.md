@@ -20,6 +20,8 @@ Not a changelog. Not a backlog. Not history. Use git for what changed; use chain
 - **Brain content is test data.** Wipe, delete, re-ingest freely on mm. No preservation concerns on mm's raw or artifacts.
 - **Tune on mm, not on other projects.** ac has ~200 sessions of accumulated librarian work. A bad ingest pass destroys real investment. Validate changes on mm's small corpus before touching other projects.
 - **Pre-v11 docs drift.** `agent/docs/roadmap.md` and `agent/docs/todo.md` frame mm as a memory engine. Current frame: CTO-seat tool. Read them with skepticism until rewritten.
+- **Agent self-echo is a real class of failure.** If an agent-authored file (e.g. `agent/roles/lib/handoff.md`) gets injected into that agent's own session prompt, the agent reads its own prior "Next Steps" and emits artifacts for them, then re-writes similar notes. Check every briefing surface: never feed an agent its own self-maintained file. Fixed for librarian; audit v12 briefing surfaces against this rule before shipping.
+- **Stats can lie semantically.** Correct row counts can coexist with garbage signal (librarian self-reflection corrections vs real user corrections, rephrase-duplicated decisions). Validate corpus content, not just aggregates.
 
 ## Read before touching load-bearing areas
 
@@ -43,3 +45,5 @@ Not a changelog. Not a backlog. Not history. Use git for what changed; use chain
 - **`list_active_agents` synthesized view** — raw `last user turn` should become synthesized one-liner. Adjacent to v12 briefing. Spec after v12 MVP.
 - **Cross-project briefing** — unified ac_cto + mm_cto view needs project-scope trust rules. Single-project v12 first.
 - **`STATE.md`** — one-page current-system-status file. Draft after v12 MVP.
+- **Behavioral-correction skill sensitization.** `meta/skills/ingest.md` currently treats `correction` as generic "previous belief corrected." Needs explicit guidance that user-to-LLM behavioral feedback ("don't push to main", "send via Aurora not terminal") is a first-class correction shape. Small prose edit. Feeds v12 briefing's high-count correction injection — CEO preferences flow into future agent sessions without having to be re-stated each time.
+- **Structural dedup for cross-statement rephrases.** Canonical-form synonym map (C2) collapses known terms; cross-chunk rephrases of the same concept with different vocabulary still produce separate decision rows (5 atomic-pivot variants observed). Solve with either semantic-similarity collapse (Gemini audit P4) or cross-type supersession pass. Not urgent — decision overproduction hasn't yet blocked v12 briefing use.
