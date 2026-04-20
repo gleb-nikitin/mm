@@ -4,11 +4,39 @@ import {
   initDb, hybridSearch, getStats, queryBrain, validateClaim, addToBrain, PATHS,
   renderActiveAgentsMarkdown, listArtifacts, queueChunks, readChunk, db,
 } from './core.ts';
+import { filterMechanical } from './narrative.ts';
 
 // Ensure DB is ready on fresh roots
 initDb();
 
 const UI_DIR = path.resolve(new URL('../ui', import.meta.url).pathname);
+
+// --- Shared human-page nav (single source of truth). Pages opt in by
+// including the `<!--NAV-->` placeholder; serveUiFile substitutes it.
+const NAV_LINKS: { label: string; href: string }[] = [
+  { label: 'home',      href: '/' },
+  { label: 'artifacts', href: '/artifacts-ui' },
+  { label: 'chunks',    href: '/chunks-ui' },
+  { label: 'raw',       href: '/raw-ui' },
+  { label: 'active',    href: '/active-ui' },
+  { label: 'stats',     href: '/stats' },
+];
+
+const NAV_HTML = (() => {
+  const links = NAV_LINKS.map(l => `<a href="${l.href}" data-nav-href="${l.href}">${l.label}</a>`).join('');
+  const css = `
+  .mm-nav { display: flex; gap: 12px; padding: 8px 12px; margin: 0 auto 12px; max-width: 1100px;
+    font-family: 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 11px;
+    background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 6px; align-items: center; flex-wrap: wrap; box-sizing: border-box; }
+  .mm-nav a { color: #7ec8e3; text-decoration: none; text-transform: uppercase;
+    letter-spacing: 0.12em; padding: 2px 6px; border-radius: 3px; font-weight: 600; }
+  .mm-nav a:hover { background: rgba(126,200,227,0.12); }
+  .mm-nav a.active { color: #b794f6; }
+  `;
+  return `<style>${css}</style><nav class="mm-nav" data-mm-nav>${links}</nav>` +
+    `<script>(function(){var p=location.pathname;document.querySelectorAll('[data-mm-nav] a').forEach(function(a){var h=a.getAttribute('data-nav-href');if(h===p||(h.length>1&&p===h)){a.classList.add('active');}});})();</script>`;
+})();
 
 const HELP_MD = `# Brain API v0.9.0 (v11 schema)
 
@@ -25,7 +53,9 @@ Endpoints:
 - \`/artifacts?project=&type=&status=&limit=\`: JSON list of artifacts (status default: active; 'all' to disable).
 - \`/chunks?project=&limit=\`: JSON list of pending chunks_virtual.
 - \`/chunk/:id\`: JSON — reconstructed chunk content + metadata.
+- \`/artifact/:id\`: JSON — artifact row + enriched sources (each with reconstructed text span).
 - \`/artifacts-ui\`: Artifacts browser UI.
+- \`/chunks-ui\`: Chunks browser UI.
 - \`/raw-ui\`: Plain HTML dump of every table. No filters, no JS.
 
 Scoping params:
@@ -47,7 +77,11 @@ async function serveUiFile(relPath: string): Promise<Response> {
   if (!absPath.startsWith(UI_DIR)) return new Response("Forbidden", { status: 403 });
   const file = Bun.file(absPath);
   if (!(await file.exists())) return new Response("Not found", { status: 404 });
-  return new Response(file);
+  // Only HTML gets the nav injection; pass other assets through verbatim.
+  if (!relPath.endsWith('.html')) return new Response(file);
+  const text = await file.text();
+  const withNav = text.includes('<!--NAV-->') ? text.replace('<!--NAV-->', NAV_HTML) : text;
+  return new Response(withNav, { headers: { 'Content-Type': 'text/html' } });
 }
 
 const PORT = parseInt(process.env.MT_PORT || '3000', 10);
@@ -141,8 +175,24 @@ const server = Bun.serve({
 
     if (url.pathname === "/chunks") {
       const project = url.searchParams.get("project");
+      const processed = url.searchParams.get("processed"); // 'pending' | 'processed' | 'all' | null
       const limit = parseInt(url.searchParams.get("limit") || "500", 10);
-      const rows = queueChunks(project || null, limit);
+      const clauses: string[] = [];
+      const params: any[] = [];
+      if (project) { clauses.push('cv.project = ?'); params.push(project); }
+      if (processed === 'pending' || !processed) clauses.push('cv.processed = 0');
+      else if (processed === 'processed') clauses.push('cv.processed = 1');
+      const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+      const rows = db.prepare(
+        `SELECT cv.id, cv.project, cv.source_event_id, cv.chunk_index, cv.chunk_total,
+                cv.segment_start, cv.segment_end, cv.filter_version, cv.processed, cv.created_at,
+                re.external_id, re.source_type, re.timestamp as event_timestamp
+         FROM chunks_virtual cv
+         LEFT JOIN raw_events re ON re.id = cv.source_event_id
+         ${where}
+         ORDER BY cv.id DESC
+         LIMIT ?`
+      ).all(...params, limit);
       return new Response(JSON.stringify(rows), { headers: { "Content-Type": "application/json" } });
     }
 
@@ -161,8 +211,49 @@ const server = Bun.serve({
       return serveUiFile("/artifacts.html");
     }
 
+    if (url.pathname === "/chunks-ui") {
+      return serveUiFile("/chunks.html");
+    }
+
     if (url.pathname === "/raw-ui") {
       return new Response(renderRawDump(), { headers: { "Content-Type": "text/html" } });
+    }
+
+    if (url.pathname.startsWith("/artifact/")) {
+      const id = parseInt(url.pathname.replace("/artifact/", ""), 10);
+      if (!id) return new Response("Bad artifact id", { status: 400 });
+      const row = db.prepare(`SELECT * FROM artifacts WHERE id = ?`).get(id) as any;
+      if (!row) return new Response("Not found", { status: 404 });
+      const sources = db.prepare(`SELECT * FROM artifact_sources WHERE artifact_id = ? ORDER BY id ASC`).all(id) as any[];
+      const enrichedSources = sources.map(s => {
+        let text: string | null = null;
+        let kind = 'unknown';
+        let provenance: any = null;
+        if (s.source_event_id) {
+          kind = 'event';
+          const ev = db.prepare(`SELECT id, external_id, source_type, project, timestamp, content FROM raw_events WHERE id = ?`).get(s.source_event_id) as any;
+          if (ev) {
+            provenance = { id: ev.id, external_id: ev.external_id, source_type: ev.source_type, project: ev.project, timestamp: ev.timestamp, total_chars: ev.content.length };
+            const start = s.span_start ?? 0;
+            const end   = s.span_end   ?? ev.content.length;
+            text = filterMechanical(ev.content.slice(start, end));
+          }
+        } else if (s.source_raw_id) {
+          kind = 'raw';
+          const r = db.prepare(`SELECT id, title, source_path, source_type, project, content FROM raw_entries WHERE id = ?`).get(s.source_raw_id) as any;
+          if (r) {
+            provenance = { id: r.id, title: r.title, source_path: r.source_path, source_type: r.source_type, project: r.project, total_chars: r.content.length };
+            const start = s.span_start ?? 0;
+            const end   = s.span_end   ?? r.content.length;
+            text = r.content.slice(start, end);
+          }
+        }
+        return { ...s, kind, provenance, text };
+      });
+      return new Response(JSON.stringify({
+        artifact: { ...row, data: JSON.parse(row.data) },
+        sources: enrichedSources,
+      }), { headers: { "Content-Type": "application/json" } });
     }
 
     if (url.pathname.startsWith("/wiki/")) {
@@ -274,14 +365,11 @@ function renderRawDump(): string {
     tr:nth-child(even) td { background: rgba(255,255,255,0.01); }
     .empty { color: rgba(230,237,243,0.4); font-style: italic; margin: 8px 0 0; }
     .err { color: #f87171; margin: 8px 0 0; }
-    nav { margin-bottom: 12px; font-size: 11px; color: rgba(230,237,243,0.5); }
-    nav a { color: #7ec8e3; text-decoration: none; margin-right: 12px; }
-    nav a:hover { text-decoration: underline; }
   `;
   const parts: string[] = [];
   parts.push(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Mnemonic · Raw Dump</title><style>${styles}</style></head><body>`);
+  parts.push(NAV_HTML);
   parts.push(`<h1>MNEMONIC · RAW DUMP</h1>`);
-  parts.push(`<nav><a href="/">home</a><a href="/artifacts-ui">artifacts</a><a href="/active-ui">active agents</a><a href="/stats">stats</a></nav>`);
 
   parts.push(dumpTable('schema_version', 'SELECT * FROM schema_version'));
 

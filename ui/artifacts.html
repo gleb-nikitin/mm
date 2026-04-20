@@ -71,7 +71,19 @@
     .snippet { margin-top: 4px; color: var(--text); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .details { margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3); background: rgba(0,0,0,0.25); border-radius: 4px; font-size: 12px; white-space: pre-wrap; word-break: break-word; color: var(--text-muted); }
     .details strong { color: var(--text); }
-    .sources { margin-top: 4px; color: var(--accent); font-size: 11px; }
+    .sources { margin-top: var(--sp-2); color: var(--text-muted); font-size: 11px; }
+    .source-row { margin-top: 4px; padding: 4px 8px; background: rgba(255,255,255,0.02); border-left: 2px solid var(--accent); border-radius: 3px; cursor: pointer; }
+    .source-row:hover { background: rgba(126,200,227,0.08); }
+    .source-kind { color: var(--accent); font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: 0.08em; margin-right: 4px; }
+    .source-meta { color: var(--text-muted); font-size: 11px; }
+    .source-text { margin-top: 6px; padding: 8px; background: rgba(0,0,0,0.35); border-radius: 3px; font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow-y: auto; border: 1px solid var(--panel-border); }
+    .chip { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--accent-2); color: var(--accent-2); cursor: pointer; text-transform: uppercase; letter-spacing: 0.08em; }
+    .chip:hover { background: rgba(183,148,246,0.12); }
+    .artifact.highlight { animation: pulse 1.2s ease-out; }
+    @keyframes pulse {
+      0%   { background: rgba(183,148,246,0.25); }
+      100% { background: transparent; }
+    }
     .empty-state, .error-state { padding: var(--sp-6); color: var(--text-muted); text-align: center; font-style: italic; }
     .error-state { color: #f87171; }
     .nav { display: flex; gap: var(--sp-4); padding: 0 var(--sp-2); font-size: 12px; color: var(--text-muted); }
@@ -80,6 +92,7 @@
   </style>
 </head>
 <body x-data="app()" x-init="init()">
+<!--NAV-->
   <div class="app">
     <div class="title">MNEMONIC · ARTIFACTS</div>
     <div class="status-line">
@@ -87,11 +100,6 @@
       <span x-show="stats.version"> · schema v<span x-text="stats.version"></span></span>
       <span x-show="stats.artifactsActive !== null"> · <span x-text="stats.artifactsActive"></span>/<span x-text="stats.artifactsTotal"></span> active</span>
       <span x-show="stats.chunksPending !== null"> · chunks <span x-text="stats.chunksPending"></span>/<span x-text="stats.chunksTotal"></span> pending</span>
-    </div>
-    <div class="nav">
-      <a href="/">home</a>
-      <a href="/active-ui">active agents</a>
-      <a href="/stats">stats.md</a>
     </div>
 
     <div class="panel">
@@ -130,7 +138,7 @@
       <div x-show="loading" class="empty-state">Loading...</div>
       <div class="list" x-show="!error">
         <template x-for="a in visible" :key="a.id">
-          <div class="artifact" :class="{ retired: a.status !== 'active' }" @click="toggle(a.id)">
+          <div class="artifact" :id="'artifact-' + a.id" :class="{ retired: a.status !== 'active', highlight: highlightId === a.id }" @click="toggle(a.id)">
             <div class="head">
               <span class="type-badge" :class="{ retired: a.status !== 'active', correction: a.type === 'correction' }" x-text="a.type"></span>
               <span class="project" x-text="a.project"></span>
@@ -139,10 +147,40 @@
             </div>
             <div class="snippet" x-text="summarize(a)"></div>
             <template x-if="open[a.id]">
-              <div>
+              <div @click.stop>
                 <div class="details" x-html="formatData(a)"></div>
-                <div class="sources" x-show="a.source_count > 0">sources: <span x-text="a.source_count"></span></div>
-                <div class="sources" x-show="a.status !== 'active' && a.superseded_by">superseded by #<span x-text="a.superseded_by"></span></div>
+
+                <div class="sources" x-show="a.status !== 'active' && a.superseded_by">
+                  superseded by <span class="chip" @click.stop="gotoArtifact(a.superseded_by)">#<span x-text="a.superseded_by"></span> →</span>
+                </div>
+
+                <div class="sources" x-show="a.source_count > 0">
+                  sources: <span x-text="a.source_count"></span>
+                  <span x-show="loadingDetail[a.id]"> · loading...</span>
+                </div>
+                <template x-if="detail[a.id] && detail[a.id].sources.length > 0">
+                  <div>
+                    <template x-for="(s, idx) in detail[a.id].sources" :key="s.id">
+                      <div class="source-row" @click.stop="toggleSource(a.id, idx)">
+                        <span class="source-kind" x-text="s.kind"></span>
+                        <span class="source-meta" x-show="s.kind === 'event' && s.provenance">
+                          event #<span x-text="s.provenance && s.provenance.id"></span>
+                          · <span x-text="s.provenance && s.provenance.external_id"></span>
+                          · <span x-text="s.provenance && s.provenance.source_type"></span>
+                          · span [<span x-text="s.span_start === null ? 'start' : s.span_start"></span>,<span x-text="s.span_end === null ? 'end' : s.span_end"></span>]
+                        </span>
+                        <span class="source-meta" x-show="s.kind === 'raw' && s.provenance">
+                          raw #<span x-text="s.provenance && s.provenance.id"></span>
+                          · <span x-text="s.provenance && s.provenance.source_path"></span>
+                        </span>
+                        <span class="source-meta" x-show="!s.provenance">(source missing)</span>
+                        <template x-if="sourceOpen[a.id + ':' + idx] && s.text">
+                          <div class="source-text" x-text="s.text"></div>
+                        </template>
+                      </div>
+                    </template>
+                  </div>
+                </template>
               </div>
             </template>
           </div>
@@ -161,6 +199,10 @@
         projects: [],
         types: [],
         open: {},
+        detail: {},           // id → /artifact/:id response (artifact + enriched sources)
+        loadingDetail: {},    // id → bool
+        sourceOpen: {},       // 'artifactId:sourceIdx' → bool
+        highlightId: null,    // transient: scroll target highlight
         filters: { project: '', type: '', status: 'active', q: '' },
         error: null,
         loading: false,
@@ -170,6 +212,9 @@
         async init() {
           await this.loadStats();
           await this.load();
+          // If URL has #artifact-<id>, try to jump after load.
+          const m = (location.hash || '').match(/^#artifact-(\d+)$/);
+          if (m) this.gotoArtifact(parseInt(m[1], 10));
         },
 
         async loadStats() {
@@ -217,7 +262,56 @@
           });
         },
 
-        toggle(id) { this.open[id] = !this.open[id]; },
+        async toggle(id) {
+          this.open[id] = !this.open[id];
+          if (this.open[id] && !this.detail[id] && !this.loadingDetail[id]) {
+            this.loadingDetail[id] = true;
+            try {
+              const r = await fetch('/artifact/' + id);
+              if (!r.ok) throw new Error('Fetch failed: ' + r.status);
+              this.detail[id] = await r.json();
+            } catch (e) {
+              this.detail[id] = { artifact: null, sources: [] };
+            } finally { this.loadingDetail[id] = false; }
+          }
+        },
+
+        toggleSource(artifactId, idx) {
+          const k = artifactId + ':' + idx;
+          this.sourceOpen[k] = !this.sourceOpen[k];
+        },
+
+        async gotoArtifact(id) {
+          // Target may be in current rows; if not (e.g. retired hidden by filters), broaden and reload.
+          let found = this.rows.find(r => r.id === id);
+          if (!found) {
+            this.filters.status = 'all';
+            await this.load();
+            found = this.rows.find(r => r.id === id);
+          }
+          if (!found) {
+            this.error = 'Artifact #' + id + ' not found.';
+            return;
+          }
+          // Also clear substring filter if it's hiding the target.
+          if (this.filters.q) { this.filters.q = ''; this.render(); }
+          this.open[id] = true;
+          this.highlightId = id;
+          this.$nextTick(() => {
+            const el = document.getElementById('artifact-' + id);
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          });
+          setTimeout(() => { this.highlightId = null; }, 1300);
+          // Trigger detail load if needed.
+          if (!this.detail[id] && !this.loadingDetail[id]) {
+            this.loadingDetail[id] = true;
+            try {
+              const r = await fetch('/artifact/' + id);
+              this.detail[id] = await r.json();
+            } catch (e) { /* ignore */ }
+            finally { this.loadingDetail[id] = false; }
+          }
+        },
 
         summarize(a) {
           const d = a.data || {};

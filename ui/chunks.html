@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mnemonic · Chunks</title>
+  <style>
+    :root {
+      --bg: #0a0e14;
+      --panel-bg: rgba(255, 255, 255, 0.035);
+      --panel-border: rgba(255, 255, 255, 0.08);
+      --text: #e6edf3;
+      --text-muted: rgba(230, 237, 243, 0.5);
+      --accent: #7ec8e3;
+      --accent-2: #b794f6;
+      --accent-glow: rgba(126, 200, 227, 0.15);
+      --retired: rgba(230, 237, 243, 0.35);
+      --blur: 16px;
+      --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-6: 24px;
+      --r: 8px;
+      --f: 'Monaco', 'Menlo', 'Consolas', monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; min-height: 100vh; }
+    body {
+      background:
+        radial-gradient(ellipse 800px 600px at 15% 10%, rgba(126, 200, 227, 0.10) 0%, transparent 55%),
+        radial-gradient(ellipse 700px 500px at 85% 90%, rgba(183, 148, 246, 0.10) 0%, transparent 55%),
+        var(--bg);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: var(--f);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .app { display: flex; flex-direction: column; max-width: 1100px; margin: 0 auto; padding: var(--sp-6) var(--sp-4); gap: var(--sp-4); }
+    .title { font-size: 13px; font-weight: 700; letter-spacing: 0.28em; color: var(--accent); text-shadow: 0 0 12px var(--accent-glow); padding: 0 var(--sp-2); }
+    .status-line { font-size: 11px; color: var(--text-muted); padding: 0 var(--sp-2); }
+    .panel { background: var(--panel-bg); backdrop-filter: blur(var(--blur)); -webkit-backdrop-filter: blur(var(--blur)); border: 1px solid var(--panel-border); border-radius: var(--r); box-shadow: 0 4px 32px rgba(0,0,0,0.35); }
+    .filters { display: flex; gap: var(--sp-2); padding: var(--sp-3); flex-wrap: wrap; align-items: center; }
+    .filters label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; margin-right: 2px; }
+    .filters select, .filters input {
+      background: rgba(255,255,255,0.02); color: var(--text); border: 1px solid var(--panel-border);
+      border-radius: 4px; padding: 4px 8px; font-family: var(--f); font-size: 13px; min-width: 100px;
+    }
+    .filters button { background: transparent; color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 4px 10px; cursor: pointer; font-family: var(--f); font-size: 12px; }
+    .filters button:hover { background: var(--accent-glow); }
+    .counts { margin-left: auto; font-size: 11px; color: var(--text-muted); }
+
+    .list { display: flex; flex-direction: column; }
+    .chunk {
+      border-top: 1px solid var(--panel-border); padding: var(--sp-3) var(--sp-4); cursor: pointer;
+    }
+    .chunk:first-child { border-top: none; }
+    .chunk:hover { background: rgba(255,255,255,0.02); }
+    .head { display: flex; gap: var(--sp-2); align-items: baseline; flex-wrap: wrap; }
+    .badge {
+      display: inline-block; font-size: 10px; font-weight: 700; color: var(--accent);
+      border: 1px solid var(--accent); border-radius: 3px; padding: 1px 6px;
+      text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    .badge.processed { color: var(--retired); border-color: var(--retired); }
+    .badge.drift { color: #f87171; border-color: #f87171; }
+    .project { color: var(--text-muted); font-size: 11px; }
+    .meta { color: var(--text-muted); font-size: 11px; }
+    .id { color: var(--text-muted); font-size: 11px; margin-left: auto; }
+    .content {
+      margin-top: var(--sp-3);
+      padding: var(--sp-3);
+      background: rgba(0,0,0,0.3);
+      border-radius: 4px;
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 600px;
+      overflow-y: auto;
+      border: 1px solid var(--panel-border);
+    }
+    .content-meta { margin-top: var(--sp-2); font-size: 11px; color: var(--text-muted); display: flex; gap: var(--sp-4); }
+    .empty-state, .error-state { padding: var(--sp-6); color: var(--text-muted); text-align: center; font-style: italic; }
+    .error-state { color: #f87171; }
+    .loading { color: var(--text-muted); font-style: italic; padding: var(--sp-2); }
+  </style>
+</head>
+<body x-data="app()" x-init="init()">
+<!--NAV-->
+  <div class="app">
+    <div class="title">MNEMONIC · CHUNKS</div>
+    <div class="status-line">
+      <span><span x-text="visible.length"></span> / <span x-text="rows.length"></span> chunks shown</span>
+    </div>
+
+    <div class="panel">
+      <div class="filters">
+        <label>project</label>
+        <select x-model="filters.project" @change="load()">
+          <option value="">any</option>
+          <template x-for="p in projects" :key="p"><option :value="p" x-text="p"></option></template>
+        </select>
+
+        <label>processed</label>
+        <select x-model="filters.processed" @change="load()">
+          <option value="pending">pending</option>
+          <option value="processed">processed</option>
+          <option value="all">all</option>
+        </select>
+
+        <label>search</label>
+        <input type="text" x-model="filters.q" placeholder="external_id / source_type..." @input.debounce.200ms="render()" />
+
+        <button @click="load()">Refresh</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div x-show="error" class="error-state" x-text="error"></div>
+      <div x-show="!error && visible.length === 0 && !loading" class="empty-state">No chunks match these filters.</div>
+      <div x-show="loading" class="empty-state">Loading...</div>
+      <div class="list" x-show="!error">
+        <template x-for="c in visible" :key="c.id">
+          <div class="chunk" @click="toggle(c.id)">
+            <div class="head">
+              <span class="badge" :class="{ processed: c.processed }" x-text="c.processed ? 'processed' : 'pending'"></span>
+              <span class="badge drift" x-show="filterDrift(c)" title="filter_version changed since this chunk was emitted">drift</span>
+              <span class="project" x-text="c.project"></span>
+              <span class="meta">event #<span x-text="c.source_event_id"></span> · <span x-text="c.chunk_index"></span>/<span x-text="c.chunk_total"></span></span>
+              <span class="meta" x-show="c.external_id" x-text="'(' + (c.external_id || '').slice(0, 12) + ')'"></span>
+              <span class="id">#<span x-text="c.id"></span> · <span x-text="(c.segment_end - c.segment_start) + 'ch'"></span> · <span x-text="c.event_timestamp || c.created_at"></span></span>
+            </div>
+            <template x-if="open[c.id]">
+              <div>
+                <div x-show="loadingBody[c.id]" class="loading">Loading chunk content...</div>
+                <template x-if="bodies[c.id]">
+                  <div>
+                    <div class="content" x-text="bodies[c.id].content"></div>
+                    <div class="content-meta">
+                      <span>filter_version: stored <span x-text="bodies[c.id].filter_version_stored"></span> / current <span x-text="bodies[c.id].filter_version_current"></span></span>
+                      <span>chars: <span x-text="bodies[c.id].content.length"></span></span>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/alpine/cdn.min.js" defer></script>
+  <script>
+    function app() {
+      return {
+        rows: [],
+        visible: [],
+        projects: [],
+        open: {},
+        bodies: {},
+        loadingBody: {},
+        filters: { project: '', processed: 'pending', q: '' },
+        error: null,
+        loading: false,
+
+        async init() { await this.load(); },
+
+        async load() {
+          this.loading = true;
+          this.error = null;
+          try {
+            const params = new URLSearchParams();
+            if (this.filters.project) params.set('project', this.filters.project);
+            params.set('processed', this.filters.processed);
+            params.set('limit', '1000');
+            const r = await fetch('/chunks?' + params.toString());
+            if (!r.ok) throw new Error('Fetch failed: ' + r.status);
+            this.rows = await r.json();
+            this.projects = Array.from(new Set(this.rows.map(x => x.project))).sort();
+            this.render();
+          } catch (e) { this.error = e.message; }
+          finally { this.loading = false; }
+        },
+
+        render() {
+          const q = (this.filters.q || '').toLowerCase().trim();
+          if (!q) { this.visible = this.rows; return; }
+          this.visible = this.rows.filter(r => {
+            const blob = (r.external_id || '').toLowerCase() + ' ' + (r.source_type || '').toLowerCase() + ' ' + r.project.toLowerCase();
+            return blob.includes(q);
+          });
+        },
+
+        async toggle(id) {
+          this.open[id] = !this.open[id];
+          if (this.open[id] && !this.bodies[id] && !this.loadingBody[id]) {
+            this.loadingBody[id] = true;
+            try {
+              const r = await fetch('/chunk/' + id);
+              if (!r.ok) throw new Error('Fetch failed: ' + r.status);
+              this.bodies[id] = await r.json();
+            } catch (e) {
+              this.bodies[id] = { content: '(error: ' + e.message + ')', filter_version_stored: 0, filter_version_current: 0 };
+            } finally { this.loadingBody[id] = false; }
+          }
+        },
+
+        filterDrift(c) {
+          // Flag if current filter_version differs from stored. We only know
+          // stored; we fetch body to see current — but if bodies are loaded, check there.
+          const b = this.bodies[c.id];
+          return b && b.filter_version_stored !== b.filter_version_current;
+        },
+      };
+    }
+  </script>
+</body>
+</html>
