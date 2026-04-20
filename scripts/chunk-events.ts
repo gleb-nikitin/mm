@@ -203,7 +203,7 @@ const tx = db.transaction(() => {
     const groups = groupIntoChunks(segments);
     const total = groups.length;
 
-    if (rechunk && !dryRun) clearExistingChunks.run(row.id);
+    if (!dryRun) clearExistingChunks.run(row.id);
 
     for (let i = 0; i < groups.length; i++) {
       const group = groups[i];

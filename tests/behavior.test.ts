@@ -397,6 +397,52 @@ describe('chunk-events — raw_events to chunks_virtual (v11)', () => {
     expect(res.stdout).toContain('User: run the check');
     expect(res.stdout).not.toContain('ls -la');
   });
+
+  test('session grown after chunking: stale chunks cleared on next chunker run (no --rechunk)', async () => {
+    await brain(['queue']);
+    const baseTurn = (t: string) => `User: ${t}\n\nAssistant: reply ${t}`;
+    const initial = baseTurn('Q1');
+    const grown = [baseTurn('Q1'), baseTurn('Q2'), baseTurn('Q3')].join('\n\n');
+
+    const db = openDb();
+    const insertRes = db.prepare(`INSERT INTO raw_events
+      (source_type, project, external_id, timestamp, content, title, processed, chunked)
+      VALUES ('llm_chat', 'growtest', 'evt-grow-1', '2026-04-18T13:00:00Z', ?, 'Test', 0, 0)`).run(initial);
+    const evtId = Number(insertRes.lastInsertRowid);
+    db.close();
+
+    const first = await chunker(['--project', 'growtest']);
+    expect(first.code).toBe(0);
+
+    // Capture pre-grow chunk ids — the bug's signature is these specific rows surviving.
+    const db2 = openDb();
+    const preGrowIds = (db2.prepare(
+      'SELECT id FROM chunks_virtual WHERE source_event_id = ?'
+    ).all(evtId) as any[]).map((r: any) => r.id);
+    expect(preGrowIds.length).toBeGreaterThan(0);
+
+    // Mimic upsertRawEvent's chunked-reset on content-hash drift.
+    db2.prepare('UPDATE raw_events SET content = ?, chunked = 0 WHERE id = ?').run(grown, evtId);
+    db2.close();
+
+    // Default-path chunker (no --rechunk). This is the bug path.
+    const second = await chunker(['--project', 'growtest']);
+    expect(second.code).toBe(0);
+
+    const db3 = openDb();
+    const placeholders = preGrowIds.map(() => '?').join(',');
+    const staleCount = (db3.prepare(
+      `SELECT COUNT(*) as c FROM chunks_virtual
+       WHERE source_event_id = ? AND id IN (${placeholders})`
+    ).get(evtId, ...preGrowIds) as any).c;
+    const finalCount = (db3.prepare(
+      'SELECT COUNT(*) as c FROM chunks_virtual WHERE source_event_id = ?'
+    ).get(evtId) as any).c;
+    db3.close();
+
+    expect(staleCount).toBe(0);
+    expect(finalCount).toBeGreaterThan(0);
+  });
 });
 
 // ---------- ARTIFACTS (v11) ----------
