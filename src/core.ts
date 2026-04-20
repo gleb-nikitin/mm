@@ -137,7 +137,65 @@ export function initDb() {
   if (!evCols2.some(c => c.name === 'chunked')) db.run(`ALTER TABLE raw_events ADD COLUMN chunked INTEGER DEFAULT 0`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_event_chunked ON raw_events(chunked)`);
 
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 10)');
+  // v11: atomic artifacts + virtual narrative chunks. See agent/docs/2026-04-20-v11-plan.md.
+  db.run(`CREATE TABLE IF NOT EXISTS artifacts (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    project          TEXT NOT NULL,
+    type             TEXT NOT NULL,
+    data             TEXT NOT NULL,
+    idempotency_key  TEXT NOT NULL,
+    superseded_by    INTEGER,
+    status           TEXT NOT NULL DEFAULT 'active',
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (superseded_by) REFERENCES artifacts(id) ON DELETE SET NULL
+  )`);
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_idempotency ON artifacts(project, type, idempotency_key)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_artifacts_project_type ON artifacts(project, type)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_artifacts_status       ON artifacts(status)`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS artifact_sources (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_id      INTEGER NOT NULL,
+    source_raw_id    INTEGER,
+    source_event_id  INTEGER,
+    span_start       INTEGER,
+    span_end         INTEGER,
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (artifact_id)     REFERENCES artifacts(id)   ON DELETE CASCADE,
+    FOREIGN KEY (source_raw_id)   REFERENCES raw_entries(id) ON DELETE SET NULL,
+    FOREIGN KEY (source_event_id) REFERENCES raw_events(id)  ON DELETE SET NULL
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_artifact_sources_artifact ON artifact_sources(artifact_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_artifact_sources_raw      ON artifact_sources(source_raw_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_artifact_sources_event    ON artifact_sources(source_event_id)`);
+
+  try {
+    db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_fts USING fts5(
+      artifact_id UNINDEXED,
+      project     UNINDEXED,
+      type        UNINDEXED,
+      text
+    )`);
+  } catch (e) {}
+
+  db.run(`CREATE TABLE IF NOT EXISTS chunks_virtual (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    project         TEXT NOT NULL,
+    source_event_id INTEGER NOT NULL,
+    chunk_index     INTEGER NOT NULL,
+    chunk_total     INTEGER NOT NULL,
+    segment_start   INTEGER NOT NULL,
+    segment_end     INTEGER NOT NULL,
+    filter_version  INTEGER NOT NULL,
+    processed       INTEGER DEFAULT 0,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_event_id) REFERENCES raw_events(id) ON DELETE CASCADE
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_chunks_virtual_project_processed ON chunks_virtual(project, processed)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_chunks_virtual_source_event      ON chunks_virtual(source_event_id)`);
+
+  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 11)');
 }
 
 // --- Common Logic ---
@@ -737,4 +795,239 @@ export async function embedBrain(slug?: string) {
     }
   }
   return { count };
+}
+
+// --- v11: atomic artifacts, virtual chunks, safe backup ---
+
+import { FILTER_VERSION, filterMechanical } from './narrative';
+
+export type ArtifactSource = {
+  source_raw_id?: number | null;
+  source_event_id?: number | null;
+  span_start?: number | null;
+  span_end?: number | null;
+};
+
+export type ArtifactInput = {
+  project: string;
+  type: string;
+  idempotency_key: string;
+  data: Record<string, unknown>;
+  sources?: ArtifactSource[];
+};
+
+export type ArtifactUpsertResult = { id: number; created: boolean };
+
+export type ArtifactRow = {
+  id: number;
+  project: string;
+  type: string;
+  data: Record<string, unknown>;
+  idempotency_key: string;
+  superseded_by: number | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+function rowToArtifact(row: any): ArtifactRow {
+  return {
+    id: row.id,
+    project: row.project,
+    type: row.type,
+    data: JSON.parse(row.data),
+    idempotency_key: row.idempotency_key,
+    superseded_by: row.superseded_by,
+    status: row.status,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function syncArtifactFts(id: number, project: string, type: string, data: Record<string, unknown>) {
+  // Minimal projection: concat string fields into one searchable blob.
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(data)) {
+    if (v == null) continue;
+    if (typeof v === 'string') parts.push(v);
+    else parts.push(JSON.stringify(v));
+  }
+  const text = parts.join(' ');
+  try {
+    db.prepare(`DELETE FROM artifacts_fts WHERE artifact_id = ?`).run(id);
+    db.prepare(`INSERT INTO artifacts_fts (artifact_id, project, type, text) VALUES (?, ?, ?, ?)`)
+      .run(id, project, type, text);
+  } catch (e) { /* FTS optional */ }
+}
+
+function insertSources(artifactId: number, sources: ArtifactSource[] | undefined) {
+  if (!sources || sources.length === 0) return;
+  const stmt = db.prepare(
+    `INSERT INTO artifact_sources (artifact_id, source_raw_id, source_event_id, span_start, span_end)
+     VALUES (?, ?, ?, ?, ?)`
+  );
+  for (const s of sources) {
+    stmt.run(
+      artifactId,
+      s.source_raw_id ?? null,
+      s.source_event_id ?? null,
+      s.span_start ?? null,
+      s.span_end ?? null,
+    );
+  }
+}
+
+function upsertArtifactInner(input: ArtifactInput): ArtifactUpsertResult {
+  const dataJson = JSON.stringify(input.data);
+  const existing = db.prepare(
+    `SELECT id FROM artifacts WHERE project = ? AND type = ? AND idempotency_key = ?`
+  ).get(input.project, input.type, input.idempotency_key) as { id: number } | undefined;
+
+  if (existing) {
+    insertSources(existing.id, input.sources);
+    db.prepare(`UPDATE artifacts SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(existing.id);
+    return { id: existing.id, created: false };
+  }
+
+  const result = db.prepare(
+    `INSERT INTO artifacts (project, type, data, idempotency_key) VALUES (?, ?, ?, ?)`
+  ).run(input.project, input.type, dataJson, input.idempotency_key);
+  const id = Number(result.lastInsertRowid);
+  insertSources(id, input.sources);
+  syncArtifactFts(id, input.project, input.type, input.data);
+  return { id, created: true };
+}
+
+export function upsertArtifact(input: ArtifactInput): ArtifactUpsertResult {
+  return db.transaction(() => upsertArtifactInner(input))();
+}
+
+export function batchArtifacts(inputs: ArtifactInput[]): ArtifactUpsertResult[] {
+  const tx = db.transaction((items: ArtifactInput[]) => items.map(upsertArtifactInner));
+  return tx(inputs);
+}
+
+export type ArtifactListOpts = {
+  project?: string | null;
+  type?: string | null;
+  status?: string | null;
+  limit?: number;
+};
+
+export function listArtifacts(opts: ArtifactListOpts = {}): ArtifactRow[] {
+  const clauses: string[] = [];
+  const params: any[] = [];
+  if (opts.project) { clauses.push('project = ?'); params.push(opts.project); }
+  if (opts.type)    { clauses.push('type = ?');    params.push(opts.type); }
+  if (opts.status)  { clauses.push('status = ?');  params.push(opts.status); }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const limit = opts.limit && opts.limit > 0 ? opts.limit : 200;
+  const rows = db.prepare(
+    `SELECT * FROM artifacts ${where} ORDER BY id DESC LIMIT ?`
+  ).all(...params, limit) as any[];
+  return rows.map(rowToArtifact);
+}
+
+export function supersedeArtifact(oldId: number, newId: number): void {
+  const old = db.prepare(`SELECT id FROM artifacts WHERE id = ?`).get(oldId);
+  const nu  = db.prepare(`SELECT id FROM artifacts WHERE id = ?`).get(newId);
+  if (!old) throw new Error(`artifact ${oldId} not found`);
+  if (!nu)  throw new Error(`artifact ${newId} not found`);
+  db.prepare(
+    `UPDATE artifacts SET superseded_by = ?, status = 'retired', updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).run(newId, oldId);
+}
+
+export function bumpCorrection(id: number): ArtifactRow {
+  const row = db.prepare(`SELECT * FROM artifacts WHERE id = ? AND type = 'correction'`).get(id) as any;
+  if (!row) throw new Error(`correction artifact ${id} not found`);
+  const data = JSON.parse(row.data);
+  data.count = (typeof data.count === 'number' ? data.count : 0) + 1;
+  data.last_seen = new Date().toISOString();
+  db.prepare(
+    `UPDATE artifacts SET data = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).run(JSON.stringify(data), id);
+  syncArtifactFts(id, row.project, row.type, data);
+  return rowToArtifact({ ...row, data: JSON.stringify(data) });
+}
+
+export type ChunkVirtualInsert = {
+  project: string;
+  source_event_id: number;
+  chunk_index: number;
+  chunk_total: number;
+  segment_start: number;
+  segment_end: number;
+};
+
+export function insertChunkVirtual(c: ChunkVirtualInsert): number {
+  const result = db.prepare(
+    `INSERT INTO chunks_virtual
+     (project, source_event_id, chunk_index, chunk_total, segment_start, segment_end, filter_version)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(c.project, c.source_event_id, c.chunk_index, c.chunk_total, c.segment_start, c.segment_end, FILTER_VERSION);
+  return Number(result.lastInsertRowid);
+}
+
+export type ChunkRead = {
+  id: number;
+  project: string;
+  source_event_id: number;
+  chunk_index: number;
+  chunk_total: number;
+  filter_version_stored: number;
+  filter_version_current: number;
+  content: string;
+};
+
+export function readChunk(id: number): ChunkRead {
+  const row = db.prepare(`SELECT * FROM chunks_virtual WHERE id = ?`).get(id) as any;
+  if (!row) throw new Error(`chunks_virtual ${id} not found`);
+  const evt = db.prepare(`SELECT content FROM raw_events WHERE id = ?`).get(row.source_event_id) as any;
+  if (!evt) throw new Error(`raw_events ${row.source_event_id} not found`);
+  const raw: string = evt.content;
+  const slice = raw.slice(row.segment_start, row.segment_end);
+  const content = filterMechanical(slice);
+  return {
+    id: row.id,
+    project: row.project,
+    source_event_id: row.source_event_id,
+    chunk_index: row.chunk_index,
+    chunk_total: row.chunk_total,
+    filter_version_stored: row.filter_version,
+    filter_version_current: FILTER_VERSION,
+    content,
+  };
+}
+
+export function queueChunks(project: string | null, limit: number = 200) {
+  const clauses = ['processed = 0'];
+  const params: any[] = [];
+  if (project) { clauses.push('project = ?'); params.push(project); }
+  const rows = db.prepare(
+    `SELECT id, project, source_event_id, chunk_index, chunk_total, filter_version, created_at
+     FROM chunks_virtual
+     WHERE ${clauses.join(' AND ')}
+     ORDER BY id ASC
+     LIMIT ?`
+  ).all(...params, limit) as any[];
+  return rows;
+}
+
+export function markChunkProcessed(id: number): void {
+  const row = db.prepare(`SELECT id FROM chunks_virtual WHERE id = ?`).get(id);
+  if (!row) throw new Error(`chunks_virtual ${id} not found`);
+  db.prepare(`UPDATE chunks_virtual SET processed = 1 WHERE id = ?`).run(id);
+}
+
+export function vacuumBackup(target: string): void {
+  // Absolute path required by VACUUM INTO.
+  const abs = path.isAbsolute(target) ? target : path.resolve(target);
+  if (fs.existsSync(abs)) fs.unlinkSync(abs);
+  try {
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  } catch (e) { /* best-effort checkpoint */ }
+  // Parameterize path through a literal; VACUUM INTO only accepts string literals.
+  const escaped = abs.replace(/'/g, "''");
+  db.exec(`VACUUM INTO '${escaped}'`);
 }

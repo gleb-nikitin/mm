@@ -1,33 +1,23 @@
 #!/usr/bin/env bun
 //
-// scripts/chunk-events.ts — Narrative Chunker.
-//
-// Bridges `raw_events` (DB, streaming) and `raw_entries` (disk, durable).
+// scripts/chunk-events.ts — Narrative chunker (v11: DB-only emission).
 //
 // For every row in `raw_events` where `chunked = 0` AND `processed = 0`,
-// split the session content at turn boundaries ("User:" / "A:" / "Assistant:")
-// into ~12KB chunks and write them to
-// `raw/events/<project>/<timestamp>-<idprefix>[-NNofMM].md`.
+// split the session content at turn boundaries into ~12KB windows. Each
+// window becomes one row in `chunks_virtual` carrying raw char offsets into
+// `raw_events.content`. No files are written to `raw/events/`.
 //
-// Each chunk file has provenance frontmatter pointing back to the originating
-// event (external_id). Once a row is chunked, set `chunked = 1` so the next
-// pass is idempotent. The librarian consumes the resulting raw/ files through
-// the existing `brain index rebuild` → `raw_entries` pipeline.
+// Reading back: `brain chunk read <id>` slices raw content and re-applies
+// `filterMechanical` at the current FILTER_VERSION.
 //
 // Usage:
-//   bun scripts/chunk-events.ts                    # all projects, unchunked + unprocessed
-//   bun scripts/chunk-events.ts --project mm       # scope to one project
-//   bun scripts/chunk-events.ts --dry-run          # preview, don't write
-//   bun scripts/chunk-events.ts --rechunk          # ignore the `chunked` flag
-//   bun scripts/chunk-events.ts --include-processed
-//                                                  # chunk rows that were already
-//                                                  # wiki-ingested via `ingest-event`
-//                                                  # (useful for evaluating the new
-//                                                  # chunker against historical data)
+//   bun scripts/chunk-events.ts
+//   bun scripts/chunk-events.ts --project mm
+//   bun scripts/chunk-events.ts --dry-run
+//   bun scripts/chunk-events.ts --rechunk              # clear old chunks_virtual, re-emit
+//   bun scripts/chunk-events.ts --include-processed    # chunk rows already wiki-ingested
 
-import * as fs from 'fs';
-import * as path from 'path';
-import { db, PATHS, initDb } from '../src/core.ts';
+import { db, initDb, insertChunkVirtual } from '../src/core.ts';
 
 initDb();
 
@@ -40,8 +30,8 @@ const dryRun = args.includes('--dry-run');
 const rechunk = args.includes('--rechunk');
 const includeProcessed = args.includes('--include-processed');
 
-const TARGET_CHUNK = 12_000; // soft target: once we pass this at a turn boundary, close.
-const MAX_CHUNK = 18_000;    // hard ceiling: never exceed this.
+const TARGET_CHUNK = 12_000;
+const MAX_CHUNK = 18_000;
 
 type EventRow = {
   id: number;
@@ -50,11 +40,10 @@ type EventRow = {
   project: string;
   timestamp: string;
   content: string;
-  title: string | null;
 };
 
 function fetchRows(project: string | null, rechunk: boolean, includeProcessed: boolean): EventRow[] {
-  let sql = `SELECT id, external_id, source_type, project, timestamp, content, title
+  let sql = `SELECT id, external_id, source_type, project, timestamp, content
              FROM raw_events
              WHERE 1 = 1`;
   const params: any[] = [];
@@ -65,80 +54,111 @@ function fetchRows(project: string | null, rechunk: boolean, includeProcessed: b
   return db.prepare(sql).all(...params) as EventRow[];
 }
 
-// Split content into turn-bounded segments. A turn starts with a line matching
-// the role markers used by the importers. Content before the first marker (rare,
-// usually empty) becomes a leading segment of its own.
-function splitOnTurns(content: string): string[] {
+type Span = { start: number; end: number };
+
+// Turn-aware segmentation that preserves raw offsets. A turn starts with a
+// line matching the role markers emitted by the importers. The span ends
+// immediately before the next role marker (or at EOF).
+function splitOnTurnsWithOffsets(content: string): Span[] {
   const roleRe = /^(User|A|Assistant|Human):\s*/;
   const lines = content.split('\n');
-  const segments: string[] = [];
-  let cur: string[] = [];
-  for (const line of lines) {
-    if (roleRe.test(line) && cur.length > 0) {
-      segments.push(cur.join('\n').replace(/\n+$/, ''));
-      cur = [line];
-    } else {
-      cur.push(line);
+  const segments: Span[] = [];
+
+  let cursor = 0;
+  let currentStart: number | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineStart = cursor;
+    const lineEnd = cursor + line.length;
+    // Advance cursor for the next iteration (include the '\n' except on last line).
+    cursor = lineEnd + (i < lines.length - 1 ? 1 : 0);
+
+    if (roleRe.test(line)) {
+      if (currentStart !== null) {
+        segments.push({ start: currentStart, end: lineStart > currentStart ? lineStart - 1 : currentStart });
+      }
+      currentStart = lineStart;
+    } else if (currentStart === null) {
+      // Leading prose before any role marker — start a segment.
+      currentStart = lineStart;
     }
   }
-  if (cur.length > 0) segments.push(cur.join('\n').replace(/\n+$/, ''));
-  return segments.filter(s => s.length > 0);
+
+  if (currentStart !== null && currentStart < content.length) {
+    segments.push({ start: currentStart, end: content.length });
+  }
+
+  return segments.filter(s => s.end > s.start);
 }
 
-// A single turn can exceed MAX_CHUNK (log pastes, giant tool output). Split
-// oversized turns first on paragraph boundaries, then on line boundaries, then
-// as a last resort, hard cuts. Preserves ordering; marks non-head pieces with
-// `[cont.]` so the reader knows the break is mechanical.
-function subsplitOversized(seg: string, limit: number): string[] {
-  if (seg.length <= limit) return [seg];
-  const out: string[] = [];
+// Oversized segment: split into sub-spans each ≤ limit, covering [seg.start, seg.end]
+// contiguously with no overlaps. Prefer paragraph boundaries, then line boundaries,
+// then hard cuts.
+function subsplitOversized(seg: Span, content: string, limit: number): Span[] {
+  if (seg.end - seg.start <= limit) return [seg];
 
-  const push = (piece: string, isHead: boolean) => {
-    out.push(isHead ? piece : `[cont.] ${piece}`);
-  };
-
-  const greedyJoin = (parts: string[], joiner: string, isHead: boolean): boolean => {
-    let cur = '';
-    let head = isHead;
-    for (const p of parts) {
-      if (p.length > limit) return false; // individual piece too big for this granularity
-      const candidate = cur ? cur + joiner + p : p;
-      if ((head ? candidate.length : candidate.length + 8) > limit) {
-        push(cur, head); head = false; cur = p;
-      } else {
-        cur = candidate;
-      }
+  // Collect candidate break offsets (absolute, into `content`). Always include
+  // seg.end as the final break so the loop closes cleanly.
+  const text = content.slice(seg.start, seg.end);
+  const collect = (rx: RegExp, takeEnd: boolean): number[] => {
+    const out: number[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = rx.exec(text)) !== null) {
+      out.push(seg.start + (takeEnd ? m.index + m[0].length : m.index));
+      if (m.index === rx.lastIndex) rx.lastIndex++;
     }
-    if (cur) push(cur, head);
-    return true;
+    return out;
   };
 
-  const paras = seg.split(/\n\n+/);
-  if (paras.length > 1 && greedyJoin(paras, '\n\n', true)) return out;
+  const trySplit = (breaks: number[]): Span[] | null => {
+    const spans: Span[] = [];
+    let start = seg.start;
+    while (start < seg.end) {
+      const remaining = seg.end - start;
+      if (remaining <= limit) {
+        spans.push({ start, end: seg.end });
+        break;
+      }
+      // Largest break strictly greater than start and <= start + limit.
+      let pick = -1;
+      for (const b of breaks) {
+        if (b > start && b - start <= limit) pick = b;
+        else if (b - start > limit) break;
+      }
+      if (pick <= start) return null;
+      spans.push({ start, end: pick });
+      start = pick;
+    }
+    return spans.length > 0 ? spans : null;
+  };
 
-  out.length = 0;
-  const lines = seg.split('\n');
-  if (lines.length > 1 && greedyJoin(lines, '\n', true)) return out;
+  const paraBreaks = collect(/\n\n+/g, true);
+  const paraAttempt = paraBreaks.length > 0 ? trySplit(paraBreaks) : null;
+  if (paraAttempt) return paraAttempt;
 
-  out.length = 0;
-  let head = true;
-  for (let i = 0; i < seg.length; i += limit - (head ? 0 : 8)) {
-    push(seg.slice(i, i + limit - (head ? 0 : 8)), head);
-    head = false;
+  const lineBreaks = collect(/\n/g, true);
+  const lineAttempt = lineBreaks.length > 0 ? trySplit(lineBreaks) : null;
+  if (lineAttempt) return lineAttempt;
+
+  // Hard cuts
+  const out: Span[] = [];
+  let start = seg.start;
+  while (start < seg.end) {
+    const end = Math.min(start + limit, seg.end);
+    out.push({ start, end });
+    start = end;
   }
   return out;
 }
 
-// Greedy group of segments into chunks. Never split a segment (turn).
-// Close a chunk when the running length exceeds TARGET_CHUNK, unless the
-// next segment would overflow MAX_CHUNK alone (in which case the oversized
-// segment becomes its own chunk).
-function groupIntoChunks(segments: string[]): string[][] {
-  const chunks: string[][] = [];
-  let cur: string[] = [];
+// Greedy group of segments into chunks. Never splits a segment.
+function groupIntoChunks(segments: Span[]): Span[][] {
+  const chunks: Span[][] = [];
+  let cur: Span[] = [];
   let curLen = 0;
   for (const seg of segments) {
-    const segLen = seg.length + 2; // +2 for the "\n\n" separator we'll use on join
+    const segLen = seg.end - seg.start + 2; // +2 for join gap
     if (cur.length > 0 && curLen + segLen > MAX_CHUNK) {
       chunks.push(cur);
       cur = [];
@@ -156,48 +176,6 @@ function groupIntoChunks(segments: string[]): string[][] {
   return chunks;
 }
 
-function timestampSlug(iso: string): string {
-  // "2026-04-17T21:35:18.141Z" → "2026-04-17T21-35-18-141Z"
-  return iso.replace(/[:.]/g, '-');
-}
-
-function idPrefix(externalId: string | null): string {
-  if (!externalId) return 'no-id';
-  const head = externalId.split('-')[0] || externalId;
-  return head.slice(0, 8);
-}
-
-function renderChunk(row: EventRow, chunkSegs: string[], index: number, total: number): string {
-  const title = `Session ${row.external_id ?? row.id} (${index}/${total})`;
-  const body = chunkSegs.join('\n\n');
-  return [
-    '---',
-    `title: "${title}"`,
-    `source_type: events`,
-    `project: ${row.project}`,
-    `event_external_id: ${row.external_id ?? ''}`,
-    `event_db_id: ${row.id}`,
-    `event_source_type: ${row.source_type}`,
-    `event_timestamp: ${row.timestamp}`,
-    `chunk_index: ${index}`,
-    `chunk_total: ${total}`,
-    '---',
-    '',
-    `# ${title}`,
-    '',
-    body,
-    '',
-    '---',
-    '',
-    '## Provenance',
-    '',
-    `- event:${row.external_id ?? row.id} (chunk ${index} of ${total})`,
-    `- source_type: ${row.source_type}`,
-    `- timestamp: ${row.timestamp}`,
-    '',
-  ].join('\n');
-}
-
 const rows = fetchRows(projectArg, rechunk, includeProcessed);
 if (rows.length === 0) {
   console.log(`Chunker: nothing to do (project=${projectArg ?? 'all'}, rechunk=${rechunk}, include-processed=${includeProcessed}).`);
@@ -205,50 +183,43 @@ if (rows.length === 0) {
 }
 
 const markChunked = db.prepare(`UPDATE raw_events SET chunked = 1 WHERE id = ?`);
+const clearExistingChunks = db.prepare(`DELETE FROM chunks_virtual WHERE source_event_id = ?`);
 
 let eventsProcessed = 0;
 let chunksWritten = 0;
-let filesSkipped = 0;
 
 const tx = db.transaction(() => {
   for (const row of rows) {
-    const rawSegments = splitOnTurns(row.content);
-    if (rawSegments.length === 0) { continue; }
+    const rawSegments = splitOnTurnsWithOffsets(row.content);
+    if (rawSegments.length === 0) continue;
 
-    const segments: string[] = [];
+    const segments: Span[] = [];
     for (const seg of rawSegments) {
-      if (seg.length <= MAX_CHUNK) segments.push(seg);
-      else segments.push(...subsplitOversized(seg, MAX_CHUNK));
+      const len = seg.end - seg.start;
+      if (len <= MAX_CHUNK) segments.push(seg);
+      else segments.push(...subsplitOversized(seg, row.content, MAX_CHUNK));
     }
 
-    const chunks = row.content.length <= MAX_CHUNK
-      ? [segments]
-      : groupIntoChunks(segments);
+    const groups = groupIntoChunks(segments);
+    const total = groups.length;
 
-    const outDir = path.join(PATHS.raw, 'events', row.project);
-    if (!dryRun) fs.mkdirSync(outDir, { recursive: true });
+    if (rechunk && !dryRun) clearExistingChunks.run(row.id);
 
-    const tsSlug = timestampSlug(row.timestamp);
-    const idp = idPrefix(row.external_id);
-    const total = chunks.length;
-
-    for (let i = 0; i < chunks.length; i++) {
-      const partSuffix = total > 1
-        ? `-${String(i + 1).padStart(2, '0')}of${String(total).padStart(2, '0')}`
-        : '';
-      const fname = `${tsSlug}-${idp}${partSuffix}.md`;
-      const fpath = path.join(outDir, fname);
-
-      if (fs.existsSync(fpath) && !rechunk) {
-        filesSkipped++;
-        continue;
-      }
-
-      const content = renderChunk(row, chunks[i], i + 1, total);
+    for (let i = 0; i < groups.length; i++) {
+      const group = groups[i];
+      const segmentStart = group[0].start;
+      const segmentEnd = group[group.length - 1].end;
       if (dryRun) {
-        console.log(`[dry-run] would write ${path.relative(PATHS.raw, fpath)} (${content.length} chars)`);
+        console.log(`[dry-run] event ${row.id} chunk ${i + 1}/${total} span=[${segmentStart}, ${segmentEnd}] (${segmentEnd - segmentStart} chars)`);
       } else {
-        fs.writeFileSync(fpath, content);
+        insertChunkVirtual({
+          project: row.project,
+          source_event_id: row.id,
+          chunk_index: i + 1,
+          chunk_total: total,
+          segment_start: segmentStart,
+          segment_end: segmentEnd,
+        });
       }
       chunksWritten++;
     }
@@ -260,4 +231,4 @@ const tx = db.transaction(() => {
 
 tx();
 
-console.log(`✅ Chunker: ${eventsProcessed} events → ${chunksWritten} chunks written${filesSkipped ? `, ${filesSkipped} existing skipped` : ''}${dryRun ? ' (dry-run)' : ''}.`);
+console.log(`✅ Chunker: ${eventsProcessed} events → ${chunksWritten} chunks_virtual rows${dryRun ? ' (dry-run)' : ''}.`);

@@ -1,86 +1,86 @@
 ---
 name: ingest
-description: Read one raw chunk once and extract all valuable content into the relevant wiki pages in a single pass.
+description: Read one chunk. Extract every signal as atomic artifact rows in a single batch. No wiki-page maintenance.
 ---
 
-# Skill: Ingest
+# Skill: Ingest (v11 — atomic artifacts)
 
-Read a chunk once. Extract everything useful. Append to the right pages. One pass, no waste.
+One chunk → one scan → one `brain artifact batch` call → `brain chunk mark-processed`.
 
-## The Extraction Buckets
-
-For each chunk, check each category. Append findings to the wiki page. Skip categories with no signal — that is valid.
-
-| Category | Wiki Page | What to capture |
-|----------|-----------|-----------------|
-| Decisions | `wiki/<project>/Arch_Decisions.md` | What was chosen, what was rejected, why |
-| Bugs | `wiki/<project>/Known_Bugs.md` | Defects found, broken behaviors, unexpected edge cases |
-| Tasks | `wiki/<project>/Future_Tasks.md` | Concrete work items discussed, improvements planned |
-| Friction | `wiki/<project>/Friction_Points.md` | Pain points, repeated complaints, workflow blockers |
-| Code changes | `wiki/<project>/Code_Changes.md` | Important logic changes, refactors, new behavior |
-| How it works | `wiki/<project>/How_It_Works_Now.md` | Current behavior explained, architecture clarified |
-| User info | `wiki/<project>/User_Notes.md` | Context the user shares about themselves, preferences, situation |
-| Corrections | `wiki/<project>/Corrections.md` | Wrong assumptions fixed, better tools or approaches identified |
-| Future ideas | `wiki/<project>/Future_Ideas.md` | Visions, plans, "someday" thoughts not yet concrete tasks |
+No wiki files. No markdown append. No file I/O at all. The DB is operational memory.
 
 ## Workflow
 
-1. Read the chunk: `bun run brain read-raw <id>`. Note its `source_type`, `project`, path.
-2. Scan for signal. Most chunks have 2–4 populated categories. Many have zero — mark processed and move on.
-3. For each category with signal:
-   - Open the wiki page (create if it doesn't exist — see format below).
-   - Append one or more bullet entries under `<!-- ENTRIES: append-only below this line -->`.
-4. Mark processed: `bun run brain mark-processed <id>`.
-5. Log: one line to `meta/log.md`.
+1. **Read the chunk**: `bun run brain chunk read <id>`. Metadata goes to stderr, content to stdout.
+2. **Scan for signal** across the artifact types below. Most chunks have 2–4 populated types. Many have none — that is valid.
+3. **Compute a stable `idempotency_key`** per artifact: `<type>:<project>:<slug-of-core-field>` (e.g. `decision:mm:chunks-virtual-only`). Re-reading the same chunk must produce the same keys so `brain artifact batch` deduplicates.
+4. **Emit ONE `brain artifact batch` call** with all artifacts from this chunk. Pipe JSON to stdin. Core-side upsert handles dedup — do NOT call `artifact list` first.
+5. **Explicit supersession only**: if the chunk itself shows a direct contradiction with a known active artifact (the user or agent says "we previously decided X, but now…"), emit `brain artifact supersede <old-id> <new-id>` after the batch. Do not scan the artifact table hunting for implicit contradictions.
+6. **Corrections**: before emitting a new `correction`, call `brain artifact list --project <p> --type correction` and match on `previous_belief` / `corrected_view`. If matched, call `brain artifact bump-correction <id>` instead of creating a duplicate.
+7. **Mark consumed**: `bun run brain chunk mark-processed <id>`.
 
-## Entry format
+## Artifact types
 
-```
-- **YYYY-MM-DD** [project]: <1–2 sentences of substance>. Source: `raw/<source_type>/<project>/<file>.md`
-```
+Emit to `brain artifact batch` with this JSON shape per artifact:
 
-Dense. No padding. The substance is the value.
-
-## Page format (when creating)
-
-```markdown
----
-title: <Title>
-slug: <Slug>
-tags: [extracted]
-type: analysis
-status: active
-created_at: <date>
-updated_at: <date>
----
-
-# <Title>
-
-<!-- ENTRIES: append-only below this line -->
+```json
+{
+  "project": "mm",
+  "type": "<type>",
+  "idempotency_key": "<stable-key>",
+  "sources": [
+    { "source_event_id": <raw_events.id>, "span_start": <int|null>, "span_end": <int|null> }
+  ],
+  "data": { ... type-specific fields below ... }
+}
 ```
 
-No Summary section. No Cross-References. Just the growing entry log.
+`sources` carries provenance — at minimum include the `source_event_id` of the event this chunk came from (see chunk read's stderr metadata). If the artifact draws on multiple chunks' worth of context, include one source entry per chunk.
+
+### Per-type `data` shapes
+
+| Type | `data` fields |
+|------|---------------|
+| `decision` | `statement`, `rationale`, `alternatives_rejected: [{option, why_rejected}]`, `area` |
+| `stack_decision` | `technology`, `chosen_over: [alt]`, `rationale` |
+| `bug` | `symptom`, `context`, `severity: low|medium|high`, `status: open|fixed|wontfix` |
+| `todo` | `statement`, `effort: small|medium|large`, `area` |
+| `intent` | `statement`, `horizon: session|milestone|project`, `alignment_check` |
+| `howto` | `problem`, `steps: [string]`, `verification` |
+| `tool_error` | `tool`, `error_message`, `agent_reasoning`, `resolution` |
+| `code_doc` | `area`, `summary`, `components: [{name, role}]` |
+| `correction` | `previous_belief`, `corrected_view`, `count` (initial: 1), `last_seen` (ISO date) |
+| `friction` | `pattern`, `frequency_estimate`, `first_seen` |
+| `user_note` | `note` |
+| `future_idea` | `statement`, `why_interesting` |
+
+Unknown types pass through — the schema does not reject. Prefer the canonical types above.
 
 ## Signal calibration
 
 **Capture:**
-- User explicitly states a decision, bug, plan, or correction
-- Agent proposes an approach and user agrees
-- Something breaks or is identified as wrong
-- User shares personal context, preferences, or situation
-- User mentions a future idea or vision
-- A better tool or method is identified for something done a harder way
+- User explicitly states a decision, bug, todo, or correction.
+- Agent proposes an approach and user agrees — that's a `decision`.
+- Error, unexpected behavior, or broken assumption — `bug` or `tool_error`.
+- User shares personal context, preferences, or intent — `user_note` or `intent`.
+- User mentions a vision or plan that's not yet concrete — `future_idea`.
+- A better tool or method replaces a worse one — `correction`.
 
 **Skip:**
-- Tool call output, file contents echoed back
-- Routine confirmations ("looks good", "ok", "done")
-- Context-setting that restates already-known facts
-- Pure debugging back-and-forth with no conclusion reached
+- Routine confirmations ("looks good", "ok", "done").
+- Context-setting that restates already-known facts.
+- Pure debugging back-and-forth with no conclusion reached — wait for the conclusion.
+- Output that duplicates an artifact already known to be in the DB from this same chunk.
 
 ## Completion checklist
 
-- [ ] Chunk read.
-- [ ] Each populated category appended to its page.
-- [ ] Empty categories skipped — not forced.
-- [ ] `brain mark-processed <id>` called.
-- [ ] One line in `meta/log.md`.
+- [ ] `brain chunk read <id>` called.
+- [ ] Each populated type emitted with a stable `idempotency_key` and at least one `sources` entry.
+- [ ] Single `brain artifact batch` call per chunk (not one call per artifact).
+- [ ] Explicit `brain artifact supersede` calls only where the chunk shows a direct contradiction.
+- [ ] Correction duplication handled via `bump-correction`.
+- [ ] `brain chunk mark-processed <id>` called.
+
+## Token budget
+
+Target ≤5% of the session window per chunk. The v10 monolithic-wiki-page model cost ~15% (most of it was markdown formatting). If your chunk takes more than 5%, you are probably re-writing when you should be emitting JSON.
