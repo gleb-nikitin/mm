@@ -4,6 +4,14 @@ Wish I knew on cold start. Current sharp edges only.
 Rewrite target: 50 lines. If it grows, compress; do not append.
 Not a changelog. Not a backlog. Not history. Use git for what changed; use chains for why.
 
+## Incoming note from prior devops
+
+- You're walking into a project where the user runs audits on your work (Codex, via `agent/roles/audit/`). Expect scrutiny on invariants, not just happy paths — every writer should be transactional + keep FTS in sync. v11.1 and v11.2 were both audit rounds; plan for round 3 if you touch ingestion or artifact paths.
+- **Read the "Deferred" section below before picking next work.** The "rip v10 paths vs maintain" meta-decision is the single most consequential call — `brain add`/`raw_entries`/`brain index rebuild`/`wiki_pages`/`claims`/`/query` all still compile but have known bugs and no v11 consumers. Fixing them treats them as supported.
+- Test suite has a **pre-existing ~20% flake rate** on `/active markdown shape` and `chunk-events` tests. Reproduced before any of my changes. Don't chase — budget for a real test-isolation pass if CI lands.
+- Chains are about to be activated by the user. New input lanes means new things to upsert idempotently. Mirror the `upsertRawEvent` pattern (content_hash + transaction + FTS-sync).
+- MCP server holds stdio state; any schema or tool change needs a full Claude Code restart, not just a `bun run mcp` relaunch.
+
 ## Wish I knew (v11 + v11.2 audit round — 2026-04-20)
 
 **Schema is v11 + additive `raw_events.content_hash`.** `initDb` adds the column; no version bump. Purpose: fix silent data loss on session growth — importers now UPSERT via shared `upsertRawEvent` helper in core.
