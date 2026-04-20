@@ -12,6 +12,9 @@ import {
   snapshotWiki, detectWikiChanges, timelineCitesRaw, timelineCitesEvent,
   backfillClaimsFromTimeline, backfillClaimsFromTimelineEvent, refreshSourceCount,
   walkWiki, wikiPath,
+  batchArtifacts, listArtifacts, supersedeArtifact, bumpCorrection,
+  readChunk, queueChunks, markChunkProcessed, vacuumBackup,
+  type ArtifactInput,
 } from './core.ts';
 
 const program = new Command();
@@ -564,5 +567,114 @@ indexCmd.command('rebuild-markdown').action(() => internalRebuildMarkdownIndex()
 
 const timelineCmd = program.command('timeline');
 timelineCmd.command('rebuild').action(() => internalRebuildTimeline());
+
+// --- v11: artifact + chunk + backup ---
+
+async function readAllStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin as any) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString('utf-8');
+}
+
+const artifactCmd = program.command('artifact');
+
+artifactCmd.command('batch')
+  .description('Upsert artifacts from a JSON array on stdin (idempotent by (project, type, idempotency_key))')
+  .action(async () => {
+    const raw = await readAllStdin();
+    if (!raw.trim()) { console.error('empty stdin'); process.exit(1); }
+    let inputs: ArtifactInput[];
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) throw new Error('expected JSON array');
+      inputs = parsed;
+    } catch (e: any) {
+      console.error(`invalid JSON: ${e.message}`);
+      process.exit(1);
+      return;
+    }
+    for (const a of inputs) {
+      if (!a.project || !a.type || !a.idempotency_key || !a.data) {
+        console.error('each artifact needs project, type, idempotency_key, data');
+        process.exit(1);
+      }
+    }
+    const results = batchArtifacts(inputs);
+    console.log(JSON.stringify(results, null, 2));
+  });
+
+artifactCmd.command('list')
+  .option('-p, --project <project>', 'Filter by project')
+  .option('-t, --type <type>', 'Filter by type')
+  .option('-s, --status <status>', 'Filter by status (active|retired|invalid)')
+  .option('-l, --limit <n>', 'Limit results', '200')
+  .action((opts) => {
+    const rows = listArtifacts({
+      project: opts.project ?? null,
+      type: opts.type ?? null,
+      status: opts.status ?? null,
+      limit: parseInt(opts.limit, 10) || 200,
+    });
+    console.log(JSON.stringify(rows, null, 2));
+  });
+
+artifactCmd.command('supersede')
+  .argument('<oldId>', 'Old artifact id (will be retired)')
+  .argument('<newId>', 'New artifact id (will supersede)')
+  .action((oldId, newId) => {
+    supersedeArtifact(parseInt(oldId, 10), parseInt(newId, 10));
+    console.log(`superseded ${oldId} → ${newId}`);
+  });
+
+artifactCmd.command('bump-correction')
+  .argument('<id>', 'Correction artifact id')
+  .action((id) => {
+    const row = bumpCorrection(parseInt(id, 10));
+    console.log(JSON.stringify({ id: row.id, count: (row.data as any).count, last_seen: (row.data as any).last_seen }, null, 2));
+  });
+
+const chunkCmd = program.command('chunk');
+
+chunkCmd.command('read')
+  .argument('<id>', 'chunks_virtual.id')
+  .action((id) => {
+    const chunk = readChunk(parseInt(id, 10));
+    // Print content to stdout; metadata to stderr so piping stays clean.
+    process.stderr.write(JSON.stringify({
+      id: chunk.id,
+      project: chunk.project,
+      source_event_id: chunk.source_event_id,
+      chunk_index: chunk.chunk_index,
+      chunk_total: chunk.chunk_total,
+      filter_version_stored: chunk.filter_version_stored,
+      filter_version_current: chunk.filter_version_current,
+    }) + '\n');
+    process.stdout.write(chunk.content);
+  });
+
+chunkCmd.command('queue')
+  .option('-p, --project <project>', 'Filter by project')
+  .option('-l, --limit <n>', 'Limit results', '200')
+  .action((opts) => {
+    const rows = queueChunks(opts.project ?? null, parseInt(opts.limit, 10) || 200);
+    console.log(JSON.stringify(rows, null, 2));
+  });
+
+chunkCmd.command('mark-processed')
+  .argument('<id>', 'chunks_virtual.id')
+  .action((id) => {
+    markChunkProcessed(parseInt(id, 10));
+    console.log(`marked ${id} processed`);
+  });
+
+program.command('backup')
+  .description('Safe hot-DB backup: wal_checkpoint(TRUNCATE) + VACUUM INTO')
+  .option('-t, --target <path>', 'Backup target path', path.join(PATHS.meta, 'brain.db.bk'))
+  .action((opts) => {
+    vacuumBackup(opts.target);
+    console.log(`backup → ${opts.target}`);
+  });
 
 program.parse();
