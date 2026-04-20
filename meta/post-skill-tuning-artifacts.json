@@ -1,0 +1,1761 @@
+[
+  {
+    "id": 220,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Use --resume for Librarian sessions to combine state persistence with automatic context compression.",
+      "horizon": "session"
+    },
+    "idempotency_key": "intent:mm:resume-session-strategy",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:58:45",
+    "updated_at": "2026-04-20 18:58:45"
+  },
+  {
+    "id": 219,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Focus on tracking feature narratives from intent to implementation and identifying drift between independent development chains.",
+      "horizon": "project"
+    },
+    "idempotency_key": "intent:mm:chain-continuity-drift-detection",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:58:45",
+    "updated_at": "2026-04-20 18:58:45"
+  },
+  {
+    "id": 218,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Adopt chain-oriented development in Mnemonic51.",
+      "rationale": "Provides clear session boundaries and narrative continuity, making feature evolution easier for agents to track and synthesize.",
+      "area": "workflow"
+    },
+    "idempotency_key": "decision:mm:chain-oriented-development",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:58:45",
+    "updated_at": "2026-04-20 18:58:45"
+  },
+  {
+    "id": 217,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Elevate the Librarian from a passive truth-extractor to a Strategic Collaborator.",
+      "rationale": "Empowers the Librarian to proactively identify architectural gaps, propose future ideas, and drive project strategy based on its holistic view of the narrative stream.",
+      "area": "roles"
+    },
+    "idempotency_key": "decision:mm:librarian-as-strategic-collaborator",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:58:45",
+    "updated_at": "2026-04-20 18:58:45"
+  },
+  {
+    "id": 216,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Automate the detection of Git hashes and file paths in the chunker to warm-load relevant files into the Librarian’s context.",
+      "why_interesting": "Improves extraction quality by providing the specific code evidence the conversation is discussing."
+    },
+    "idempotency_key": "future_idea:mm:cross-link-pre-loading",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:55:10",
+    "updated_at": "2026-04-20 18:55:10"
+  },
+  {
+    "id": 215,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Implement a Wiki Generator script to project the brain_artifacts table back into human-readable Markdown pages.",
+      "why_interesting": "Maintains human visibility and greppability without incurring the token cost of manual markdown maintenance by the Librarian."
+    },
+    "idempotency_key": "future_idea:mm:wiki-generator-script",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:55:10",
+    "updated_at": "2026-04-20 18:55:10"
+  },
+  {
+    "id": 214,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Inject a summary of active artifact keys into the Librarian’s context header to prevent redundant extraction thinking.",
+      "why_interesting": "Solves artifact blindness where the Librarian extracts the same decision multiple times across chunks in a single session."
+    },
+    "idempotency_key": "future_idea:mm:active-artifact-injection",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:55:10",
+    "updated_at": "2026-04-20 18:55:10"
+  },
+  {
+    "id": 213,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Preserve the Everything is a file philosophy for the human observation layer (rendered wiki) while using a DB for the operational core.",
+      "horizon": "project"
+    },
+    "idempotency_key": "intent:mm:observation-layer-files",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:55:10",
+    "updated_at": "2026-04-20 18:55:10"
+  },
+  {
+    "id": 212,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Maintain the Librarian’s role as a JSON-emitting atom factory, delegating human-readable rendering to automated scripts.",
+      "rationale": "Removes the risk of hallucination during page editing and respects the agent’s context window by focusing on structured signal.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:librarian-atom-factory",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:55:10",
+    "updated_at": "2026-04-20 18:55:10"
+  },
+  {
+    "id": 211,
+    "project": "mm",
+    "type": "correction",
+    "data": {
+      "previous_belief": "Database rollback via simple cp is a reliable safety net.",
+      "corrected_view": "SQLite WAL and process-level file descriptors make simple file-level rollback unreliable; robust backup protocols are mandatory.",
+      "count": 1,
+      "last_seen": "2026-04-20"
+    },
+    "idempotency_key": "correction:mm:rollback-credibility",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:50:07",
+    "updated_at": "2026-04-20 18:50:07"
+  },
+  {
+    "id": 210,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Keep existing wiki markdown files as read-only reference until v12 retrieval is fully implemented.",
+      "rationale": "Prevents a knowledge-retrieval regression during the transition from document-based to artifact-based storage.",
+      "area": "workflow"
+    },
+    "idempotency_key": "decision:mm:read-only-legacy-wiki",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:50:07",
+    "updated_at": "2026-04-20 18:50:07"
+  },
+  {
+    "id": 209,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Never destroy raw event text; apply filters only on derived views or during Librarian read-time.",
+      "rationale": "Ensures that critical tool/error evidence is never accidentally lost, even if current filters are aggressive.",
+      "area": "ingestion"
+    },
+    "idempotency_key": "decision:mm:preserve-raw-text",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:50:07",
+    "updated_at": "2026-04-20 18:50:07"
+  },
+  {
+    "id": 208,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Use SQLite-native backup methods with WAL checkpoints instead of simple file copying.",
+      "rationale": "Ensures database integrity and avoids operational issues with stale handles or WAL inconsistencies.",
+      "area": "infrastructure"
+    },
+    "idempotency_key": "decision:mm:safe-sqlite-backup",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:50:07",
+    "updated_at": "2026-04-20 18:50:07"
+  },
+  {
+    "id": 207,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Implement idempotency and deduplication on the write-path (CLI/Core) using an explicit idempotency_key.",
+      "rationale": "Prevents brittle and token-wasteful round-trips in the Librarian skill while ensuring a stable knowledge base.",
+      "area": "infrastructure"
+    },
+    "idempotency_key": "decision:mm:write-path-idempotency",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:50:07",
+    "updated_at": "2026-04-20 18:50:07"
+  },
+  {
+    "id": 206,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Implement a dedicated artifact_sources table for many-to-many provenance.",
+      "rationale": "High-value artifacts like decisions often span multiple chunks; single-source columns are insufficient for complex project history.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:multi-source-provenance",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:50:07",
+    "updated_at": "2026-04-20 18:50:07"
+  },
+  {
+    "id": 205,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Prioritize structural readiness (v11 Atomic Architecture) for high-volume ingestion over the manual polishing of initial session wiki pages.",
+      "rationale": "Trading early-stage manual formatting for a scalable engine ensures the system can handle thousands of logs without context collapse.",
+      "area": "strategy"
+    },
+    "idempotency_key": "decision:mm:prioritize-structural-readiness",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:44:08",
+    "updated_at": "2026-04-20 18:44:08"
+  },
+  {
+    "id": 204,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Achieve constant-cost (O(1)) knowledge maintenance as the project scales to thousands of sessions.",
+      "horizon": "project",
+      "alignment_check": "Enabled by the supersede pattern and relational artifact tables instead of monolithic file rewrites."
+    },
+    "idempotency_key": "intent:mm:constant-maintenance-cost",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:44:08",
+    "updated_at": "2026-04-20 18:44:08"
+  },
+  {
+    "id": 203,
+    "project": "mm",
+    "type": "correction",
+    "data": {
+      "previous_belief": "Missing project files should be immediately restored to the filesystem.",
+      "corrected_view": "Missing files may be a signal of a deliberate pivot to a database-first model; verify architectural state (schema version) before regressing to legacy document storage.",
+      "count": 1,
+      "last_seen": "2026-04-20"
+    },
+    "idempotency_key": "correction:mm:restoration-regression-avoidance",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:40:57",
+    "updated_at": "2026-04-20 18:40:57"
+  },
+  {
+    "id": 202,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Use the artifact_sources table to maintain explicit provenance for every atomic artifact.",
+      "rationale": "Ensures that even as knowledge becomes atomic and relational, every claim can be traced back to its original raw evidence for verification.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:artifact-provenance-linking",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:40:57",
+    "updated_at": "2026-04-20 18:40:57"
+  },
+  {
+    "id": 201,
+    "project": "mm",
+    "type": "correction",
+    "data": {
+      "previous_belief": "Librarian created directories are durable throughout a session.",
+      "corrected_view": "Internal tools or reset scripts can unexpectedly purge directories; Librarian must explicitly verify path existence before every write operation.",
+      "count": 1,
+      "last_seen": "2026-04-20"
+    },
+    "idempotency_key": "correction:mm:directory-persistence-check",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:35:36",
+    "updated_at": "2026-04-20 18:35:36"
+  },
+  {
+    "id": 200,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Execute the v11 migration using granular, separate commits for schema, CLI, and skills.",
+      "rationale": "Ensures auditability and allows for precise rollbacks during the complex architectural pivot.",
+      "area": "workflow"
+    },
+    "idempotency_key": "decision:mm:granular-migration-commits",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:35:36",
+    "updated_at": "2026-04-20 18:35:36"
+  },
+  {
+    "id": 199,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Implement a Watchdog role for Shadow-Session Monitoring of idle or drifting chains.",
+      "why_interesting": "Proactively identifies communication breakdowns or project drift in multi-agent environments."
+    },
+    "idempotency_key": "future_idea:mm:shadow-session-monitoring",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:35:36",
+    "updated_at": "2026-04-20 18:35:36"
+  },
+  {
+    "id": 198,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Implement Chain-of-Command Extraction to explicitly document agent-to-agent delegation paths.",
+      "rationale": "Provides accountability and visibility into autonomous coordination (e.g., CTO -> DevOps -> Audit -> Git).",
+      "area": "extraction"
+    },
+    "idempotency_key": "decision:mm:chain-of-command-extraction",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:35:36",
+    "updated_at": "2026-04-20 18:35:36"
+  },
+  {
+    "id": 197,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Evolve context injection from coarse wiki-inlining to task-aware briefing protocol (v12 roadmap).",
+      "horizon": "milestone"
+    },
+    "idempotency_key": "intent:mm:precision-context-injection",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:34:28",
+    "updated_at": "2026-04-20 18:34:28"
+  },
+  {
+    "id": 196,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Perform a clean-break migration for v11, archiving old markdown wiki pages instead of attempting an automated content migration.",
+      "rationale": "Simplifies the transition to the atomic model; critical history can be re-extracted from raw events if needed.",
+      "area": "infrastructure"
+    },
+    "idempotency_key": "decision:mm:clean-break-migration",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:34:28",
+    "updated_at": "2026-04-20 18:34:28"
+  },
+  {
+    "id": 195,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Implement a deterministic regex-based filter (filterMechanical) to strip mechanical noise from chunks.",
+      "rationale": "Reduces chunk size by ~50% without the cost or latency of an additional LLM-based filtering pass.",
+      "area": "extraction"
+    },
+    "idempotency_key": "decision:mm:deterministic-tool-filtering",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:34:28",
+    "updated_at": "2026-04-20 18:34:28"
+  },
+  {
+    "id": 194,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Transition to a DB-first operational memory where internal knowledge (raw/wiki) is stored exclusively in SQLite.",
+      "rationale": "Reduces token waste from manual file maintenance and provides a high-resolution, agent-native view of project history.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:db-first-operational-memory",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:34:28",
+    "updated_at": "2026-04-20 18:34:28"
+  },
+  {
+    "id": 193,
+    "project": "mm",
+    "type": "correction",
+    "data": {
+      "previous_belief": "Markdown files are the ideal knowledge source due to visibility.",
+      "corrected_view": "Markdown is low-resolution for agents; relational data provides a high-resolution, scalable, and agent-native view of project history.",
+      "count": 1,
+      "last_seen": "2026-04-20"
+    },
+    "idempotency_key": "correction:mm:relational-vs-file-knowledge",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:30:38",
+    "updated_at": "2026-04-20 18:30:38"
+  },
+  {
+    "id": 192,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Treat project knowledge as a relational narrative live stream rather than a static collection of documents.",
+      "horizon": "project"
+    },
+    "idempotency_key": "intent:mm:knowledge-as-relational-narrative",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:30:38",
+    "updated_at": "2026-04-20 18:30:38"
+  },
+  {
+    "id": 191,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Use status columns (retired, superseded) for knowledge lifecycle management instead of manual file editing.",
+      "rationale": "Prevents context rot by allowing agents to filter for active truth while preserving historical provenance.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:status-based-lifecycle-management",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:30:38",
+    "updated_at": "2026-04-20 18:30:38"
+  },
+  {
+    "id": 190,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Retire the Digital Paper (monolithic Markdown) model in favor of Relational Memory (Atomic DB rows).",
+      "rationale": "The file-based prototype failed the stress test due to high preamble tax, fragmentation, and edit friction.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:retire-digital-paper-model",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:30:38",
+    "updated_at": "2026-04-20 18:30:38"
+  },
+  {
+    "id": 189,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Provide a tool for humans to view DB entries as virtual files for easier observation without disk pollution.",
+      "why_interesting": "Bridges the gap between the agent-first DB model and human visibility needs."
+    },
+    "idempotency_key": "future_idea:mm:db-as-files-viewer",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:26:52",
+    "updated_at": "2026-04-20 18:26:52"
+  },
+  {
+    "id": 188,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Implement Search Tiers (Wiki > Recent > Archive) to prioritize high-weight curated knowledge over dusty conversations.",
+      "why_interesting": "Maintains search relevance as the brain grows to thousands of sessions."
+    },
+    "idempotency_key": "future_idea:mm:smart-search-tiering",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:26:52",
+    "updated_at": "2026-04-20 18:26:52"
+  },
+  {
+    "id": 187,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Every Librarian pass must explicitly check for project drift against the project’s North Star intents.",
+      "horizon": "project"
+    },
+    "idempotency_key": "intent:mm:intent-alignment-check",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:26:52",
+    "updated_at": "2026-04-20 18:26:52"
+  },
+  {
+    "id": 186,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Catch and log tool errors to a dedicated tool_errors table in the database.",
+      "rationale": "Prevents silent technical debt accumulation by surfacing agent-side tool failures that might otherwise go unnoticed.",
+      "area": "infrastructure"
+    },
+    "idempotency_key": "decision:mm:tool-error-instrumentation",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:26:52",
+    "updated_at": "2026-04-20 18:26:52"
+  },
+  {
+    "id": 185,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Create a semantic metadata layer in the DB consisting of summaries, tags, and quality scores for every narrative window.",
+      "rationale": "Provides a searchable Time Machine that allows agents to quickly find relevant historical context without reading raw logs first.",
+      "area": "search"
+    },
+    "idempotency_key": "decision:mm:semantic-indexing-summaries",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:26:52",
+    "updated_at": "2026-04-20 18:26:52"
+  },
+  {
+    "id": 184,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Transition from Documents as Artifacts (monolithic Markdown) to an Atomic Knowledge model (Relational DB rows).",
+      "rationale": "Treats decisions and tasks as atomic inserts rather than file rewrites, preventing context rot and merge conflicts at scale.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:atomic-knowledge-model",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:26:52",
+    "updated_at": "2026-04-20 18:26:52"
+  },
+  {
+    "id": 183,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Create a wiki/mm/Intents.md (General Intents Page) to house the project philosophy and track Project Drift.",
+      "why_interesting": "Provides a stable North Star for synthesis passes to ensure new decisions align with the project’s core values."
+    },
+    "idempotency_key": "future_idea:mm:general-intents-page",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:22:19",
+    "updated_at": "2026-04-20 18:22:19"
+  },
+  {
+    "id": 182,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Anchor every session with an explicit intent to allow outcome calibration against original goals.",
+      "horizon": "project"
+    },
+    "idempotency_key": "intent:mm:intent-first-sessions",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:22:19",
+    "updated_at": "2026-04-20 18:22:19"
+  },
+  {
+    "id": 181,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Implement a system to archive resolved event chains into a long-term knowledge state once synthesized.",
+      "why_interesting": "Prevents context clutter and keeps the brain’s operational focus on current, unresolved work."
+    },
+    "idempotency_key": "future_idea:mm:chain-archiving",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:22:19",
+    "updated_at": "2026-04-20 18:22:19"
+  },
+  {
+    "id": 180,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Prioritize capturing Rejected Paths (failed alternatives) during artifact extraction.",
+      "rationale": "Prevents future agents from repeating mistakes by documenting what was tried and why it failed.",
+      "area": "extraction"
+    },
+    "idempotency_key": "decision:mm:capture-rejected-paths",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:22:19",
+    "updated_at": "2026-04-20 18:22:19"
+  },
+  {
+    "id": 179,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Codify Agent Excellence standards in agent/STANDARDS.md, focusing on Zero-Waste execution and Active Investigation.",
+      "rationale": "Ensures all project agents follow high-density signal extraction rules and minimize token waste.",
+      "area": "standards"
+    },
+    "idempotency_key": "decision:mm:agent-excellence-standards",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:22:19",
+    "updated_at": "2026-04-20 18:22:19"
+  },
+  {
+    "id": 178,
+    "project": "mm",
+    "type": "bug",
+    "data": {
+      "symptom": "Tool calls and results are leaking into the Librarian’s view during ingestion passes.",
+      "context": "import-gemini.ts and import-codex.ts lack the tool-block filtering logic present in import-claude.ts.",
+      "severity": "medium",
+      "status": "open"
+    },
+    "idempotency_key": "bug:mm:importer-filtering-gap",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:22:19",
+    "updated_at": "2026-04-20 18:22:19"
+  },
+  {
+    "id": 177,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Implement a Signal Filter to strip mechanical turns (bash/tool output) from raw_events before Librarian ingestion.",
+      "why_interesting": "Reduces preamble tax by up to 50% and focuses the Librarian on reasoning and decisions."
+    },
+    "idempotency_key": "future_idea:mm:signal-filter-ingestion",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:19:04",
+    "updated_at": "2026-04-20 18:19:04"
+  },
+  {
+    "id": 176,
+    "project": "mm",
+    "type": "correction",
+    "data": {
+      "previous_belief": "Librarian sees tool call noise because importers fail to filter it.",
+      "corrected_view": "import-claude.ts already filters tool blocks; noise must be coming from the chunker or raw-file-reading stage, or is non-tool mechanical output.",
+      "count": 1,
+      "last_seen": "2026-04-20"
+    },
+    "idempotency_key": "correction:mm:tool-filtering-source",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:19:04",
+    "updated_at": "2026-04-20 18:19:04"
+  },
+  {
+    "id": 175,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Evolve Librarian instructions toward Active Investigation (extracting rejected paths, intent anchors, and compressed narrative grafts).",
+      "horizon": "project"
+    },
+    "idempotency_key": "intent:mm:zero-waste-extraction",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:19:04",
+    "updated_at": "2026-04-20 18:19:04"
+  },
+  {
+    "id": 174,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Use chain_id as the primary key for reconstructing multi-session narratives from the database.",
+      "rationale": "Provides a reliable way to connect fragmented stories that span across different session files.",
+      "area": "infrastructure"
+    },
+    "idempotency_key": "decision:mm:chain-id-reconstruction",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:19:04",
+    "updated_at": "2026-04-20 18:19:04"
+  },
+  {
+    "id": 173,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Reserve source_type=\"soul\" for high-context retirement messages and exit interviews.",
+      "rationale": "Allows these high-value messages to be warm-loaded into new sessions for immediate operational orientation.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:soul-source-type",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:19:04",
+    "updated_at": "2026-04-20 18:19:04"
+  },
+  {
+    "id": 172,
+    "project": "mm",
+    "type": "friction",
+    "data": {
+      "pattern": "Requirement to manually run index rebuild after editing markdown files.",
+      "frequency_estimate": "constant",
+      "first_seen": "2026-04-19"
+    },
+    "idempotency_key": "friction:mm:manual-sync-disk-db",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:16:14",
+    "updated_at": "2026-04-20 18:16:14"
+  },
+  {
+    "id": 171,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Replace the multi-process ingest-event system with a single-session synthesis model.",
+      "rationale": "Dramatically reduces preamble tax and improves narrative coherence by leveraging large context windows.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:single-session-synthesis",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:16:14",
+    "updated_at": "2026-04-20 18:16:14"
+  },
+  {
+    "id": 170,
+    "project": "mm",
+    "type": "stack_decision",
+    "data": {
+      "technology": "Use -i=\"${prompt}\" syntax for Gemini CLI prompts.",
+      "rationale": "Correctly handles prompts that begin with dashes which would otherwise be parsed as CLI arguments.",
+      "area": "workflow"
+    },
+    "idempotency_key": "stack_decision:mm:gemini-interactive-syntax",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:16:14",
+    "updated_at": "2026-04-20 18:16:14"
+  },
+  {
+    "id": 169,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Update the indexer to detect content hash changes and reset processed=0 for edited files.",
+      "rationale": "Ensures that manual edits to wiki or raw files are automatically re-ingested by the Librarian.",
+      "area": "infrastructure"
+    },
+    "idempotency_key": "decision:mm:indexer-hash-reset",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:16:14",
+    "updated_at": "2026-04-20 18:16:14"
+  },
+  {
+    "id": 168,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Adopt a two-track roadmap: Light for methodology proof and Hardcore for scaling migration.",
+      "area": "strategy"
+    },
+    "idempotency_key": "decision:mm:two-track-development",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:16:14",
+    "updated_at": "2026-04-20 18:16:14"
+  },
+  {
+    "id": 167,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Reframe Mnemonic51 as a project-management primitive characterized by knowledge, action, and provenance layers.",
+      "rationale": "Focuses the project on its true value (skills and ingestion practices) rather than just infrastructure.",
+      "area": "strategy"
+    },
+    "idempotency_key": "decision:mm:project-management-primitive",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:16:14",
+    "updated_at": "2026-04-20 18:16:14"
+  },
+  {
+    "id": 166,
+    "project": "mm",
+    "type": "friction",
+    "data": {
+      "pattern": "Filtering by project or source_type in search blackholes wiki results.",
+      "frequency_estimate": "high",
+      "first_seen": "2026-04-19"
+    },
+    "idempotency_key": "friction:mm:filtered-vector-search-wiki-exclusion",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:12:27",
+    "updated_at": "2026-04-20 18:12:27"
+  },
+  {
+    "id": 165,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Develop a Stream-to-Brain tool to simplify moving content from web/external sources directly into the brain.",
+      "why_interesting": "Reduces the multi-turn overhead of manual fetch-and-write operations."
+    },
+    "idempotency_key": "future_idea:mm:stream-to-brain-tool",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:12:27",
+    "updated_at": "2026-04-20 18:12:27"
+  },
+  {
+    "id": 164,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Use INSERT OR IGNORE on external_id for idempotent session imports.",
+      "rationale": "Ensures that re-running importers doesn’t create duplicate entries even if the raw files are modified.",
+      "area": "ingestion"
+    },
+    "idempotency_key": "decision:mm:import-deduplication",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:12:27",
+    "updated_at": "2026-04-20 18:12:27"
+  },
+  {
+    "id": 163,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Separate raw storage into raw/events/ (automated transcripts) and raw/docs/ (human/stable notes).",
+      "rationale": "Clarifies provenance and allows for different processing/priority levels for stable vs. transient knowledge.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:dual-root-raw-architecture",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:12:27",
+    "updated_at": "2026-04-20 18:12:27"
+  },
+  {
+    "id": 162,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Adopt a Tiered Compute Philosophy for metadata management.",
+      "rationale": "Moves from manual metadata maintenance to derived metrics to reduce Librarian friction and context rot.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:tiered-compute-philosophy",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:12:27",
+    "updated_at": "2026-04-20 18:12:27"
+  },
+  {
+    "id": 161,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Keep Markdown files on disk as the rot-proof source of truth, with SQLite and Vector layers as derived projections.",
+      "rationale": "Ensures durability and human legibility (Obsidian-friendly) while providing high-performance search capabilities.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:markdown-disk-truth",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:12:27",
+    "updated_at": "2026-04-20 18:12:27"
+  },
+  {
+    "id": 160,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Define the Librarian mission: extract valuable signal into 9 specific wiki bucket pages in a single pass per chunk.",
+      "rationale": "Maximizes token efficiency and prevents the creation of generic Wikipedia-style articles that rot.",
+      "area": "extraction"
+    },
+    "idempotency_key": "decision:mm:librarian-v11-mission",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:12:27",
+    "updated_at": "2026-04-20 18:12:27"
+  },
+  {
+    "id": 159,
+    "project": "mm",
+    "type": "correction",
+    "data": {
+      "previous_belief": "Wiki slugs are flat filenames in the root wiki directory.",
+      "corrected_view": "Wiki slugs are relative subpaths (e.g., mm/Arch_Decisions), allowing path-joining logic to remain consistent with namespacing.",
+      "count": 1,
+      "last_seen": "2026-04-20"
+    },
+    "idempotency_key": "correction:mm:namespaced-slug-derivation",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:05:57",
+    "updated_at": "2026-04-20 18:05:57"
+  },
+  {
+    "id": 158,
+    "project": "mm",
+    "type": "stack_decision",
+    "data": {
+      "technology": "Recursive walkWiki helper for index rebuilding.",
+      "chosen_over": [
+        "flat readdirSync"
+      ],
+      "rationale": "Necessary to support namespaced wiki directories while maintaining a unified search index."
+    },
+    "idempotency_key": "stack_decision:mm:recursive-wiki-walk",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:05:57",
+    "updated_at": "2026-04-20 18:05:57"
+  },
+  {
+    "id": 157,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Shift agent handoffs to a Wish I knew operational format.",
+      "rationale": "Focuses on transferring operational intuition (locks, restarts, quirks) that git history cannot capture, reducing time-to-productivity for new sessions.",
+      "area": "workflow"
+    },
+    "idempotency_key": "decision:mm:operation-focused-handoffs",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:05:57",
+    "updated_at": "2026-04-20 18:05:57"
+  },
+  {
+    "id": 156,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Use a ✅ prefix to mark tasks or friction points as done in wiki bucket pages.",
+      "rationale": "Maintains project history and provenance in append-only pages while clearly indicating current status.",
+      "area": "wiki"
+    },
+    "idempotency_key": "decision:mm:done-marker-convention",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:05:57",
+    "updated_at": "2026-04-20 18:05:57"
+  },
+  {
+    "id": 155,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Transition the wiki to a namespaced directory structure: wiki/<project>/<slug>.md.",
+      "rationale": "Prevents naming collisions between projects and provides clean project-scoped knowledge organization.",
+      "alternatives_rejected": [
+        {
+          "option": "Flat naming convention (e.g., wiki/mm_Arch_Decisions.md)",
+          "why_rejected": "Less clean for long-term project operations; harder to manage as the number of projects grows."
+        }
+      ],
+      "area": "wiki"
+    },
+    "idempotency_key": "decision:mm:wiki-namespacing",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:05:57",
+    "updated_at": "2026-04-20 18:05:57"
+  },
+  {
+    "id": 154,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Fix hybridSearch to include wiki embeddings when project filters are applied.",
+      "rationale": "Previously forced owner_type = raw when filters were set, which excluded all wiki-based semantic search results.",
+      "area": "search"
+    },
+    "idempotency_key": "decision:mm:fix-vector-search-filter",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:05:57",
+    "updated_at": "2026-04-20 18:05:57"
+  },
+  {
+    "id": 153,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Integrate summarize-event skill into chunk-events.ts to add summaries and signal scores to chunk frontmatter.",
+      "why_interesting": "Makes chunk titles searchable and enables noise-filtering based on signal scores."
+    },
+    "idempotency_key": "future_idea:mm:chunk-summarization-filter",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:03:04",
+    "updated_at": "2026-04-20 18:03:04"
+  },
+  {
+    "id": 152,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Extract all useful project signal (decisions, tasks, bugs) in a single unified pass over each chunk to maximize token efficiency.",
+      "horizon": "project"
+    },
+    "idempotency_key": "intent:mm:unified-extraction-pass",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:03:04",
+    "updated_at": "2026-04-20 18:03:04"
+  },
+  {
+    "id": 151,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Implement project-level scoping (--project) in brain queue and the ingestion pipeline.",
+      "rationale": "Prevents cross-project pollution and allows for focused, high-quality extraction for specific projects.",
+      "area": "workflow"
+    },
+    "idempotency_key": "decision:mm:scoped-project-processing",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:03:04",
+    "updated_at": "2026-04-20 18:03:04"
+  },
+  {
+    "id": 150,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Support deep historical imports (DAYS=365) to recover project history after a reset.",
+      "rationale": "Enables full re-synthesis of project knowledge under updated extraction rules.",
+      "area": "ingestion"
+    },
+    "idempotency_key": "decision:mm:historical-import-capability",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:03:04",
+    "updated_at": "2026-04-20 18:03:04"
+  },
+  {
+    "id": 149,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Implement a reset-brain script to purge raw files and DB for clean re-ingestion.",
+      "rationale": "Facilitates rapid architectural iteration and clean-slate testing during the pivot phase.",
+      "area": "infrastructure"
+    },
+    "idempotency_key": "decision:mm:reset-brain-utility",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:03:04",
+    "updated_at": "2026-04-20 18:03:04"
+  },
+  {
+    "id": 148,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Use an append-only Timeline model for wiki bucket pages.",
+      "rationale": "Simplifies extraction logic and preserves a chronological audit trail of project evolution.",
+      "area": "wiki"
+    },
+    "idempotency_key": "decision:mm:append-only-timeline-wiki",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:03:04",
+    "updated_at": "2026-04-20 18:03:04"
+  },
+  {
+    "id": 147,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Implement a 9-category extraction model for the Librarian (Arch_Decisions, Known_Bugs, Future_Tasks, etc.).",
+      "rationale": "Ensures every chunk read extracts specific, actionable signal instead of generic, low-value topic summaries.",
+      "area": "extraction"
+    },
+    "idempotency_key": "decision:mm:9-bucket-extraction",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 18:03:04",
+    "updated_at": "2026-04-20 18:03:04"
+  },
+  {
+    "id": 146,
+    "project": "mm",
+    "type": "correction",
+    "data": {
+      "previous_belief": "High-quality source documents and logs will automatically produce a high-quality wiki via generic ingestion.",
+      "corrected_view": "Generic topic-based ingestion fails to extract structural signal; a useful wiki requires specialized extraction prompts (bugs, tasks, friction).",
+      "count": 1,
+      "last_seen": "2026-04-20"
+    },
+    "idempotency_key": "correction:mm:wiki-quality-vs-extraction",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:59:29",
+    "updated_at": "2026-04-20 17:59:29"
+  },
+  {
+    "id": 145,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Living aggregate pages (Known_Bugs, Future_Tasks, Arch_Decisions) should be continuously updated from session history extractions.",
+      "horizon": "project"
+    },
+    "idempotency_key": "intent:mm:living-aggregate-pages",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:59:29",
+    "updated_at": "2026-04-20 17:59:29"
+  },
+  {
+    "id": 144,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Implement a skill to split dense documentation into focused sub-pages with an index.",
+      "why_interesting": "Prevents large documents from becoming unreadable monoliths and enables more targeted search/retrieval."
+    },
+    "idempotency_key": "future_idea:mm:derive-sections-skill",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:59:29",
+    "updated_at": "2026-04-20 17:59:29"
+  },
+  {
+    "id": 143,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Implement a derive-codemap skill to generate structured codefile-typed wiki pages from source code directly.",
+      "why_interesting": "Provides a high-level map of the codebase exports and purpose for agents without requiring exhaustive file reads."
+    },
+    "idempotency_key": "future_idea:mm:derive-codemap-skill",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:59:29",
+    "updated_at": "2026-04-20 17:59:29"
+  },
+  {
+    "id": 142,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Fix hybridSearch to prevent project filters from blackholing wiki results.",
+      "rationale": "Ensures wiki FTS is only skipped when source_types explicitly excludes wiki, not when filtering by project alone.",
+      "area": "search"
+    },
+    "idempotency_key": "decision:mm:fix-wiki-fts-filter-bug",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:59:29",
+    "updated_at": "2026-04-20 17:59:29"
+  },
+  {
+    "id": 141,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Change buildFtsQuery to join terms with OR instead of AND.",
+      "rationale": "Improves recall for natural language queries where not every word in a query is expected to match every document.",
+      "area": "search"
+    },
+    "idempotency_key": "decision:mm:search-fts-or-logic",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:59:29",
+    "updated_at": "2026-04-20 17:59:29"
+  },
+  {
+    "id": 140,
+    "project": "mm",
+    "type": "correction",
+    "data": {
+      "previous_belief": "Corrections are static records of mistakes stored in config files.",
+      "corrected_view": "Corrections are dynamic, frequency-tracked artifacts stored in the artifacts table and injected into briefings based on recurrence.",
+      "count": 1,
+      "last_seen": "2026-04-20"
+    },
+    "idempotency_key": "correction:mm:correction-lifecycle",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:55:11",
+    "updated_at": "2026-04-20 17:55:11"
+  },
+  {
+    "id": 139,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "The agent decides for itself when to relaunch or stop sessions.",
+      "rationale": "Empowers the agent to manage its own context and task completion rather than relying on external scheduling.",
+      "area": "workflow"
+    },
+    "idempotency_key": "decision:mm:agent-managed-relaunch",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:55:11",
+    "updated_at": "2026-04-20 17:55:11"
+  },
+  {
+    "id": 138,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Create a minimalist CLAUDE.md (approx 7 lines) at repo root.",
+      "rationale": "High-density, low-line-count configuration ensures rules are followed and reduces prompt tax.",
+      "alternatives_rejected": [
+        {
+          "option": "300-line boilerplate configuration",
+          "why_rejected": "Too large to be effective; harder for the agent to care about."
+        }
+      ],
+      "area": "standards"
+    },
+    "idempotency_key": "decision:mm:minimalist-claude-md",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:55:11",
+    "updated_at": "2026-04-20 17:55:11"
+  },
+  {
+    "id": 137,
+    "project": "mm",
+    "type": "stack_decision",
+    "data": {
+      "technology": "brain artifact bump-correction <id> CLI verb",
+      "chosen_over": [
+        "re-emitting full correction JSON"
+      ],
+      "rationale": "Enables efficient updates to frequency-tracked corrections without duplication."
+    },
+    "idempotency_key": "stack_decision:mm:bump-correction-cli",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:55:11",
+    "updated_at": "2026-04-20 17:55:11"
+  },
+  {
+    "id": 136,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Implement count and last_seen tracking for correction artifacts.",
+      "rationale": "Allows the system to prioritize recurring patterns over rare ones for briefing injection and retention.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:frequency-based-corrections",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:55:11",
+    "updated_at": "2026-04-20 17:55:11"
+  },
+  {
+    "id": 135,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Maintain per-role handoff.md files instead of a centralized AGENTS.md.",
+      "rationale": "Scopes guidance to the relevant role and avoids prompt-tax for unrelated tasks.",
+      "alternatives_rejected": [
+        {
+          "option": "Single project-level AGENTS.md",
+          "why_rejected": "Dilutes role-specific guidance and adds unnecessary context to every session."
+        }
+      ],
+      "area": "standards"
+    },
+    "idempotency_key": "decision:mm:role-specific-handoffs",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:53:17",
+    "updated_at": "2026-04-20 17:53:17"
+  },
+  {
+    "id": 134,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Document project learnings as specific Always X for Y rules.",
+      "rationale": "Makes handoffs actionable and verifiable; prevents vague warnings that agents ignore.",
+      "area": "standards"
+    },
+    "idempotency_key": "decision:mm:concrete-correction-format",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:53:17",
+    "updated_at": "2026-04-20 17:53:17"
+  },
+  {
+    "id": 133,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Stop and ask for a session reset after two failed attempts to fix the same issue in one session.",
+      "rationale": "Prevents context-rot and unproductive compute cycles on a poisoned context.",
+      "area": "standards"
+    },
+    "idempotency_key": "decision:mm:two-failure-reset-rule",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:53:17",
+    "updated_at": "2026-04-20 17:53:17"
+  },
+  {
+    "id": 132,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Explicitly ban filler openers: Great question, You are absolutely right, Excellent idea, I would be happy to.",
+      "rationale": "Reduces token waste and forces a direct-to-answer communication style.",
+      "area": "standards"
+    },
+    "idempotency_key": "decision:mm:banned-opener-list",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:53:17",
+    "updated_at": "2026-04-20 17:53:17"
+  },
+  {
+    "id": 131,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Adopt a minimalist set of agent standards focused on directness, session resets, and concrete correction rules.",
+      "rationale": "Concrete heuristics beat abstract guidance; prevents context-rot and reduces prompt tax.",
+      "alternatives_rejected": [
+        {
+          "option": "Adopting the full 300-line boilerplate",
+          "why_rejected": "Bloats context; duplicates system prompts; violates its own warning against fighting configuration."
+        }
+      ],
+      "area": "standards"
+    },
+    "idempotency_key": "decision:mm:minimalist-agent-standards",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:53:17",
+    "updated_at": "2026-04-20 17:53:17"
+  },
+  {
+    "id": 130,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Use scheduled .bk database snapshots and git history as the primary backup mechanism.",
+      "rationale": "DB-first architecture makes SQLite the operational truth; git history handles long-term durability.",
+      "area": "infrastructure"
+    },
+    "idempotency_key": "decision:mm:db-snapshot-backups",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:50:03",
+    "updated_at": "2026-04-20 17:50:03"
+  },
+  {
+    "id": 129,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Establish task-aware briefing (querying relevant artifacts for task context) as the central mechanism for agent orientation.",
+      "horizon": "project"
+    },
+    "idempotency_key": "intent:mm:briefing-protocol",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:50:03",
+    "updated_at": "2026-04-20 17:50:03"
+  },
+  {
+    "id": 128,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Transition from disk-based raw/events/*.md files to virtual chunks served from the DB.",
+      "rationale": "Reduces workspace pollution and markdown rot; the DB provides more resilient and structured storage.",
+      "alternatives_rejected": [
+        {
+          "option": "Persistent disk-based chunks",
+          "why_rejected": "Pollutes the workspace and incurs continuous formatting/parsing overhead."
+        }
+      ],
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:virtual-chunks",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:50:03",
+    "updated_at": "2026-04-20 17:50:03"
+  },
+  {
+    "id": 127,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Shift to a DB-driven knowledge architecture optimized for an LLM audience, where humans are observers.",
+      "horizon": "project",
+      "alignment_check": "Briefing-based context injection becomes the core loop; task-aware queries provide targeted preamble."
+    },
+    "idempotency_key": "intent:mm:llm-first-architecture",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:50:03",
+    "updated_at": "2026-04-20 17:50:03"
+  },
+  {
+    "id": 126,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Implement a git-log importer to capture code changes made outside of LLM sessions.",
+      "rationale": "Ensures the knowledge base captures manual edits and merges, making code-as-wiki authoritative.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:git-log-importer",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:50:03",
+    "updated_at": "2026-04-20 17:50:03"
+  },
+  {
+    "id": 125,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Implement an automated tool filter (filterMechanical) in the chunker to strip aggressive noise.",
+      "rationale": "Halves token budget by removing bash output, read tool results, and directory listings while preserving code diffs.",
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:chunker-tool-filter",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:50:03",
+    "updated_at": "2026-04-20 17:50:03"
+  },
+  {
+    "id": 124,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Add a cheap event_summaries pass between the chunker and the librarian to score signal and skip low-value chunks.",
+      "why_interesting": "Reduces input-side waste by allowing the librarian to skip noisy conversation logs."
+    },
+    "idempotency_key": "future_idea:mm:signal-filter-pass",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:45:23",
+    "updated_at": "2026-04-20 17:45:23"
+  },
+  {
+    "id": 123,
+    "project": "mm",
+    "type": "friction",
+    "data": {
+      "pattern": "Appending bullets to monolithic markdown pages leading to loss of context, no status tracking, and inability to cross-reference.",
+      "frequency_estimate": "constant",
+      "first_seen": "2026-04-20"
+    },
+    "idempotency_key": "friction:mm:markdown-wiki-rot",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:45:23",
+    "updated_at": "2026-04-20 17:45:23"
+  },
+  {
+    "id": 122,
+    "project": "mm",
+    "type": "correction",
+    "data": {
+      "previous_belief": "High preamble tax makes processing small events expensive and requires complex orchestration.",
+      "corrected_view": "Narrative chunking (~12KB) reduces preamble tax by 90% and makes single-session processing viable even for large projects.",
+      "count": 1,
+      "last_seen": "2026-04-20"
+    },
+    "idempotency_key": "correction:mm:preamble-tax-impact",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:45:23",
+    "updated_at": "2026-04-20 17:45:23"
+  },
+  {
+    "id": 121,
+    "project": "mm",
+    "type": "stack_decision",
+    "data": {
+      "technology": "Standardized artifact types: intents, decisions, bugs, todos, friction, howto, tool_errors, corrections, user_notes, future_ideas.",
+      "chosen_over": [
+        "ad-hoc markdown bullets",
+        "incremental table rollout"
+      ],
+      "rationale": "Provides a stable foundation for the Knowledge OS and reduces future migration friction."
+    },
+    "idempotency_key": "stack_decision:mm:artifact-taxonomy",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:45:23",
+    "updated_at": "2026-04-20 17:45:23"
+  },
+  {
+    "id": 120,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Retain the chunk-events.ts script and disk-based chunks.",
+      "rationale": "Disk-based chunks provide a free disaster-recovery layer and git-manageable raw evidence without operational penalty.",
+      "alternatives_rejected": [
+        {
+          "option": "Moving all chunks to SQLite",
+          "why_rejected": "Sacrifices git durability and visibility for no clear operational gain."
+        }
+      ],
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:retain-chunker",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:45:23",
+    "updated_at": "2026-04-20 17:45:23"
+  },
+  {
+    "id": 119,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Retire complex orchestration (worker pools, session multiplexers) in favor of a single librarian session per project.",
+      "horizon": "project",
+      "alignment_check": "Validated by 8% context usage for 35 chunks; preamble-tax problem solved with headroom."
+    },
+    "idempotency_key": "intent:mm:minimalist-orchestration",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:45:23",
+    "updated_at": "2026-04-20 17:45:23"
+  },
+  {
+    "id": 118,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Implement a projection model where the librarian writes to the DB, and markdown wiki pages are auto-generated from the DB.",
+      "rationale": "Maintains the rot-proof raw layer on disk/git for durability and human legibility while gaining the operational power of a structured DB.",
+      "alternatives_rejected": [
+        {
+          "option": "Abandoning markdown pages entirely",
+          "why_rejected": "Loses the rot-proof and git-manageable properties of the knowledge base."
+        }
+      ],
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:projection-model",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:45:23",
+    "updated_at": "2026-04-20 17:45:23"
+  },
+  {
+    "id": 117,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Ship the full atomic artifact surface in one schema v11 bump, moving from markdown-append to structured DB rows.",
+      "rationale": "Markdown-append model rots (no status, no IDs, hard to query); structured rows reduce librarian waste and allow for better leverage and compounding of knowledge.",
+      "alternatives_rejected": [
+        {
+          "option": "Incremental rollout (e.g., just intents first)",
+          "why_rejected": "Librarian waste compounds per session; immediate efficiency across all types outweighs incremental schema risk."
+        },
+        {
+          "option": "Markdown-only storage",
+          "why_rejected": "Form kills leverage; hard to query, supersede, or cross-reference."
+        }
+      ],
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:atomic-pivot",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:45:23",
+    "updated_at": "2026-04-20 17:50:03"
+  },
+  {
+    "id": 116,
+    "project": "mm",
+    "type": "future_idea",
+    "data": {
+      "statement": "Implement a way to re-chunk everything without blowing away downstream wiki claims if the chunker logic improves.",
+      "why_interesting": "Ensures the system can evolve its raw evidence representation without losing high-level synthesis."
+    },
+    "idempotency_key": "future_idea:mm:migration-reversibility",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:39:32",
+    "updated_at": "2026-04-20 17:39:32"
+  },
+  {
+    "id": 115,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Keep raw chunks as .md files on disk + git for durability and rot-resistance.",
+      "rationale": "Git + Disk is the rot-proof layer; SQLite is just for operational efficiency.",
+      "alternatives_rejected": [
+        {
+          "option": "DB-only raw storage",
+          "why_rejected": "SQLite is operational memory; lacks the durability and visibility of git-managed markdown."
+        }
+      ],
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:raw-evidence-durability",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:39:32",
+    "updated_at": "2026-04-20 17:39:32"
+  },
+  {
+    "id": 114,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Launch interactive librarian sessions instead of headless -p sessions.",
+      "rationale": "Allows the librarian to decide when to stop and use scripts to check what to import.",
+      "alternatives_rejected": [
+        {
+          "option": "Headless -p sessions",
+          "why_rejected": "Less flexibility; hard to manage complex import checks."
+        }
+      ],
+      "area": "workflow"
+    },
+    "idempotency_key": "decision:mm:interactive-librarian",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:39:32",
+    "updated_at": "2026-04-20 17:39:32"
+  },
+  {
+    "id": 113,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Prioritize project mm for chunking and ingestion over backfilled logs.",
+      "rationale": "mm info is vital to fine-tune the system; backfilled logs (like ac) are too voluminous and synthesis would be wasted before a production-grade model is ready.",
+      "alternatives_rejected": [
+        {
+          "option": "Process all backfilled events (~550)",
+          "why_rejected": "High token cost for low-quality synthesis that would likely be discarded later."
+        }
+      ],
+      "area": "strategy"
+    },
+    "idempotency_key": "decision:mm:project-mm-priority",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:39:32",
+    "updated_at": "2026-04-20 17:39:32"
+  },
+  {
+    "id": 112,
+    "project": "mm",
+    "type": "intent",
+    "data": {
+      "statement": "Fully capture project development in a way that doesn’t rot, providing an amazing wiki for all agents.",
+      "horizon": "project",
+      "alignment_check": "Durable raw evidence on disk (.md + git) instead of just DB."
+    },
+    "idempotency_key": "intent:mm:knowledge-os",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:39:32",
+    "updated_at": "2026-04-20 17:39:32"
+  },
+  {
+    "id": 111,
+    "project": "mm",
+    "type": "stack_decision",
+    "data": {
+      "technology": "~12KB chunks with 18KB hard cap, aligned to turn boundaries",
+      "chosen_over": [
+        "10KB target (flexible)",
+        "turn-agnostic cuts"
+      ],
+      "rationale": "Ensures context (5-15 turns) and human legibility while avoiding breaking narrative mid-thought."
+    },
+    "idempotency_key": "stack_decision:mm:chunking-logic",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:39:32",
+    "updated_at": "2026-04-20 17:39:32"
+  },
+  {
+    "id": 110,
+    "project": "mm",
+    "type": "stack_decision",
+    "data": {
+      "technology": "SQLite schema v10 with raw_events.chunked",
+      "chosen_over": [
+        "reusing raw_events.processed"
+      ],
+      "rationale": "Distinguish between an event being physically chunked into a file and being logically ingested into the wiki."
+    },
+    "idempotency_key": "stack_decision:mm:schema-v10",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:39:32",
+    "updated_at": "2026-04-20 17:39:32"
+  },
+  {
+    "id": 109,
+    "project": "mm",
+    "type": "decision",
+    "data": {
+      "statement": "Implement the Narrative Chunker Pipeline to bridge Streaming Events (DB) and Durable Knowledge (Wiki).",
+      "rationale": "Maximize signal-to-noise and reduce Preamble Tax by 90% by processing ~10KB chunks instead of individual messages.",
+      "alternatives_rejected": [
+        {
+          "option": "Processing individual DB entries",
+          "why_rejected": "Unit too small for meaningful wiki synthesis; high preamble cost per message."
+        },
+        {
+          "option": "Oversized logs (300KB+)",
+          "why_rejected": "Too big for human legibility and context limits."
+        },
+        {
+          "option": "Small logs (1KB)",
+          "why_rejected": "Too many files."
+        }
+      ],
+      "area": "architecture"
+    },
+    "idempotency_key": "decision:mm:narrative-chunker",
+    "superseded_by": null,
+    "status": "active",
+    "created_at": "2026-04-20 17:39:32",
+    "updated_at": "2026-04-20 17:39:32"
+  }
+]
