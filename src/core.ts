@@ -137,7 +137,65 @@ export function initDb() {
   if (!evCols2.some(c => c.name === 'chunked')) db.run(`ALTER TABLE raw_events ADD COLUMN chunked INTEGER DEFAULT 0`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_event_chunked ON raw_events(chunked)`);
 
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 10)');
+  // v11: atomic artifacts + virtual narrative chunks. See agent/docs/2026-04-20-v11-plan.md.
+  db.run(`CREATE TABLE IF NOT EXISTS artifacts (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    project          TEXT NOT NULL,
+    type             TEXT NOT NULL,
+    data             TEXT NOT NULL,
+    idempotency_key  TEXT NOT NULL,
+    superseded_by    INTEGER,
+    status           TEXT NOT NULL DEFAULT 'active',
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (superseded_by) REFERENCES artifacts(id) ON DELETE SET NULL
+  )`);
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_idempotency ON artifacts(project, type, idempotency_key)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_artifacts_project_type ON artifacts(project, type)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_artifacts_status       ON artifacts(status)`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS artifact_sources (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_id      INTEGER NOT NULL,
+    source_raw_id    INTEGER,
+    source_event_id  INTEGER,
+    span_start       INTEGER,
+    span_end         INTEGER,
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (artifact_id)     REFERENCES artifacts(id)   ON DELETE CASCADE,
+    FOREIGN KEY (source_raw_id)   REFERENCES raw_entries(id) ON DELETE SET NULL,
+    FOREIGN KEY (source_event_id) REFERENCES raw_events(id)  ON DELETE SET NULL
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_artifact_sources_artifact ON artifact_sources(artifact_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_artifact_sources_raw      ON artifact_sources(source_raw_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_artifact_sources_event    ON artifact_sources(source_event_id)`);
+
+  try {
+    db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_fts USING fts5(
+      artifact_id UNINDEXED,
+      project     UNINDEXED,
+      type        UNINDEXED,
+      text
+    )`);
+  } catch (e) {}
+
+  db.run(`CREATE TABLE IF NOT EXISTS chunks_virtual (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    project         TEXT NOT NULL,
+    source_event_id INTEGER NOT NULL,
+    chunk_index     INTEGER NOT NULL,
+    chunk_total     INTEGER NOT NULL,
+    segment_start   INTEGER NOT NULL,
+    segment_end     INTEGER NOT NULL,
+    filter_version  INTEGER NOT NULL,
+    processed       INTEGER DEFAULT 0,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_event_id) REFERENCES raw_events(id) ON DELETE CASCADE
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_chunks_virtual_project_processed ON chunks_virtual(project, processed)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_chunks_virtual_source_event      ON chunks_virtual(source_event_id)`);
+
+  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 11)');
 }
 
 // --- Common Logic ---
