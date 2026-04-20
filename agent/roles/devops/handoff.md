@@ -36,16 +36,29 @@ Not a changelog. Not a backlog. Not history. Use git for what changed; use chain
 
 ## Deferred — next devops call
 
-**From audit round 1 (v10-surface bugs):**
-- `brain add` / `raw_entries` is invisible to search (no FTS index, not embedded).
-- `brain index rebuild` flips `processed=1→0` because `addToBrain` and `internalRebuildIndex` compute hash over different payloads.
-- `wiki_pages.source_count` drift after rebuild (frontmatter overwrites authoritative count from `claims`).
-- `/query` ignores event evidence — `queryBrain` only uses wiki+raw, not events.
+**Rip v10 surfaces (decided 2026-04-20, audit-revised).** v11 pipeline calls none of the v10 surface. Scope, in order:
 
-**From audit round 2 (on the audit fix itself):**
-- `import_state.last_mtime` is advanced BEFORE `upsertRawEvent` runs, so a failed write still checkpoints the file and next run skips it. Fixing requires splitting the column into live-agent-freshness vs import-checkpoint semantics (additive schema column or separate UPDATE paths). Not v11.2 scope — the tx wrap on `upsertRawEvent` already prevents half-written rows. Worth doing before the next importer rewrite.
-- Test suite has a pre-existing ~20% flake rate on `/active markdown shape` and `chunk-events` tests (pre-dates v11.2 changes). Unrelated to correctness but noisy. Worth hunting if CI lands.
+1. **Migrate `artifact_sources`**: drop `source_raw_id` column + FK + index via table-rebuild (SQLite won't DROP a FK in place). Update `ArtifactSource` type, `insertSources` call sites, `/artifact/:id` raw branch (`api.ts:264-268`). Must land before `raw_entries` DROP or fresh init breaks.
+2. **Migrate `chunks.raw_id`**: orphaned legacy column, no v11 writer. Drop via same table-rebuild pattern.
+3. **Rip surface**:
+   - CLI: `brain add`, `brain save`, `brain query`, `brain queue`, `brain mark-processed`, `brain ingest-event` (explicit v10 per `lib/soul-interactive.md:41`)
+   - HTTP: `/query`, `/add`, `/raw-ui` + `/raw*` dumps, update `renderRawDump`
+   - MCP: `query_brain`, `add_to_brain`
+   - Core: `queryBrain`, `addToBrain`, `raw_entries` table + indices, `claim_sources` join
+   - Scripts: `scripts/ingest-manual.ts`, `scripts/import-chats.ts`
+   - `internalRebuildIndex`: split — drop `raw_entries` half, keep wiki half, rename. Update all 8 callsites in `brain.ts` (includes `dream`, `page create`).
+   - `meta/timeline.md`: rewrite off `raw_events` or drop.
+4. **UI**: strip synthesis panel from `ui/index.html` (the `/query` caller at :345). Keep `/search`, `/wiki/`.
+5. **Tests**: `tests/behavior.test.ts` has ~10 v10 assertions (`raw_entries`, `claim_sources`, `brain process`, `index rebuild` Phase-1 retro-sweep at `:109,:151-157,:176`). Migrate or delete — don't leave red suite.
+6. **Pre-DROP safety**: SQL-dump `claim_sources` for provenance archive before `DROP TABLE`.
 
-**Meta-call**: rip v10 paths entirely, or maintain both? Fix-as-bug treats them as supported; rip resolves correctness. v12 briefing protocol replaces `/query` either way.
+Moots round-1 audit items: `brain add` FTS invisibility, `brain index rebuild` processed-flip, `/query` ignores events.
+
+**Real v11 bugs to keep:**
+- `wiki_pages.source_count` drift — frontmatter overwrites the `claim_sources_event` recompute. Fix: make `source_count` derived-only (stop storing in frontmatter), or always run recompute after wiki sync.
+- `import_state.last_mtime` advances before `upsertRawEvent` runs — a failed write checkpoints the file anyway. Fix: split live-agent-freshness vs import-checkpoint semantics.
+
+**Unrelated infra:**
+- ~20% flake on `/active markdown shape` + `chunk-events` tests. Budget a real test-isolation pass when CI lands.
 
 ## Typecheck + `bun test` are the gates. The project has no CI.

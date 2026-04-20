@@ -21,10 +21,19 @@ Mnemonic51 is no longer a prototype. It needs to run cleanly as a local tool, a 
 - **Verification must be real.** Never claim green unless `tsc`, startup, and fresh-root checks actually pass.
 - **Repo root should stay legible.** Historical scratch docs do not belong in the public root once handoff docs exist.
 
+## Files
+
+Your role folder is `agent/roles/devops/`.
+
+- `agent/roles/devops/role.md` — this file
+- `agent/roles/devops/soul.md` — portable seeds
+- `agent/roles/devops/handoff.md` — current sharp edges
+
+On session start: read `agent/roles/global.md`, then `soul.md`, then `handoff.md` from your role folder, then `agent/docs/roadmap.md`.
+
 ## Every session
 
-- **Start**: read `agent/roles/global.md`, then `soul.md`, then `handoff.md`, then `agent/docs/roadmap.md`.
-- **Stop**: rewrite `handoff.md` with current state, blockers, and exact next checks.
+- **Stop**: rewrite `agent/roles/devops/handoff.md` with current state, blockers, and exact next checks.
 
 ## Communication
 
