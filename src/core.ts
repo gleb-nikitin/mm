@@ -237,48 +237,71 @@ export function resolveParticipantIds(externalIds: string[]): Map<string, string
   return result;
 }
 
-export function renderActiveAgentsMarkdown(maxAgeSeconds: number = 300): string {
+export type ActiveAgentRow = {
+  participant_id: string | null;
+  provider: string;
+  project: string;
+  seconds_ago: number;
+  model: string | null;
+  last_user_snippet: string | null;
+  external_id: string | null;
+  cwd: string | null;
+};
+
+export function getActiveAgents(opts: { maxAgeSeconds?: number; project?: string } = {}): ActiveAgentRow[] {
+  const maxAgeSeconds = opts.maxAgeSeconds ?? 300;
+  const clauses: string[] = [
+    "(strftime('%s', 'now') - (last_mtime / 1000.0)) <= ?",
+    "provider IS NOT NULL AND provider != 'unknown'",
+    "project IS NOT NULL AND project != 'unknown'",
+    "(min_turns_ok = 1 OR last_user_snippet IS NOT NULL)",
+  ];
+  const params: any[] = [maxAgeSeconds];
+  if (opts.project) { clauses.push('project = ?'); params.push(opts.project); }
   const rows = db.prepare(`
     SELECT
-      provider,
-      project,
-      cwd,
-      external_id,
-      model,
-      last_user_snippet,
+      provider, project, cwd, external_id, model, last_user_snippet,
       CAST(strftime('%s', 'now') - (last_mtime / 1000.0) AS INTEGER) as seconds_ago
     FROM import_state
-    WHERE (strftime('%s', 'now') - (last_mtime / 1000.0)) <= ?
-      AND provider IS NOT NULL AND provider != 'unknown'
-      AND project IS NOT NULL AND project != 'unknown'
-      AND (min_turns_ok = 1 OR last_user_snippet IS NOT NULL)
+    WHERE ${clauses.join(' AND ')}
     ORDER BY seconds_ago ASC
-  `).all(maxAgeSeconds) as any[];
+  `).all(...params) as any[];
+  const externalIds = rows.map(r => r.external_id).filter(Boolean) as string[];
+  const participantMap = resolveParticipantIds(externalIds);
+  return rows.map(r => ({
+    participant_id: r.external_id ? (participantMap.get(r.external_id) ?? null) : null,
+    provider: r.provider,
+    project: r.project,
+    seconds_ago: r.seconds_ago,
+    model: r.model,
+    last_user_snippet: r.last_user_snippet,
+    external_id: r.external_id,
+    cwd: r.cwd,
+  }));
+}
 
+export function renderActiveAgentsMarkdown(maxAgeSeconds: number = 300): string {
+  const agents = getActiveAgents({ maxAgeSeconds });
   const nowIso = new Date().toISOString();
   let md = `# Active agents (last ${Math.floor(maxAgeSeconds / 60)} min)\n\n`;
   md += `_Generated: ${nowIso}_\n\n`;
 
-  if (rows.length === 0) {
+  if (agents.length === 0) {
     md += `_No agents active._\n`;
     return md;
   }
 
-  const externalIds = rows.map(r => r.external_id).filter(Boolean) as string[];
-  const participantMap = resolveParticipantIds(externalIds);
-
-  for (const row of rows) {
-    const timeStr = formatRelativeTime(row.seconds_ago);
-    const pid = row.external_id ? participantMap.get(row.external_id) : undefined;
-    if (pid) {
-      md += `- **${pid}** · ${row.provider || 'unknown'} · \`${row.project || 'unknown'}\` · ${timeStr} ago · \`${row.model || 'unknown'}\`\n`;
+  for (const a of agents) {
+    const timeStr = formatRelativeTime(a.seconds_ago);
+    if (a.participant_id) {
+      md += `- **${a.participant_id}** · ${a.provider || 'unknown'} · \`${a.project || 'unknown'}\` · ${timeStr} ago · \`${a.model || 'unknown'}\`\n`;
     } else {
-      md += `- **${row.provider || 'unknown'}** · \`${row.project || 'unknown'}\` · ${timeStr} ago · \`${row.model || 'unknown'}\`\n`;
+      md += `- **${a.provider || 'unknown'}** · \`${a.project || 'unknown'}\` · ${timeStr} ago · \`${a.model || 'unknown'}\`\n`;
     }
-    md += `  cwd: \`${row.cwd || 'unknown'}\`\n`;
-    md += `  external_id: \`${row.external_id || 'unknown'}\`\n`;
-    if (row.last_user_snippet) {
-      md += `  last user turn: "${row.last_user_snippet}"\n`;
+    md += `  cwd: \`${a.cwd || 'unknown'}\`\n`;
+    md += `  external_id: \`${a.external_id || 'unknown'}\`\n`;
+    if (a.last_user_snippet) {
+      md += `  last user turn: "${a.last_user_snippet}"\n`;
     }
     md += `\n`;
   }
@@ -1103,6 +1126,213 @@ export function bumpCorrection(id: number): ArtifactRow {
   ).run(JSON.stringify(data), id);
   syncArtifactFts(id, row.project, row.type, data);
   return rowToArtifact({ ...row, data: JSON.stringify(data) });
+}
+
+// --- v12: briefing surface (session-start preamble) ---
+
+export type BriefingData = {
+  project: string;
+  generated_at: string;
+  latest_raw_event_at: string | null;
+  health: {
+    schema_version: number;
+    artifacts_active: number;
+    artifacts_by_type: Array<{ type: string; count: number }>;
+    chunks_processed: number;
+    chunks_total: number;
+    raw_events: number;
+  };
+  active_agents: ActiveAgentRow[];
+  intents: ArtifactRow[];
+  bugs: ArtifactRow[];
+  decisions: ArtifactRow[];
+  frictions: ArtifactRow[];
+  corrections: ArtifactRow[];
+  todos: ArtifactRow[];
+};
+
+const HORIZON_ORDER: Record<string, number> = { project: 0, milestone: 1, session: 2 };
+const SEVERITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
+const FREQ_ORDER: Record<string, number> = { Constant: 0, High: 1, Occasional: 2, Once: 3 };
+
+export function getBrief(project: string): BriefingData {
+  const generated_at = new Date().toISOString();
+  const schemaVersion = (db.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any)?.version || 0;
+
+  const artifactsActive = (db.prepare("SELECT COUNT(*) as c FROM artifacts WHERE project = ? AND status = 'active'").get(project) as any).c;
+  const artifactsByTypeRows = db.prepare(
+    "SELECT type, COUNT(*) as c FROM artifacts WHERE project = ? AND status = 'active' GROUP BY type ORDER BY c DESC"
+  ).all(project) as any[];
+  const chunksTotal = (db.prepare('SELECT COUNT(*) as c FROM chunks_virtual WHERE project = ?').get(project) as any).c;
+  const chunksProcessed = (db.prepare("SELECT COUNT(*) as c FROM chunks_virtual WHERE project = ? AND processed = 1").get(project) as any).c;
+  const rawEvents = (db.prepare('SELECT COUNT(*) as c FROM raw_events WHERE project = ?').get(project) as any).c;
+  const latestRawEventAt = (db.prepare("SELECT created_at FROM raw_events WHERE project = ? ORDER BY created_at DESC LIMIT 1").get(project) as any)?.created_at ?? null;
+
+  const active_agents = getActiveAgents({ maxAgeSeconds: 300 });
+
+  const intentsAll = listArtifacts({ project, type: 'intent', status: 'active', limit: 50 });
+  const intents = intentsAll.sort((a, b) => {
+    const ah = (a.data as any).horizon ?? 'project';
+    const bh = (b.data as any).horizon ?? 'project';
+    return (HORIZON_ORDER[ah] ?? 99) - (HORIZON_ORDER[bh] ?? 99);
+  }).slice(0, 10);
+
+  const bugsAll = listArtifacts({ project, type: 'bug', status: 'active', limit: 100 });
+  const bugs = bugsAll.filter(b => {
+    const s = (b.data as any).status;
+    return s !== 'fixed' && s !== 'wontfix';
+  }).sort((a, b) => {
+    const av = SEVERITY_ORDER[(a.data as any).severity ?? 'low'] ?? 3;
+    const bv = SEVERITY_ORDER[(b.data as any).severity ?? 'low'] ?? 3;
+    return av - bv;
+  });
+
+  const decisions = listArtifacts({ project, type: 'decision', status: 'active', limit: 10 });
+
+  const frictionsAll = listArtifacts({ project, type: 'friction', status: 'active', limit: 50 });
+  const frictions = frictionsAll.sort((a, b) => {
+    const af = (a.data as any).frequency_estimate ?? 'Once';
+    const bf = (b.data as any).frequency_estimate ?? 'Once';
+    return (FREQ_ORDER[af] ?? 99) - (FREQ_ORDER[bf] ?? 99);
+  }).slice(0, 8);
+
+  const threshold = parseInt(process.env.MT_BRIEF_CORRECTION_THRESHOLD || '3', 10);
+  const correctionsAll = listArtifacts({ project, type: 'correction', status: 'active', limit: 100 });
+  const corrections = correctionsAll
+    .filter(c => Number((c.data as any).count ?? 0) >= threshold)
+    .sort((a, b) => Number((b.data as any).count ?? 0) - Number((a.data as any).count ?? 0));
+
+  const todos = listArtifacts({ project, type: 'todo', status: 'active', limit: 10 });
+
+  return {
+    project,
+    generated_at,
+    latest_raw_event_at: latestRawEventAt,
+    health: {
+      schema_version: schemaVersion,
+      artifacts_active: artifactsActive,
+      artifacts_by_type: artifactsByTypeRows.map(r => ({ type: r.type, count: r.c })),
+      chunks_processed: chunksProcessed,
+      chunks_total: chunksTotal,
+      raw_events: rawEvents,
+    },
+    active_agents,
+    intents,
+    bugs,
+    decisions,
+    frictions,
+    corrections,
+    todos,
+  };
+}
+
+function truncateSnippet(s: string, cap: number): string {
+  const collapsed = s.replace(/\s+/g, ' ').trim();
+  if (collapsed.length <= cap) return collapsed;
+  return collapsed.slice(0, cap - 1).trimEnd() + '…';
+}
+
+export function renderBrief(data: BriefingData): string {
+  if (data.health.artifacts_active === 0 && data.health.raw_events === 0) {
+    return `# ${data.project} briefing — no data yet.\n`;
+  }
+
+  const parts: string[] = [];
+  parts.push(`# ${data.project} project briefing — ${data.generated_at}`);
+  if (data.latest_raw_event_at) parts.push(`_Latest raw event: ${data.latest_raw_event_at}_`);
+
+  parts.push('');
+  parts.push('## Health');
+  parts.push(`- Schema: v${data.health.schema_version}`);
+  const typeBreakdown = data.health.artifacts_by_type.map(t => `${t.count} ${t.type}`).join(', ');
+  parts.push(`- Artifacts: ${data.health.artifacts_active} active${typeBreakdown ? ` (${typeBreakdown})` : ''}`);
+  parts.push(`- Chunks: ${data.health.chunks_processed}/${data.health.chunks_total}`);
+  parts.push(`- Raw events: ${data.health.raw_events}`);
+
+  parts.push('');
+  parts.push('## Active agents');
+  if (data.active_agents.length === 0) {
+    parts.push('No agents active in last 5 minutes.');
+  } else {
+    for (const a of data.active_agents) {
+      const who = a.participant_id || a.provider;
+      const age = formatRelativeTime(a.seconds_ago);
+      const snippet = a.last_user_snippet ? truncateSnippet(a.last_user_snippet, 100) : null;
+      const doing = snippet ? ` · doing: ${snippet}` : '';
+      parts.push(`- ${who} · ${a.project} · ${age}${doing}`);
+    }
+  }
+
+  if (data.intents.length > 0) {
+    parts.push('');
+    parts.push(`## Intents (${data.intents.length})`);
+    for (const i of data.intents) {
+      const d = i.data as any;
+      const horizon = d.horizon ?? 'project';
+      const stmt = d.statement ?? '';
+      const alignment = d.alignment_check ? ` (alignment: ${d.alignment_check})` : '';
+      parts.push(`- [${horizon}] ${stmt}${alignment}`);
+    }
+  }
+
+  if (data.bugs.length > 0) {
+    parts.push('');
+    parts.push(`## Open bugs (${data.bugs.length})`);
+    for (const b of data.bugs) {
+      const d = b.data as any;
+      const sev = d.severity ?? 'low';
+      const sym = d.symptom ?? '';
+      const ctx = d.context ? ` (context: ${d.context})` : '';
+      parts.push(`- [${sev}] ${sym}${ctx}`);
+    }
+  }
+
+  if (data.decisions.length > 0) {
+    parts.push('');
+    parts.push(`## Recent decisions (last ${data.decisions.length})`);
+    for (const d of data.decisions) {
+      const dd = d.data as any;
+      const stmt = dd.statement ?? '';
+      const rat = dd.rationale ? ` — ${dd.rationale}` : '';
+      const area = dd.area ? ` [${dd.area}]` : '';
+      parts.push(`- ${stmt}${rat}${area}`);
+    }
+  }
+
+  if (data.frictions.length > 0) {
+    parts.push('');
+    parts.push('## Recurring frictions');
+    for (const f of data.frictions) {
+      const d = f.data as any;
+      const pat = d.pattern ?? '';
+      const freq = d.frequency_estimate ?? '';
+      const first = d.first_seen ? `, first_seen ${d.first_seen}` : '';
+      parts.push(`- ${pat} (${freq}${first})`);
+    }
+  }
+
+  if (data.corrections.length > 0) {
+    parts.push('');
+    parts.push('## Corrections above threshold');
+    for (const c of data.corrections) {
+      const d = c.data as any;
+      parts.push(`- was: ${d.previous_belief ?? ''}; now: ${d.corrected_view ?? ''} (seen ${d.count}×, last ${d.last_seen})`);
+    }
+  }
+
+  if (data.todos.length > 0) {
+    parts.push('');
+    parts.push(`## Recent todos (${data.todos.length})`);
+    for (const t of data.todos) {
+      const d = t.data as any;
+      const eff = d.effort ?? 'medium';
+      const stmt = d.statement ?? '';
+      const area = d.area ? ` [${d.area}]` : '';
+      parts.push(`- [${eff}] ${stmt}${area}`);
+    }
+  }
+
+  return parts.join('\n') + '\n';
 }
 
 export type ChunkVirtualInsert = {

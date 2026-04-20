@@ -8,7 +8,7 @@ import {
   initDb, hybridSearch, queryBrain, validateClaim, addToBrain, embedBrain, getStats, getProjects,
   renderActiveAgentsMarkdown,
   listArtifacts, listArtifactKeys, readChunk, queueChunks, db,
-  searchArtifacts,
+  searchArtifacts, getBrief, renderBrief,
 } from './core.ts';
 
 const server = new Server(
@@ -100,6 +100,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             max_age_seconds: { type: "number", description: "Filter for activity within the last N seconds (default: 300)." }
           }
+        },
+      },
+      {
+        name: "get_brief",
+        description: "Session-start preamble for a project: health, active agents (global), intents, open bugs, recent decisions, recurring frictions, corrections above threshold, recent todos. Deterministic markdown render from the artifact corpus — no LLM synthesis.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project: { type: "string", description: "Project slug (e.g. 'mm')." }
+          },
+          required: ["project"],
         },
       },
       {
@@ -227,6 +238,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case "list_active_agents": {
       const args = request.params.arguments || {};
       const md = renderActiveAgentsMarkdown((args.max_age_seconds as number) || 300);
+      return { content: [{ type: "text", text: md }] };
+    }
+    case "get_brief": {
+      const args = request.params.arguments || {};
+      const project = args.project as string | undefined;
+      if (!project) return { content: [{ type: "text", text: "Error: 'project' required." }], isError: true };
+      const md = renderBrief(getBrief(project));
       return { content: [{ type: "text", text: md }] };
     }
     case "embed_brain": {

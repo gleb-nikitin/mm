@@ -14,6 +14,7 @@ import {
   walkWiki, wikiPath,
   batchArtifacts, listArtifacts, listArtifactKeys, searchArtifacts, supersedeArtifact, bumpCorrection,
   readChunk, queueChunks, markChunkProcessed, vacuumBackup,
+  getBrief, renderBrief,
   type ArtifactInput,
 } from './core.ts';
 
@@ -220,6 +221,13 @@ program.command('projects').description('List all unique project slugs in the br
     projects.forEach(p => console.log(`- ${p}`));
   }
 });
+
+program.command('brief')
+  .description('Render session-start briefing: artifacts, active agents, health.')
+  .argument('<project>', 'Project slug (e.g. mm)')
+  .action((project: string) => {
+    process.stdout.write(renderBrief(getBrief(project)));
+  });
 
 program.command('read').argument('<slug>', 'Slug').action((slug) => {
   const filePath = path.join(PATHS.wiki, `${slug}.md`);

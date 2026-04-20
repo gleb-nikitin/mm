@@ -3,7 +3,7 @@ import * as path from 'path';
 import {
   initDb, hybridSearch, getStats, queryBrain, validateClaim, addToBrain, PATHS,
   renderActiveAgentsMarkdown, listArtifacts, queueChunks, readChunk, db,
-  searchArtifacts,
+  searchArtifacts, getBrief, renderBrief,
 } from './core.ts';
 import { filterMechanical } from './narrative.ts';
 
@@ -45,6 +45,7 @@ Endpoints:
 - \`/\`: Web UI (aurora theme).
 - \`/help\`: This markdown endpoint list.
 - \`/active?max_age_seconds=N\`: List currently-active agent sessions (Claude, Codex, Gemini).
+- \`/brief?project=<slug>\`: CTO session-start preamble — artifacts, active agents, health (markdown).
 - \`/query?q=<question>[&source=a,b&project=x,y]\`: Ask a synthesis question, optionally scoped.
 - \`/validate?q=<claim>\`: Fact-check a specific claim.
 - \`/wiki/:slug\`: Read a specific wiki page.
@@ -119,6 +120,13 @@ const server = Bun.serve({
     if (url.pathname === "/active") {
       const maxAge = parseInt(url.searchParams.get("max_age_seconds") || "300", 10);
       const md = renderActiveAgentsMarkdown(maxAge);
+      return new Response(md, { headers: { "Content-Type": "text/markdown" } });
+    }
+
+    if (url.pathname === "/brief") {
+      const project = url.searchParams.get("project");
+      if (!project) return new Response("Missing 'project' parameter", { status: 400 });
+      const md = renderBrief(getBrief(project));
       return new Response(md, { headers: { "Content-Type": "text/markdown" } });
     }
 
