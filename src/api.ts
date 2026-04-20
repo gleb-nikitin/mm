@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   initDb, hybridSearch, getStats, queryBrain, validateClaim, addToBrain, PATHS,
-  renderActiveAgentsMarkdown
+  renderActiveAgentsMarkdown, listArtifacts, queueChunks, readChunk, db,
 } from './core.ts';
 
 // Ensure DB is ready on fresh roots
@@ -10,7 +10,7 @@ initDb();
 
 const UI_DIR = path.resolve(new URL('../ui', import.meta.url).pathname);
 
-const HELP_MD = `# Brain API v0.8.0
+const HELP_MD = `# Brain API v0.9.0 (v11 schema)
 
 Endpoints:
 - \`/\`: Web UI (aurora theme).
@@ -19,9 +19,13 @@ Endpoints:
 - \`/query?q=<question>[&source=a,b&project=x,y]\`: Ask a synthesis question, optionally scoped.
 - \`/validate?q=<claim>\`: Fact-check a specific claim.
 - \`/wiki/:slug\`: Read a specific wiki page.
-- \`/stats\`: High-level brain statistics.
+- \`/stats\`: High-level brain statistics (includes v11 artifact + chunk counts).
 - \`/search?q=<query>[&source=a,b&project=x,y]\`: Hybrid search, optionally scoped.
 - \`/add\`: POST { content, title, source_type?, project? } or GET ?c=...&t=...&source=...&project=...
+- \`/artifacts?project=&type=&status=&limit=\`: JSON list of artifacts (status default: active; 'all' to disable).
+- \`/chunks?project=&limit=\`: JSON list of pending chunks_virtual.
+- \`/chunk/:id\`: JSON — reconstructed chunk content + metadata.
+- \`/artifacts-ui\`: Artifacts browser UI.
 
 Scoping params:
 - \`source\`: comma-separated source_types (claude, telegram, chains, docs, research, knowledge).
@@ -88,6 +92,11 @@ const server = Bun.serve({
 
     if (url.pathname === "/stats") {
       const stats = getStats();
+      const artifactsTotal = (db.prepare('SELECT COUNT(*) as c FROM artifacts').get() as any).c;
+      const artifactsActive = (db.prepare("SELECT COUNT(*) as c FROM artifacts WHERE status = 'active'").get() as any).c;
+      const artifactsByType = db.prepare("SELECT type, COUNT(*) as c FROM artifacts WHERE status = 'active' GROUP BY type ORDER BY c DESC").all() as any[];
+      const chunksTotal = (db.prepare('SELECT COUNT(*) as c FROM chunks_virtual').get() as any).c;
+      const chunksPending = (db.prepare('SELECT COUNT(*) as c FROM chunks_virtual WHERE processed = 0').get() as any).c;
       let md = "# Brain Stats\n\n";
       md += `- Schema Version: ${stats.version}\n`;
       md += `- Pages: ${stats.pages}\n`;
@@ -96,7 +105,59 @@ const server = Bun.serve({
       md += `- Claims: ${stats.claims}\n`;
       md += `- Embedded Chunks: ${stats.embeddedChunks} / ${stats.totalChunks}\n`;
       md += `- Avg Sources/Page: ${stats.avgSource}\n`;
+      md += `\n## v11\n\n`;
+      md += `- Artifacts (active / total): ${artifactsActive} / ${artifactsTotal}\n`;
+      md += `- Chunks (pending / total): ${chunksPending} / ${chunksTotal}\n`;
+      if (artifactsByType.length > 0) {
+        md += `\n### Active artifacts by type\n\n`;
+        for (const r of artifactsByType) md += `- ${r.type}: ${r.c}\n`;
+      }
       return new Response(md, { headers: { "Content-Type": "text/markdown" } });
+    }
+
+    if (url.pathname === "/artifacts") {
+      const project = url.searchParams.get("project");
+      const type    = url.searchParams.get("type");
+      const status  = url.searchParams.get("status") || "active";
+      const limit   = parseInt(url.searchParams.get("limit") || "500", 10);
+      const rows = listArtifacts({
+        project: project || null,
+        type: type || null,
+        status: status === "all" ? null : status,
+        limit,
+      });
+      // Attach source counts for each artifact (cheap: one query per page load, not per row).
+      const srcMap = new Map<number, number>();
+      if (rows.length > 0) {
+        const ids = rows.map(r => r.id);
+        const placeholders = ids.map(() => '?').join(',');
+        const sources = db.prepare(`SELECT artifact_id, COUNT(*) as c FROM artifact_sources WHERE artifact_id IN (${placeholders}) GROUP BY artifact_id`).all(...ids) as any[];
+        for (const s of sources) srcMap.set(s.artifact_id, s.c);
+      }
+      const enriched = rows.map(r => ({ ...r, source_count: srcMap.get(r.id) || 0 }));
+      return new Response(JSON.stringify(enriched), { headers: { "Content-Type": "application/json" } });
+    }
+
+    if (url.pathname === "/chunks") {
+      const project = url.searchParams.get("project");
+      const limit = parseInt(url.searchParams.get("limit") || "500", 10);
+      const rows = queueChunks(project || null, limit);
+      return new Response(JSON.stringify(rows), { headers: { "Content-Type": "application/json" } });
+    }
+
+    if (url.pathname.startsWith("/chunk/")) {
+      const id = parseInt(url.pathname.replace("/chunk/", ""), 10);
+      if (!id) return new Response("Bad chunk id", { status: 400 });
+      try {
+        const chunk = readChunk(id);
+        return new Response(JSON.stringify(chunk), { headers: { "Content-Type": "application/json" } });
+      } catch (e: any) {
+        return new Response(e.message || "Not found", { status: 404 });
+      }
+    }
+
+    if (url.pathname === "/artifacts-ui") {
+      return serveUiFile("/artifacts.html");
     }
 
     if (url.pathname.startsWith("/wiki/")) {

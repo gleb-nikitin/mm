@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mnemonic · Artifacts</title>
+  <style>
+    :root {
+      --bg: #0a0e14;
+      --panel-bg: rgba(255, 255, 255, 0.035);
+      --panel-border: rgba(255, 255, 255, 0.08);
+      --text: #e6edf3;
+      --text-muted: rgba(230, 237, 243, 0.5);
+      --accent: #7ec8e3;
+      --accent-2: #b794f6;
+      --accent-glow: rgba(126, 200, 227, 0.15);
+      --retired: rgba(230, 237, 243, 0.35);
+      --blur: 16px;
+      --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-6: 24px;
+      --r: 8px;
+      --f: 'Monaco', 'Menlo', 'Consolas', monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; min-height: 100vh; }
+    body {
+      background:
+        radial-gradient(ellipse 800px 600px at 15% 10%, rgba(126, 200, 227, 0.10) 0%, transparent 55%),
+        radial-gradient(ellipse 700px 500px at 85% 90%, rgba(183, 148, 246, 0.10) 0%, transparent 55%),
+        var(--bg);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: var(--f);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .app { display: flex; flex-direction: column; max-width: 1100px; margin: 0 auto; padding: var(--sp-6) var(--sp-4); gap: var(--sp-4); }
+    .title { font-size: 13px; font-weight: 700; letter-spacing: 0.28em; color: var(--accent); text-shadow: 0 0 12px var(--accent-glow); padding: 0 var(--sp-2); }
+    .status-line { font-size: 11px; color: var(--text-muted); padding: 0 var(--sp-2); margin-top: calc(-1 * var(--sp-2)); }
+    .panel { background: var(--panel-bg); backdrop-filter: blur(var(--blur)); -webkit-backdrop-filter: blur(var(--blur)); border: 1px solid var(--panel-border); border-radius: var(--r); box-shadow: 0 4px 32px rgba(0,0,0,0.35); }
+    .filters { display: flex; gap: var(--sp-2); padding: var(--sp-3); flex-wrap: wrap; align-items: center; }
+    .filters label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; margin-right: 2px; }
+    .filters select, .filters input {
+      background: rgba(255,255,255,0.02); color: var(--text); border: 1px solid var(--panel-border);
+      border-radius: 4px; padding: 4px 8px; font-family: var(--f); font-size: 13px; min-width: 100px;
+    }
+    .filters input[type=text] { min-width: 180px; }
+    .filters button {
+      background: transparent; color: var(--accent); border: 1px solid var(--accent);
+      border-radius: 4px; padding: 4px 10px; cursor: pointer; font-family: var(--f); font-size: 12px;
+    }
+    .filters button:hover { background: var(--accent-glow); }
+    .counts { margin-left: auto; font-size: 11px; color: var(--text-muted); }
+    .list { display: flex; flex-direction: column; }
+    .artifact {
+      border-top: 1px solid var(--panel-border); padding: var(--sp-3) var(--sp-4); cursor: pointer;
+    }
+    .artifact:first-child { border-top: none; }
+    .artifact:hover { background: rgba(255,255,255,0.02); }
+    .artifact.retired .head, .artifact.retired .snippet { color: var(--retired); }
+    .head { display: flex; gap: var(--sp-2); align-items: baseline; flex-wrap: wrap; }
+    .type-badge {
+      display: inline-block; font-size: 10px; font-weight: 700; color: var(--accent);
+      border: 1px solid var(--accent); border-radius: 3px; padding: 1px 6px;
+      text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    .type-badge.retired { color: var(--retired); border-color: var(--retired); }
+    .type-badge.correction { color: var(--accent-2); border-color: var(--accent-2); }
+    .project { color: var(--text-muted); font-size: 11px; }
+    .key { color: var(--text-muted); font-size: 11px; font-style: italic; }
+    .id { color: var(--text-muted); font-size: 11px; margin-left: auto; }
+    .snippet { margin-top: 4px; color: var(--text); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .details { margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3); background: rgba(0,0,0,0.25); border-radius: 4px; font-size: 12px; white-space: pre-wrap; word-break: break-word; color: var(--text-muted); }
+    .details strong { color: var(--text); }
+    .sources { margin-top: 4px; color: var(--accent); font-size: 11px; }
+    .empty-state, .error-state { padding: var(--sp-6); color: var(--text-muted); text-align: center; font-style: italic; }
+    .error-state { color: #f87171; }
+    .nav { display: flex; gap: var(--sp-4); padding: 0 var(--sp-2); font-size: 12px; color: var(--text-muted); }
+    .nav a { color: var(--accent); text-decoration: none; }
+    .nav a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body x-data="app()" x-init="init()">
+  <div class="app">
+    <div class="title">MNEMONIC · ARTIFACTS</div>
+    <div class="status-line">
+      Last loaded: <span x-text="lastLoadedStr"></span>
+      <span x-show="stats.version"> · schema v<span x-text="stats.version"></span></span>
+      <span x-show="stats.artifactsActive !== null"> · <span x-text="stats.artifactsActive"></span>/<span x-text="stats.artifactsTotal"></span> active</span>
+      <span x-show="stats.chunksPending !== null"> · chunks <span x-text="stats.chunksPending"></span>/<span x-text="stats.chunksTotal"></span> pending</span>
+    </div>
+    <div class="nav">
+      <a href="/">home</a>
+      <a href="/active-ui">active agents</a>
+      <a href="/stats">stats.md</a>
+    </div>
+
+    <div class="panel">
+      <div class="filters">
+        <label>project</label>
+        <select x-model="filters.project" @change="load()">
+          <option value="">any</option>
+          <template x-for="p in projects" :key="p"><option :value="p" x-text="p"></option></template>
+        </select>
+
+        <label>type</label>
+        <select x-model="filters.type" @change="load()">
+          <option value="">any</option>
+          <template x-for="t in types" :key="t"><option :value="t" x-text="t"></option></template>
+        </select>
+
+        <label>status</label>
+        <select x-model="filters.status" @change="load()">
+          <option value="active">active</option>
+          <option value="retired">retired</option>
+          <option value="invalid">invalid</option>
+          <option value="all">all</option>
+        </select>
+
+        <label>search</label>
+        <input type="text" x-model="filters.q" placeholder="substring match..." @input.debounce.200ms="render()" />
+
+        <button @click="load()">Refresh</button>
+        <span class="counts"><span x-text="visible.length"></span> / <span x-text="rows.length"></span></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div x-show="error" class="error-state" x-text="error"></div>
+      <div x-show="!error && visible.length === 0 && !loading" class="empty-state">No artifacts match these filters.</div>
+      <div x-show="loading" class="empty-state">Loading...</div>
+      <div class="list" x-show="!error">
+        <template x-for="a in visible" :key="a.id">
+          <div class="artifact" :class="{ retired: a.status !== 'active' }" @click="toggle(a.id)">
+            <div class="head">
+              <span class="type-badge" :class="{ retired: a.status !== 'active', correction: a.type === 'correction' }" x-text="a.type"></span>
+              <span class="project" x-text="a.project"></span>
+              <span class="key" x-text="a.idempotency_key"></span>
+              <span class="id">#<span x-text="a.id"></span> · <span x-text="a.updated_at"></span></span>
+            </div>
+            <div class="snippet" x-text="summarize(a)"></div>
+            <template x-if="open[a.id]">
+              <div>
+                <div class="details" x-html="formatData(a)"></div>
+                <div class="sources" x-show="a.source_count > 0">sources: <span x-text="a.source_count"></span></div>
+                <div class="sources" x-show="a.status !== 'active' && a.superseded_by">superseded by #<span x-text="a.superseded_by"></span></div>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/alpine/cdn.min.js" defer></script>
+  <script>
+    function app() {
+      return {
+        rows: [],
+        visible: [],
+        stats: { version: null, artifactsActive: null, artifactsTotal: null, chunksPending: null, chunksTotal: null },
+        projects: [],
+        types: [],
+        open: {},
+        filters: { project: '', type: '', status: 'active', q: '' },
+        error: null,
+        loading: false,
+        lastLoaded: null,
+        lastLoadedStr: 'never',
+
+        async init() {
+          await this.loadStats();
+          await this.load();
+        },
+
+        async loadStats() {
+          try {
+            const r = await fetch('/stats');
+            const md = await r.text();
+            const v = md.match(/Schema Version:\s*(\d+)/); if (v) this.stats.version = parseInt(v[1], 10);
+            const a = md.match(/Artifacts \(active \/ total\):\s*(\d+)\s*\/\s*(\d+)/);
+            if (a) { this.stats.artifactsActive = parseInt(a[1], 10); this.stats.artifactsTotal = parseInt(a[2], 10); }
+            const c = md.match(/Chunks \(pending \/ total\):\s*(\d+)\s*\/\s*(\d+)/);
+            if (c) { this.stats.chunksPending = parseInt(c[1], 10); this.stats.chunksTotal = parseInt(c[2], 10); }
+          } catch (e) { console.error(e); }
+        },
+
+        async load() {
+          this.loading = true;
+          this.error = null;
+          try {
+            const params = new URLSearchParams();
+            if (this.filters.project) params.set('project', this.filters.project);
+            if (this.filters.type)    params.set('type',    this.filters.type);
+            params.set('status', this.filters.status);
+            params.set('limit', '1000');
+            const r = await fetch('/artifacts?' + params.toString());
+            if (!r.ok) throw new Error('Fetch failed: ' + r.status);
+            this.rows = await r.json();
+            this.projects = Array.from(new Set(this.rows.map(x => x.project))).sort();
+            this.types = Array.from(new Set(this.rows.map(x => x.type))).sort();
+            this.lastLoaded = Date.now();
+            this.lastLoadedStr = new Date(this.lastLoaded).toLocaleTimeString();
+            this.render();
+          } catch (e) {
+            this.error = e.message;
+          } finally {
+            this.loading = false;
+          }
+        },
+
+        render() {
+          const q = (this.filters.q || '').toLowerCase().trim();
+          if (!q) { this.visible = this.rows; return; }
+          this.visible = this.rows.filter(r => {
+            const blob = (r.idempotency_key + ' ' + r.type + ' ' + JSON.stringify(r.data)).toLowerCase();
+            return blob.includes(q);
+          });
+        },
+
+        toggle(id) { this.open[id] = !this.open[id]; },
+
+        summarize(a) {
+          const d = a.data || {};
+          return d.statement || d.symptom || d.problem || d.pattern || d.note || d.technology || d.area || d.error_message || d.previous_belief || JSON.stringify(d).slice(0, 180);
+        },
+
+        formatData(a) {
+          const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          const parts = [];
+          for (const [k, v] of Object.entries(a.data || {})) {
+            let rendered;
+            if (v == null) rendered = 'null';
+            else if (typeof v === 'object') rendered = '\n' + esc(JSON.stringify(v, null, 2));
+            else rendered = esc(String(v));
+            parts.push('<strong>' + esc(k) + '</strong>: ' + rendered);
+          }
+          return parts.join('\n');
+        },
+      };
+    }
+  </script>
+</body>
+</html>
