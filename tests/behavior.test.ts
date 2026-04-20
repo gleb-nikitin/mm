@@ -565,6 +565,130 @@ describe('import-claude dedup', () => {
     expect(second.out).toContain('imported:          0');
   });
 
+  test('extending a session with processed=1 re-chunks AND resets processed (was stranded under v11.1)', async () => {
+    const projectsDir = path.join(tmpRoot, 'claude-projects');
+    const sessionsDir = path.join(projectsDir, '-Users-test-work-mm');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const jsonl = path.join(sessionsDir, 'sess-processed.jsonl');
+
+    const writeJsonl = (lines: any[]) =>
+      fs.writeFileSync(jsonl, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
+
+    const baseTurns = [
+      { sessionId: 'sess-processed', type: 'user', timestamp: '2026-04-18T10:00:00Z', cwd: '/Users/test/work/mm', message: { content: 'initial turn' } },
+      { sessionId: 'sess-processed', type: 'assistant', timestamp: '2026-04-18T10:00:05Z', message: { model: 'claude-opus-4-7', content: [{ type: 'text', text: 'reply' }] } },
+    ];
+    writeJsonl(baseTurns);
+    const aged = (Date.now() - 10 * 60 * 1000) / 1000;
+    fs.utimesSync(jsonl, aged, aged);
+
+    const runImporter = async () => {
+      const proc = Bun.spawn(['bun', IMPORT_CLAUDE_TS, '--projects-dir', projectsDir, '--days', '0', '--min-turns', '1'], {
+        env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
+        stdout: 'pipe', stderr: 'pipe',
+      });
+      await proc.exited;
+      return proc;
+    };
+
+    await runImporter();
+
+    // Simulate a v10 wiki ingest having already processed this row.
+    const db1 = openDb();
+    db1.prepare(`UPDATE raw_events SET processed = 1, chunked = 1 WHERE external_id = 'sess-processed'`).run();
+    db1.close();
+
+    writeJsonl([
+      ...baseTurns,
+      { sessionId: 'sess-processed', type: 'user', timestamp: '2026-04-18T10:01:00Z', cwd: '/Users/test/work/mm', message: { content: 'a later turn UNIQUE_LATER' } },
+      { sessionId: 'sess-processed', type: 'assistant', timestamp: '2026-04-18T10:01:05Z', message: { model: 'claude-opus-4-7', content: [{ type: 'text', text: 'fine' }] } },
+    ]);
+    const aged2 = (Date.now() - 9 * 60 * 1000) / 1000;
+    fs.utimesSync(jsonl, aged2, aged2);
+
+    await runImporter();
+
+    const db2 = openDb();
+    const row = db2.prepare(`SELECT content, processed, chunked FROM raw_events WHERE external_id = 'sess-processed'`).get() as any;
+    db2.close();
+    expect(row.content).toContain('UNIQUE_LATER');
+    expect(row.processed).toBe(0); // reset — row is no longer stranded
+    expect(row.chunked).toBe(0);
+  });
+
+  test('upsertRawEvent keeps raw_events and events_fts in sync when project changes', async () => {
+    // Use a direct bun -e invocation so we can control inputs precisely.
+    const proc = Bun.spawn(['bun', '-e', `
+      import { initDb, db, upsertRawEvent } from '${path.join(REPO, 'src', 'core.ts')}';
+      initDb();
+      upsertRawEvent({
+        source_type: 'llm_chat', project: 'oldproj',
+        external_id: 'sync-test', timestamp: '2026-04-18T10:00:00Z',
+        content: 'first content', title: 't1',
+      });
+      const r1 = upsertRawEvent({
+        source_type: 'llm_chat', project: 'newproj',
+        external_id: 'sync-test', timestamp: '2026-04-18T11:00:00Z',
+        content: 'second content — UNIQUE_CHANGED', title: 't2',
+      });
+      console.log(JSON.stringify({ result: r1 }));
+      const re = db.prepare("SELECT project, source_type FROM raw_events WHERE external_id = 'sync-test'").get();
+      const fts = db.prepare("SELECT project, source_type FROM events_fts WHERE external_id = 'sync-test'").get();
+      console.log(JSON.stringify({ re, fts }));
+    `], {
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
+      stdout: 'pipe', stderr: 'pipe',
+    });
+    const stdout = await new Response(proc.stdout).text();
+    await proc.exited;
+
+    const lines = stdout.trim().split('\n').filter(Boolean);
+    const first = JSON.parse(lines[0]);
+    const state = JSON.parse(lines[1]);
+    expect(first.result).toBe('updated');
+    expect(state.re.project).toBe('newproj');
+    expect(state.re.source_type).toBe('llm_chat');
+    expect(state.fts.project).toBe('newproj');
+    // Invariant: raw_events.project === events_fts.project after any upsert.
+    expect(state.re.project).toBe(state.fts.project);
+  });
+
+  test('upsertRawEvent is transactional — FTS failure rolls back the raw_events update', async () => {
+    // Seed one row, then corrupt events_fts so the UPDATE path's DELETE/INSERT
+    // will fail. The tx wrap must ensure raw_events.content doesn't move.
+    const proc = Bun.spawn(['bun', '-e', `
+      import { initDb, db, upsertRawEvent } from '${path.join(REPO, 'src', 'core.ts')}';
+      initDb();
+      upsertRawEvent({
+        source_type: 'llm_chat', project: 'tx',
+        external_id: 'tx-test', timestamp: '2026-04-18T10:00:00Z',
+        content: 'original',
+      });
+      // Drop the events_fts virtual table to force a failure inside the tx.
+      db.exec('DROP TABLE IF EXISTS events_fts');
+      let threw = false;
+      try {
+        upsertRawEvent({
+          source_type: 'llm_chat', project: 'tx',
+          external_id: 'tx-test', timestamp: '2026-04-18T11:00:00Z',
+          content: 'OVERWRITTEN',
+        });
+      } catch { threw = true; }
+      const row = db.prepare("SELECT content, chunked FROM raw_events WHERE external_id = 'tx-test'").get();
+      console.log(JSON.stringify({ threw, content: row.content, chunked: row.chunked }));
+    `], {
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
+      stdout: 'pipe', stderr: 'pipe',
+    });
+    const stdout = await new Response(proc.stdout).text();
+    await proc.exited;
+
+    const parsed = JSON.parse(stdout.trim().split('\n').pop()!);
+    expect(parsed.threw).toBe(true);
+    expect(parsed.content).toBe('original');  // rolled back
+    expect(parsed.chunked).toBe(0);            // original insert state preserved
+  });
+
   test('extending a session (same id, new turns) updates content and resets chunked', async () => {
     const projectsDir = path.join(tmpRoot, 'claude-projects');
     const sessionsDir = path.join(projectsDir, '-Users-test-work-mm');

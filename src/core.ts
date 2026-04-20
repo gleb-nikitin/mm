@@ -1111,18 +1111,24 @@ export function markChunkProcessed(id: number): void {
   db.prepare(`UPDATE chunks_virtual SET processed = 1 WHERE id = ?`).run(id);
 }
 
-// --- v11.1: importer idempotency — fixes silent data loss on session updates. ---
+// --- v11.1 / v11.2: importer idempotency ---
 //
-// Before this, importers did INSERT OR IGNORE against raw_events.external_id. When
-// a Claude/Codex/Gemini session file grew (user added more turns), the second
-// import hit the UNIQUE on external_id, dropped silently, and the new turns were
-// never reflected in the DB. The importer then updated import_state.last_mtime,
-// so the next run also skipped the file.
+// v11.1: Stored `content_hash` to fix silent data loss when growing sessions
+// hit `INSERT OR IGNORE` on a stable external_id.
 //
-// Now: content_hash is stored; if external_id matches with a different hash, we
-// UPDATE content + reset chunked so the chunker re-emits chunks_virtual for the
-// event. artifact_sources rows are preserved (spans into the old content remain
-// valid as long as updates are appends, which is the Claude/Codex/Gemini pattern).
+// v11.2 hardens this in three ways (after audit):
+//   (a) Runs the whole upsert inside a single `db.transaction` so partial
+//       failures roll back — previously a mid-function throw could leave
+//       raw_events, chunks_virtual, and events_fts out of sync.
+//   (b) Updates `project` and `source_type` on raw_events (not just the FTS
+//       projection), so a classification change on the same external_id can't
+//       leave the base row disagreeing with events_fts.
+//   (c) Resets `processed = 0` on update. Previously a row that had already
+//       crossed into the v10 wiki-ingest path (`processed = 1`) would be
+//       stranded: chunker skips it, `brain ingest-event` short-circuits.
+//
+// artifact_sources rows are still preserved on update — spans into the old
+// content remain valid for append-growth (the vendor pattern).
 
 export type RawEventInput = {
   source_type: string;
@@ -1137,7 +1143,7 @@ export type RawEventInput = {
 
 export type UpsertRawEventResult = 'inserted' | 'updated' | 'unchanged';
 
-export function upsertRawEvent(e: RawEventInput): UpsertRawEventResult {
+function upsertRawEventInner(e: RawEventInput): UpsertRawEventResult {
   const content_hash = getHash(e.content);
   const existing = db.prepare(
     `SELECT id, content_hash FROM raw_events WHERE external_id = ?`
@@ -1153,56 +1159,55 @@ export function upsertRawEvent(e: RawEventInput): UpsertRawEventResult {
       e.source_type, e.project, e.external_id, e.timestamp, e.content,
       e.title ?? null, e.participants ?? null, e.metadata ?? null, content_hash,
     );
-    try {
-      db.prepare(
-        `INSERT INTO events_fts (external_id, project, source_type, title, content)
-         VALUES (?, ?, ?, ?, ?)`
-      ).run(e.external_id, e.project, e.source_type, e.title ?? '', e.content);
-    } catch {}
-    return 'inserted';
-  }
-
-  // Back-compat: existing rows before v11.1 have content_hash=NULL. Treat as
-  // "unchanged if content matches". Compute + store the hash regardless so
-  // subsequent runs short-circuit.
-  if (existing.content_hash && existing.content_hash === content_hash) {
-    return 'unchanged';
-  }
-
-  db.prepare(
-    `UPDATE raw_events SET
-       content = ?, title = ?, timestamp = ?, metadata = ?,
-       content_hash = ?, chunked = 0
-     WHERE id = ?`
-  ).run(
-    e.content, e.title ?? null, e.timestamp, e.metadata ?? null,
-    content_hash, existing.id,
-  );
-
-  // Clear stale narrative chunks so the chunker re-emits against the new content.
-  db.prepare(`DELETE FROM chunks_virtual WHERE source_event_id = ?`).run(existing.id);
-
-  // Refresh events_fts projection.
-  try {
-    db.prepare(`DELETE FROM events_fts WHERE external_id = ?`).run(e.external_id);
     db.prepare(
       `INSERT INTO events_fts (external_id, project, source_type, title, content)
        VALUES (?, ?, ?, ?, ?)`
     ).run(e.external_id, e.project, e.source_type, e.title ?? '', e.content);
-  } catch {}
-
-  // If hash was previously NULL but content actually matches, treat as unchanged
-  // after the backfill. (Only reachable on first post-v11.1 touch of an old row.)
-  if (!existing.content_hash) {
-    const prior = db.prepare(`SELECT content_hash FROM raw_events WHERE id = ?`).get(existing.id) as any;
-    if (prior && prior.content_hash === content_hash) {
-      // Hash is now stored; if we also just wrote the same content, report unchanged.
-      // (We already cleared chunks_virtual above — conservative but correct: chunker
-      //  re-emits. Acceptable for a one-time migration pass.)
-    }
+    return 'inserted';
   }
 
+  // Back-compat: existing rows before v11.1 have content_hash = NULL.
+  // Compute + store the hash; if content really matches, return 'unchanged'
+  // after writing just the hash (no chunks_virtual clear, no processed reset).
+  if (!existing.content_hash) {
+    const current = db.prepare(`SELECT content FROM raw_events WHERE id = ?`).get(existing.id) as any;
+    if (current && current.content === e.content) {
+      db.prepare(`UPDATE raw_events SET content_hash = ? WHERE id = ?`).run(content_hash, existing.id);
+      return 'unchanged';
+    }
+  } else if (existing.content_hash === content_hash) {
+    return 'unchanged';
+  }
+
+  // Hash differs — re-classify + reset pipeline state. processed=0 so the
+  // chunker/ingester sees this as fresh work.
+  db.prepare(
+    `UPDATE raw_events SET
+       content = ?, title = ?, timestamp = ?, metadata = ?,
+       source_type = ?, project = ?,
+       content_hash = ?, chunked = 0, processed = 0
+     WHERE id = ?`
+  ).run(
+    e.content, e.title ?? null, e.timestamp, e.metadata ?? null,
+    e.source_type, e.project,
+    content_hash, existing.id,
+  );
+
+  // Clear stale narrative chunks so the chunker re-emits against new content.
+  db.prepare(`DELETE FROM chunks_virtual WHERE source_event_id = ?`).run(existing.id);
+
+  // Refresh events_fts projection — if this throws, tx rolls back the UPDATE.
+  db.prepare(`DELETE FROM events_fts WHERE external_id = ?`).run(e.external_id);
+  db.prepare(
+    `INSERT INTO events_fts (external_id, project, source_type, title, content)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(e.external_id, e.project, e.source_type, e.title ?? '', e.content);
+
   return 'updated';
+}
+
+export function upsertRawEvent(e: RawEventInput): UpsertRawEventResult {
+  return db.transaction(() => upsertRawEventInner(e))();
 }
 
 export function vacuumBackup(target: string): void {

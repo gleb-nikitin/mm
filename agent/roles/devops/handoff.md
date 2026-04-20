@@ -4,9 +4,11 @@ Wish I knew on cold start. Current sharp edges only.
 Rewrite target: 50 lines. If it grows, compress; do not append.
 Not a changelog. Not a backlog. Not history. Use git for what changed; use chains for why.
 
-## Wish I knew (v11 + audit — 2026-04-20)
+## Wish I knew (v11 + v11.2 audit round — 2026-04-20)
 
-**Schema is v11 + additive `raw_events.content_hash`.** `initDb` adds the column; no version bump. Purpose: fix silent data loss on session growth — importers now UPSERT via shared `upsertRawEvent` helper in core. On hash change, content is updated, `chunks_virtual` for that event is dropped, `chunked` resets. `artifact_sources` is preserved (spans remain valid for append-growth, which is the vendor pattern).
+**Schema is v11 + additive `raw_events.content_hash`.** `initDb` adds the column; no version bump. Purpose: fix silent data loss on session growth — importers now UPSERT via shared `upsertRawEvent` helper in core.
+
+**`upsertRawEvent` is transactional (v11.2).** Body is wrapped in `db.transaction`. On hash change it UPDATEs content, title, timestamp, metadata, **project, source_type**, resets `chunked=0` AND `processed=0`, deletes `chunks_virtual` for that event, and rewrites `events_fts`. FTS failures now bubble up and roll the whole thing back — the earlier catch `{}` swallows are gone. `artifact_sources` is preserved (append-growth pattern keeps spans valid).
 
 **API binds `127.0.0.1` by default.** `MT_BIND=0.0.0.0` overrides with a startup warning. `/raw-ui`, `/chunk/:id`, `/artifact/:id`, `/active` all leak raw transcripts — never expose without a real reason.
 
@@ -26,12 +28,15 @@ Not a changelog. Not a backlog. Not history. Use git for what changed; use chain
 
 ## Deferred — next devops call
 
-Codex audit (2026-04-20) flagged 4 v10-era bugs. All live in the code surface v11 hasn't ripped out yet:
-
+**From audit round 1 (v10-surface bugs):**
 - `brain add` / `raw_entries` is invisible to search (no FTS index, not embedded).
 - `brain index rebuild` flips `processed=1→0` because `addToBrain` and `internalRebuildIndex` compute hash over different payloads.
 - `wiki_pages.source_count` drift after rebuild (frontmatter overwrites authoritative count from `claims`).
 - `/query` ignores event evidence — `queryBrain` only uses wiki+raw, not events.
+
+**From audit round 2 (on the audit fix itself):**
+- `import_state.last_mtime` is advanced BEFORE `upsertRawEvent` runs, so a failed write still checkpoints the file and next run skips it. Fixing requires splitting the column into live-agent-freshness vs import-checkpoint semantics (additive schema column or separate UPDATE paths). Not v11.2 scope — the tx wrap on `upsertRawEvent` already prevents half-written rows. Worth doing before the next importer rewrite.
+- Test suite has a pre-existing ~20% flake rate on `/active markdown shape` and `chunk-events` tests (pre-dates v11.2 changes). Unrelated to correctness but noisy. Worth hunting if CI lands.
 
 **Meta-call**: rip v10 paths entirely, or maintain both? Fix-as-bug treats them as supported; rip resolves correctness. v12 briefing protocol replaces `/query` either way.
 
