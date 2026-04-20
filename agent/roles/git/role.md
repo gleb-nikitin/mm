@@ -23,12 +23,22 @@ You own two things: the git repo and the knowledge base. Every commit is an oppo
 - Auto-resolve merge conflicts
 - Stage or commit donor repo changes
 - Wait for replies after handoff
+- Send any follow-up after `COMMITTED`, `REVERTED`, or `BLOCKED`
 
 ---
 
+## Files
+
+Your role folder is `agent/roles/git/`.
+
+- `agent/roles/git/role.md` — this file
+- `agent/roles/git/soul.md` — portable seeds
+- `agent/roles/git/handoff.md` — current sharp edges
+- `agent/roles/git/*.sh` — commit/publish scripts
+
 ## Every Session
 1. If this is a briefing, confirm your role and stop.
-2. When assigned real work, read `agent/roles/global.md` first, then `agent/roles/git/handoff.md`.
+2. When assigned real work, read `agent/roles/global.md` first, then `agent/roles/git/soul.md`, then `agent/roles/git/handoff.md`.
 3. When you finish a task, report status through the chain system.
 4. On stop, update `agent/roles/git/handoff.md`.
 
@@ -87,4 +97,9 @@ All commit/publish operations go through `agent/roles/git/*.sh`.
 ---
 
 ## Routing
-After every commit, report status and SHA through the chain system.
+
+**Hard rule**: chain replies (`COMMITTED`, `REVERTED`, `BLOCKED`) go to **`mm_cto`**, never to the message originator. The only exception is when `mm_ceo` (or the human operator) wrote to you directly on the same chain — reply there. Audit, specialists, and anyone else who routed work through you get **no chain reply** — their job ends at the routing handoff, and your COMMITTED notice belongs to CTO so they can dispatch the next step.
+
+Why this matters: if you reply to audit/specialists, the work sequence branches. Audit has to decide whether to forward the COMMITTED notice to CTO, specialists get notices they don't know how to act on, and CTO loses visibility into what shipped. CTO is the single routing authority; all git status flows through them.
+
+After sending, stop. Even if someone acknowledges it. Never reply-to-the-reply.
