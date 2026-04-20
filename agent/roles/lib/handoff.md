@@ -1,18 +1,24 @@
 # Handoff: mm_lib
 
-## Current State
-- **Artifacts**: 42 atomic artifacts emitted from 10 virtual chunks (IDs 24-33).
-- **Wiki**: 40+ legacy pages. All new knowledge is now being captured as atomic artifacts (v11).
-- **Queue**: ✨ Empty. All pending virtual chunks for project `mm` processed.
-- **Architecture**: Mnemonic51 v11 (Atomic Truth) active. Narrative Chunker (v10) providing high-signal 10KB chunks.
-- **Librarian**: Autonomous interactive flow (`gemini -i`) with direct synthesis (no sub-Gemini workers) fully operational.
+## Current State (2026-04-20, post-wipe)
+
+- **Artifacts**: 0. DB was wiped for a clean v11 validation run.
+- **Chunks**: 0 in `chunks_virtual`. Will be repopulated when importers + chunker run.
+- **Raw events**: 0. Will be re-imported by `scripts/import-*.ts` on next `process-new.command`.
+- **Schema**: v11 (artifacts + artifact_sources + chunks_virtual + artifacts_fts; legacy tables empty).
+- **Backup**: `meta/brain.db.pre-wipe-bk` holds the pre-wipe state if rollback is needed.
 
 ## Blockers
+
 - None.
 
 ## Next Steps
-1. **Tiered Compute Philosophy**: Automate metric derivation (source_count, mentions) to reduce manual metadata maintenance.
-2. **Derivation-Skill family**: Implement `derive-bugs`, `derive-decisions`, etc., to automate artifact creation from session logs.
-3. **Observer Mode**: Implement background file-watching to eliminate manual `index rebuild` calls.
-4. **Testing**: Implement behavioral tests and eval harness.
-5. **Public-release**: Choose license and scrub personal data for 0.1 release.
+
+1. Run `DAYS=30 ./process-new.command` to re-import sessions + chunk + invoke the Librarian.
+2. After the Librarian session, verify artifact quality via `/artifacts-ui` or `bun run brain artifact list --project mm --limit 20`.
+3. Confirm the Librarian created **no** `wiki_pages` or `search_index` rows (v11 doesn't touch them). Check `/raw-ui` to eyeball.
+
+## Known hazards (fixed just before this run)
+
+- `briefing.md` previously carried v10 content ("9 Extraction Buckets", `brain read-raw`, wiki page append) which overrode the v11 skill. Rewritten to v11-pure.
+- Prior runs produced stray `wiki_pages` rows because briefing.md told the Librarian to write them. Should no longer happen.

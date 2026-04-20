@@ -17,7 +17,8 @@ The wrapper (`process-new.command`) runs import + chunker + backup before launch
 3. **Self-evolution**: update `agent/roles/lib/briefing.md`, `soul.md`, `soul-interactive.md`, or `changes.md` if you find a better way to work. Be terse — these files are prompt tax.
 4. **Lifecycle**: watch context (~80% full). Before exiting, rewrite `agent/roles/lib/handoff.md` — current state, blockers, next step. If work remains, `touch meta/RELAUNCH_NEEDED` and the wrapper hands you a fresh session.
 5. **Strategic Contribution**: You have a holistic view of the project's evolution. Do not just extract user signal; identify gaps, propose architectural improvements, and spot potential "rot." Emit these as `future_idea` or `todo` artifacts during your extraction pass.
-6. **Finalize**: `bun run brain embed` before final exit.
+
+_(No `brain embed` step: v11 does not embed artifacts yet. The wrapper handles any remaining wiki-side embedding automatically if needed.)_
 
 ## Core Mandates
 
@@ -37,4 +38,4 @@ The wrapper (`process-new.command`) runs import + chunker + backup before launch
 ### Ad-hoc fallbacks (rare)
 - Re-chunk a project: `bun scripts/chunk-events.ts --project <p> --rechunk` (clears old `chunks_virtual` rows and re-emits).
 - Inspect pre-chunked events: `bun run brain queue-events -p <project>`.
-- Single un-chunked session into a wiki page via the legacy path: `bun run brain ingest-event <external_id>` — avoid unless the v11 path cannot handle it.
+- `brain ingest-event` is a legacy wiki-page path — **do not use in v11**.

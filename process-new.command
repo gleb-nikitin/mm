@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Double-click to launch the Librarian (Gemini) for autonomous ingestion and wiki maintenance.
+# Double-click to launch the v11 Librarian: import sessions → chunk → extract atomic artifacts.
 
 set -e
 
@@ -70,8 +70,10 @@ EOF
   fi
 done
 
-echo "\n✅ Step 5/5: Librarian finished. Running embed..."
-bun run brain embed
+echo "\n✅ Step 5/5: Librarian finished."
+# NB: skipping `brain embed` — v11 artifacts aren't embedded yet and there
+# should be no new wiki pages for the embedder to touch. Re-enable if/when
+# artifact embedding lands.
 
 echo "\nDone. Press any key to close..."
 read -k 1
