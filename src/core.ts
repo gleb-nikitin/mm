@@ -646,6 +646,7 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
 
 export function getStats() {
   const version = (db.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any)?.version || 0;
+  // v10 surface (still reported for back-compat; rip candidates).
   const totalChunks = (db.prepare('SELECT COUNT(*) as c FROM chunks').get() as any).c;
   const embeddedChunks = (db.prepare('SELECT COUNT(*) as c FROM chunks WHERE embedding IS NOT NULL').get() as any).c;
   const pages = (db.prepare('SELECT COUNT(*) as c FROM wiki_pages').get() as any).c;
@@ -653,6 +654,16 @@ export function getStats() {
   const links = (db.prepare('SELECT COUNT(*) as c FROM wiki_links').get() as any).c;
   const claims = (db.prepare('SELECT COUNT(*) as c FROM claims').get() as any).c;
   const avgSource = (db.prepare('SELECT AVG(source_count) as a FROM wiki_pages').get() as any).a || 0;
+
+  // v11 surface (authoritative for artifacts + narrative chunks).
+  const artifactsTotal    = (db.prepare('SELECT COUNT(*) as c FROM artifacts').get() as any).c;
+  const artifactsActive   = (db.prepare("SELECT COUNT(*) as c FROM artifacts WHERE status = 'active'").get() as any).c;
+  const chunksVirtualTotal   = (db.prepare('SELECT COUNT(*) as c FROM chunks_virtual').get() as any).c;
+  const chunksVirtualPending = (db.prepare('SELECT COUNT(*) as c FROM chunks_virtual WHERE processed = 0').get() as any).c;
+  const rawEventsTotal = (db.prepare('SELECT COUNT(*) as c FROM raw_events').get() as any).c;
+  const artifactsByType = db.prepare(
+    "SELECT type, COUNT(*) as c FROM artifacts WHERE status = 'active' GROUP BY type ORDER BY c DESC"
+  ).all() as any[];
 
   return {
     version,
@@ -663,11 +674,25 @@ export function getStats() {
     totalChunks,
     embeddedChunks,
     avgSource: Number(avgSource.toFixed(2)),
+    artifactsTotal,
+    artifactsActive,
+    artifactsByType: artifactsByType.map(r => ({ type: r.type, count: r.c })),
+    chunksVirtualTotal,
+    chunksVirtualPending,
+    rawEventsTotal,
   };
 }
 
 export function getProjects(): string[] {
-  const rows = db.prepare('SELECT DISTINCT project FROM raw_entries WHERE project IS NOT NULL ORDER BY project ASC').all() as any[];
+  // Union across v11 (artifacts, raw_events) and v10 (raw_entries) surfaces.
+  const rows = db.prepare(`
+    SELECT DISTINCT project FROM raw_entries WHERE project IS NOT NULL
+    UNION
+    SELECT DISTINCT project FROM raw_events  WHERE project IS NOT NULL
+    UNION
+    SELECT DISTINCT project FROM artifacts   WHERE project IS NOT NULL
+    ORDER BY project ASC
+  `).all() as any[];
   return rows.map(r => r.project);
 }
 
