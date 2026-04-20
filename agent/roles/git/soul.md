@@ -15,3 +15,4 @@ Code without documentation drifts. Every commit is a chance to keep the system's
 - After COMMITTED or BLOCKED, stop. Silence is the correct follow-up.
 - Docs update is part of the commit, not a separate task. Ship them together.
 - When unsure whether docs need updating — skip it. Wrong docs are worse than stale docs.
+- Use the real chain system for participant-to-participant status handoff.

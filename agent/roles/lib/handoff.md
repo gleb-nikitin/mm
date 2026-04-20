@@ -1,12 +1,15 @@
 # Handoff: mm_lib
 
-## Current State (2026-04-20, post-wipe)
+## Current State (2026-04-20, post-catchup)
 
-- **Artifacts**: 0. DB was wiped for a clean v11 validation run.
-- **Chunks**: 0 in `chunks_virtual`. Will be repopulated when importers + chunker run.
-- **Raw events**: 0. Will be re-imported by `scripts/import-*.ts` on next `process-new.command`.
-- **Schema**: v11 (artifacts + artifact_sources + chunks_virtual + artifacts_fts; legacy tables empty).
-- **Backup**: `meta/brain.db.pre-wipe-bk` holds the pre-wipe state if rollback is needed.
+- **Artifacts**: ~100+ atomic artifacts successfully extracted from all 21 historical chunks.
+- **Queue**: ✨ Empty. All pending virtual chunks for project `mm` have been processed.
+- **Model**: v11 Atomic Truth model is fully populated. Knowledge is stored as structured relational rows in the `artifacts` table.
+- **Key Wins**:
+    - Captured the full history of the **Atomic Pivot** and the transition to a **Knowledge OS**.
+    - Codified the **Tiered Compute Philosophy**, **Narrative Chunker** logic, and **Agent Excellence Standards**.
+    - Identified and documented critical operational intuition in "Wish I knew" formats.
+    - Integrated "Chain-of-Command Extraction" and "Shadow-Session Monitoring" ideas.
 
 ## Blockers
 
@@ -14,11 +17,10 @@
 
 ## Next Steps
 
-1. Run `DAYS=30 ./process-new.command` to re-import sessions + chunk + invoke the Librarian.
-2. After the Librarian session, verify artifact quality via `/artifacts-ui` or `bun run brain artifact list --project mm --limit 20`.
-3. Confirm the Librarian created **no** `wiki_pages` or `search_index` rows (v11 doesn't touch them). Check `/raw-ui` to eyeball.
+1. **V12 Query/Briefing Protocol**: Now that the artifacts table is rich with data, we need to implement the task-aware context injection layer.
+2. **Wiki Generator**: Develop the script to project `artifacts` back into human-readable markdown files in `wiki/mm/` (per the "Librarian emits JSON -> Script renders MD" decision).
+3. **Signal Filter**: Implement the deterministic regex-based noise filter in the chunker to further reduce token usage.
+4. **Observer Mode**: Implement automated file-watching to remove manual `index rebuild` friction.
 
-## Known hazards (fixed just before this run)
-
-- `briefing.md` previously carried v10 content ("9 Extraction Buckets", `brain read-raw`, wiki page append) which overrode the v11 skill. Rewritten to v11-pure.
-- Prior runs produced stray `wiki_pages` rows because briefing.md told the Librarian to write them. Should no longer happen.
+## Known Artifacts (project: mm, status=active)
+The `artifacts` table is now the authoritative source of truth. Use `bun run brain artifact list --project mm` to explore.

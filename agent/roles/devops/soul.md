@@ -14,3 +14,4 @@ A memory engine that cannot bootstrap cleanly is not a memory engine yet. Operat
 - **Public repo shape is product UX.** A confusing root directory leaks uncertainty to every future contributor and agent.
 - **Cleanup follows stabilization.** Do not reorganize a moving target; land the behavior first, then clean the structure.
 - **Operational docs should be short and current.** Handoff docs that accumulate history become archaeology, not guidance.
+- **Use the real chain system.** Participant-to-participant coordination belongs in chains, not terminal text.

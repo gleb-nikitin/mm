@@ -15,7 +15,8 @@ This directory is for agents (LLMs, autonomous sessions, reviewers) working on M
 ## Reading order for a fresh session
 
 1. [`human-how-it-works.md`](../human-how-it-works.md) — what lives where, pipelines, **`meta/`** instruction files (§2.3)
-2. The relevant role's files in the order the role prescribes (typically `soul.md` → `role.md` → `handoff.md`)
+2. [`agent/STANDARDS.md`](STANDARDS.md) — Mandatory: Zero-Waste execution and Signal-to-Noise rules
+3. The relevant role's files in the order the role prescribes (typically `soul.md` → `role.md` → `handoff.md`)
 3. `agent/docs/roadmap.md`
 4. [`how-mm-works.md`](../how-mm-works.md) — operator manual (data lifecycle, cron ideas, troubleshooting)
 5. Code: `src/brain.ts`, `src/core.ts`, `src/api.ts`, `src/mcp.ts`; schema: `meta/schema.md`; delta tracker: `meta/remaining-gaps.md`

@@ -23,8 +23,13 @@ Mnemonic51 is no longer a prototype. It needs to run cleanly as a local tool, a 
 
 ## Every session
 
-- **Start**: read `soul.md`, then `handoff.md`, then `agent/docs/roadmap.md`.
+- **Start**: read `agent/roles/global.md`, then `soul.md`, then `handoff.md`, then `agent/docs/roadmap.md`.
 - **Stop**: rewrite `handoff.md` with current state, blockers, and exact next checks.
+
+## Communication
+
+- Use chains for participant-to-participant coordination.
+- Terminal text is local; chain messages are shared state.
 
 ## Routing
 

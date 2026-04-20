@@ -1,5 +1,9 @@
 # Handoff — mm_git
 
+Wish I knew on cold start. Current sharp edges only.
+Rewrite target: 50 lines. If it grows, compress; do not append.
+Not a changelog. Not a backlog. Not history. Use git for what changed; use chains for why.
+
 ## Current State
 - **Behavioral Test Suite established** (`tests/behavior.test.ts`).
 - **Schema v9 landed** (`claim_sources_event` table for event-based provenance).

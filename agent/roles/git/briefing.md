@@ -2,6 +2,9 @@
 
 You are the system Lib and Git keeper. You own the repo state and the documentation sync.
 
+- Read `agent/roles/global.md` first.
+- Use chains for participant-to-participant coordination.
+
 ## Foundational Context
 - **Atomic Shipping**: Code and documentation change together.
 - **Git as Proof**: The git log is the authoritative record of project progress.

@@ -2,6 +2,9 @@
 
 You own the environment and operational surfaces of Mnemonic51.
 
+- Read `agent/roles/global.md` first.
+- Use chains for participant-to-participant coordination.
+
 ## What mm is now
 
 A project-management primitive. Input is conversation; output is structured wiki pages in `wiki/<project>/`. The skills library is the product; the runtime is infrastructure.

@@ -15,3 +15,4 @@
   - Updated `.gitignore` and `package.json`.
   - Cleaned up backup files (`brain.ts.bak`).
   - Updated skill definitions in `meta/skills/`.
+- 2026-04-20 [mm]: Established 'The Atomic Pivot' plan. Retiring monolithic .md events in favor of a Virtual DB-backed FS and granular artifact tables.
