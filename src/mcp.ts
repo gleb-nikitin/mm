@@ -4,15 +4,16 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { 
+import {
   initDb, hybridSearch, queryBrain, validateClaim, addToBrain, embedBrain, getStats, getProjects,
-  renderActiveAgentsMarkdown 
+  renderActiveAgentsMarkdown,
+  listArtifacts, listArtifactKeys, readChunk, queueChunks, db,
 } from './core.ts';
 
 const server = new Server(
   {
     name: "brain-mcp",
-    version: "0.8.0",
+    version: "0.9.0",
   },
   {
     capabilities: {
@@ -110,6 +111,55 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           }
         },
       },
+      {
+        name: "list_artifacts",
+        description: "List v11 atomic artifacts (decisions, bugs, todos, intents, corrections, etc). Full JSON rows with data + provenance counts. Use artifact_keys for a cheaper projection when you only need keys.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project: { type: "string", description: "Project slug filter (e.g. 'mm')." },
+            type:    { type: "string", description: "Type filter (e.g. 'decision', 'bug', 'todo', 'intent', 'correction')." },
+            status:  { type: "string", description: "Status filter (active | retired | invalid | all). Default: active." },
+            limit:   { type: "number", description: "Max results. Default 200." }
+          }
+        },
+      },
+      {
+        name: "artifact_keys",
+        description: "Compact projection of artifacts: one line per artifact as '#<id> <type> <idempotency_key> | <summary>'. Token-cheap view for scanning what the DB already knows before emitting new artifacts.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project: { type: "string", description: "Project slug filter." },
+            type:    { type: "string" },
+            status:  { type: "string", description: "Default: active." },
+            limit:   { type: "number", description: "Default 500." }
+          }
+        },
+      },
+      {
+        name: "list_chunks",
+        description: "List narrative chunks (chunks_virtual). Each chunk is a turn-aligned ~12KB slice of a session. Use read_chunk to fetch content.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project:   { type: "string", description: "Project slug filter." },
+            processed: { type: "string", description: "'pending' (default), 'processed', or 'all'." },
+            limit:     { type: "number", description: "Default 200." }
+          }
+        },
+      },
+      {
+        name: "read_chunk",
+        description: "Read a narrative chunk. Returns filtered session content (noise-tool blocks stripped, error lines preserved) plus metadata (project, source_event_id, filter_version drift).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "number", description: "chunks_virtual.id" }
+          },
+          required: ["id"],
+        },
+      },
     ],
   };
 });
@@ -166,6 +216,83 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case "embed_brain": {
       const res = await embedBrain(request.params.arguments?.slug as string);
       return { content: [{ type: "text", text: `Success: Embedded ${res.count} chunks.` }] };
+    }
+    case "list_artifacts": {
+      const args = request.params.arguments || {};
+      const status = (args.status as string | undefined) ?? 'active';
+      const rows = listArtifacts({
+        project: (args.project as string | undefined) ?? null,
+        type:    (args.type as string | undefined) ?? null,
+        status:  status === 'all' ? null : status,
+        limit:   (args.limit as number | undefined) ?? 200,
+      });
+      // Attach source_count — same shape as HTTP /artifacts so clients that hit both paths see consistent data.
+      const srcMap = new Map<number, number>();
+      if (rows.length > 0) {
+        const ids = rows.map(r => r.id);
+        const placeholders = ids.map(() => '?').join(',');
+        const sources = db.prepare(`SELECT artifact_id, COUNT(*) as c FROM artifact_sources WHERE artifact_id IN (${placeholders}) GROUP BY artifact_id`).all(...ids) as any[];
+        for (const s of sources) srcMap.set(s.artifact_id, s.c);
+      }
+      const enriched = rows.map(r => ({ ...r, source_count: srcMap.get(r.id) || 0 }));
+      return { content: [{ type: "text", text: JSON.stringify(enriched, null, 2) }] };
+    }
+    case "artifact_keys": {
+      const args = request.params.arguments || {};
+      const status = (args.status as string | undefined) ?? 'active';
+      const rows = listArtifactKeys({
+        project: (args.project as string | undefined) ?? null,
+        type:    (args.type as string | undefined) ?? null,
+        status:  status === 'all' ? null : status,
+        limit:   (args.limit as number | undefined) ?? 500,
+      });
+      const text = rows.length === 0
+        ? '(none)'
+        : rows.map(r => `#${r.id} ${r.type} ${r.idempotency_key} | ${r.summary}`).join('\n');
+      return { content: [{ type: "text", text }] };
+    }
+    case "list_chunks": {
+      const args = request.params.arguments || {};
+      const processed = (args.processed as string | undefined) ?? 'pending';
+      const project = (args.project as string | undefined) ?? null;
+      const limit = (args.limit as number | undefined) ?? 200;
+      // queueChunks covers 'pending'. Broader filters need a direct query.
+      let rows: any[];
+      if (processed === 'pending') {
+        rows = queueChunks(project, limit);
+      } else {
+        const clauses: string[] = [];
+        const params: any[] = [];
+        if (processed === 'processed') { clauses.push('processed = 1'); }
+        if (project) { clauses.push('project = ?'); params.push(project); }
+        const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+        rows = db.prepare(
+          `SELECT id, project, source_event_id, chunk_index, chunk_total, filter_version, processed, created_at
+           FROM chunks_virtual ${where} ORDER BY id ASC LIMIT ?`
+        ).all(...params, limit);
+      }
+      return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+    }
+    case "read_chunk": {
+      const args = request.params.arguments || {};
+      const id = args.id as number;
+      if (!id) return { content: [{ type: "text", text: "Error: 'id' required." }], isError: true };
+      try {
+        const chunk = readChunk(id);
+        const meta = {
+          id: chunk.id,
+          project: chunk.project,
+          source_event_id: chunk.source_event_id,
+          chunk_index: chunk.chunk_index,
+          chunk_total: chunk.chunk_total,
+          filter_version_stored: chunk.filter_version_stored,
+          filter_version_current: chunk.filter_version_current,
+        };
+        const body = `# Chunk #${chunk.id} (${chunk.chunk_index}/${chunk.chunk_total}) — event ${chunk.source_event_id}\n\nfilter_version: ${chunk.filter_version_stored} (current: ${chunk.filter_version_current})\n\n---\n\n${chunk.content}`;
+        return { content: [{ type: "text", text: body }] };
+      } catch (e: any) {
+        return { content: [{ type: "text", text: `Error: ${e.message || e}` }], isError: true };
+      }
     }
     default:
       throw new Error("Unknown tool");
