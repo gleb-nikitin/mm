@@ -1,0 +1,100 @@
+{
+  "fixture_id": "gold-chunk-1",
+  "fixture_version": 1,
+  "notes": "Shape-level expected artifacts for chunk 72 (v11 plan audit). idempotency_key values follow meta/skills/ingest.md canonical-form rules — on first run the librarian's slugs may drift; re-calibrate this file after the first successful extraction baseline. Required_data_fields are names only; text content varies.",
+  "counts": {
+    "decision": 4,
+    "bug": 2,
+    "correction": 1,
+    "friction": 1,
+    "intent": 1,
+    "todo": 3
+  },
+  "artifacts": [
+    {
+      "type": "decision",
+      "idempotency_key": "decision:mm:dedup-in-core-not-skill",
+      "required_data_fields": ["statement", "alternatives_rejected", "rationale"],
+      "alternatives_rejected_min_count": 1,
+      "context": "Open Decision #3: dedup lives in brain artifact batch / core, not in the librarian skill. Rejected: round-trip via brain artifact list from the skill."
+    },
+    {
+      "type": "decision",
+      "idempotency_key": "decision:mm:explicit-idempotency-key-not-hash",
+      "required_data_fields": ["statement", "alternatives_rejected", "rationale"],
+      "alternatives_rejected_min_count": 1,
+      "context": "Open Decision #4: explicit idempotency_key / artifact_key. Rejected: hash-of-JSON (canonical JSON hashes rot as shapes evolve)."
+    },
+    {
+      "type": "decision",
+      "idempotency_key": "decision:mm:virtual-chunks-separate-table",
+      "required_data_fields": ["statement", "alternatives_rejected", "rationale"],
+      "alternatives_rejected_min_count": 1,
+      "context": "Open Decision #2: chunks_virtual is a separate table from chunks. Existing chunks are search/embedding units; narrative windows are process-state spans. Uses the 'virtual-chunks' canonical term from the synonym map."
+    },
+    {
+      "type": "decision",
+      "idempotency_key": "decision:mm:on-demand-md-export",
+      "required_data_fields": ["statement", "alternatives_rejected", "rationale"],
+      "alternatives_rejected_min_count": 1,
+      "context": "Open Decision #1: brain export --to md runs on-demand only. Rejected: auto-run after every librarian pass."
+    },
+    {
+      "type": "bug",
+      "idempotency_key": "bug:mm:cp-backup-unsafe-under-wal",
+      "required_data_fields": ["symptom", "context", "severity", "status"],
+      "status_expected": "open",
+      "context": "cp meta/brain.db as backup/rollback is unsafe under SQLite WAL without a prior wal_checkpoint. Paired with correction below."
+    },
+    {
+      "type": "bug",
+      "idempotency_key": "bug:mm:raw-events-fts-project-drift",
+      "required_data_fields": ["symptom", "context", "severity", "status"],
+      "status_expected": "open",
+      "context": "Free-form artifacts.type + opaque JSON yields duplicate rows, weak filters, fragile migration — OR the chunks-virtual-offset-instability risk. Either is a valid bug shape from the Risks section."
+    },
+    {
+      "type": "correction",
+      "idempotency_key": "correction:mm:cp-for-db-backup",
+      "required_data_fields": ["previous_belief", "corrected_view", "count", "last_seen"],
+      "context": "Operational: cp for DB backups → use SQLite backup API / VACUUM INTO with prior WAL checkpoint. Factual shape (documents a belief revision, not a user→LLM behavioral correction)."
+    },
+    {
+      "type": "friction",
+      "idempotency_key": "friction:mm:artifact-list-roundtrips-in-skill",
+      "required_data_fields": ["pattern", "frequency_estimate", "first_seen"],
+      "context": "Skill-driven dedup pattern uses brain artifact list round-trips — brittle and token-wasteful. Motivation for moving dedup to core."
+    },
+    {
+      "type": "intent",
+      "idempotency_key": "intent:mm:raw-event-text-immutable",
+      "required_data_fields": ["statement", "horizon", "alignment_check"],
+      "horizon_expected": "project",
+      "context": "Durable principle: raw event text is never destroyed; only derived views are filtered. Protects tool/error evidence for later extraction. Durable long-horizon direction, not a bounded action."
+    },
+    {
+      "type": "todo",
+      "idempotency_key": "todo:mm:add-artifact-sources-table",
+      "required_data_fields": ["statement", "effort", "area"],
+      "context": "Concrete action: add artifact_sources(artifact_id, source_event_id/source_raw_id, span_start, span_end) before the shape ossifies."
+    },
+    {
+      "type": "todo",
+      "idempotency_key": "todo:mm:keep-wiki-md-during-v11",
+      "required_data_fields": ["statement", "effort", "area"],
+      "context": "Concrete action: do not delete wiki/<project>/*.md during v11; keep as legacy/read-only until v12 retrieval lands."
+    },
+    {
+      "type": "todo",
+      "idempotency_key": "todo:mm:stable-chunk-offset-strategy",
+      "required_data_fields": ["statement", "effort", "area"],
+      "context": "Concrete action: store filter version + filtered basis, OR offsets against raw with persisted filtered projection. Today's segment_* over re-applied-filter is unstable."
+    }
+  ],
+  "must_not_emit_substrings": [
+    "I'm reading the four requested documents",
+    "I'm reading the pivot note",
+    "I have enough to review the plan",
+    "txs, perfect"
+  ]
+}
