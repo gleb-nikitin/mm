@@ -99,19 +99,30 @@ ${opts.timeline ?? ''}
 // ---------- SCHEMA ----------
 
 describe('schema migration', () => {
-  test('fresh root bootstraps to v10', async () => {
+  test('fresh root bootstraps to v11', async () => {
     await brain(['queue']);
     const db = openDb();
     const version = (db.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any).version;
-    expect(version).toBe(10);
-    // Spot-check the tables that should exist.
+    expect(version).toBe(11);
     const tbls = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r: any) => r.name);
-    for (const name of ['raw_entries', 'raw_events', 'wiki_pages', 'claims', 'claim_sources', 'claim_sources_event', 'import_state']) {
+    for (const name of [
+      'raw_entries', 'raw_events', 'wiki_pages', 'claims', 'claim_sources', 'claim_sources_event', 'import_state',
+      'artifacts', 'artifact_sources', 'chunks_virtual',
+    ]) {
       expect(tbls).toContain(name);
     }
-    // v10: chunked column on raw_events
+    // v10 column is still there
     const evCols = db.prepare("PRAGMA table_info(raw_events)").all().map((c: any) => c.name);
     expect(evCols).toContain('chunked');
+    // v11 columns on artifacts
+    const artCols = db.prepare("PRAGMA table_info(artifacts)").all().map((c: any) => c.name);
+    for (const name of ['id', 'project', 'type', 'data', 'idempotency_key', 'superseded_by', 'status']) {
+      expect(artCols).toContain(name);
+    }
+    const cvCols = db.prepare("PRAGMA table_info(chunks_virtual)").all().map((c: any) => c.name);
+    for (const name of ['source_event_id', 'segment_start', 'segment_end', 'filter_version', 'processed']) {
+      expect(cvCols).toContain(name);
+    }
     db.close();
   });
 });
@@ -287,7 +298,7 @@ describe('GET /active markdown shape', () => {
 
 // ---------- CHUNKER ----------
 
-describe('chunk-events — raw_events to raw/events/*.md', () => {
+describe('chunk-events — raw_events to chunks_virtual (v11)', () => {
   async function chunker(args: string[] = []) {
     const proc = Bun.spawn(['bun', CHUNK_EVENTS_TS, ...args], {
       env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
@@ -301,10 +312,9 @@ describe('chunk-events — raw_events to raw/events/*.md', () => {
     return { code: code || 0, stdout, stderr };
   }
 
-  test('splits a session at turn boundaries and marks chunked=1', async () => {
-    await brain(['queue']); // bootstrap
+  test('splits a session at turn boundaries and emits contiguous chunks_virtual spans', async () => {
+    await brain(['queue']);
 
-    // Build a session large enough to need splitting: 4 big turns of ~6KB each.
     const bigTurn = (role: string, tag: string) => `${role}: ${tag} `.padEnd(6_000, 'x');
     const content = [
       bigTurn('User', 'Q1'),
@@ -314,35 +324,40 @@ describe('chunk-events — raw_events to raw/events/*.md', () => {
     ].join('\n\n');
 
     const db = openDb();
-    db.prepare(`INSERT INTO raw_events
+    const insertRes = db.prepare(`INSERT INTO raw_events
       (source_type, project, external_id, timestamp, content, title, processed, chunked)
       VALUES ('llm_chat', 'testproj', 'evt-chunk-1', '2026-04-18T10:00:00Z', ?, 'Test', 0, 0)`).run(content);
+    const evtId = Number(insertRes.lastInsertRowid);
     db.close();
 
     const res = await chunker(['--project', 'testproj']);
     expect(res.code).toBe(0);
-    expect(res.stdout).toContain('1 events');
+    expect(res.stdout).toContain('chunks_virtual');
 
-    const chunkDir = path.join(tmpRoot, 'raw', 'events', 'testproj');
-    const files = fs.readdirSync(chunkDir).sort();
-    expect(files.length).toBeGreaterThanOrEqual(2); // at least two chunks
-
-    // Every chunk carries correct frontmatter + the same event_external_id.
-    for (const f of files) {
-      const body = fs.readFileSync(path.join(chunkDir, f), 'utf-8');
-      expect(body).toContain('source_type: events');
-      expect(body).toContain('project: testproj');
-      expect(body).toContain('event_external_id: evt-chunk-1');
-      expect(body).toContain('## Provenance');
+    // No raw/events/*.md files produced (v11: DB-only emission).
+    const eventsDir = path.join(tmpRoot, 'raw', 'events');
+    if (fs.existsSync(eventsDir)) {
+      const anyMd = fs.readdirSync(eventsDir, { recursive: true }).some((f: any) => String(f).endsWith('.md'));
+      expect(anyMd).toBe(false);
     }
 
     const db2 = openDb();
-    const row = db2.prepare(`SELECT chunked FROM raw_events WHERE external_id = 'evt-chunk-1'`).get() as any;
+    const rows = db2.prepare(`SELECT chunk_index, chunk_total, segment_start, segment_end, filter_version
+                               FROM chunks_virtual WHERE source_event_id = ?
+                               ORDER BY chunk_index`).all(evtId) as any[];
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    expect(rows.every(r => r.filter_version >= 1)).toBe(true);
+    // Contiguous, ascending.
+    for (let i = 1; i < rows.length; i++) {
+      expect(rows[i].segment_start).toBeGreaterThanOrEqual(rows[i - 1].segment_end - 1);
+    }
+    // chunked flag flipped.
+    const row = db2.prepare(`SELECT chunked FROM raw_events WHERE id = ?`).get(evtId) as any;
     expect(row.chunked).toBe(1);
     db2.close();
   });
 
-  test('re-running is idempotent (chunked rows skipped; files not overwritten)', async () => {
+  test('re-running is idempotent (chunked rows skipped)', async () => {
     await brain(['queue']);
     const db = openDb();
     db.prepare(`INSERT INTO raw_events
@@ -360,23 +375,147 @@ describe('chunk-events — raw_events to raw/events/*.md', () => {
     expect(second.stdout).toContain('nothing to do');
   });
 
-  test('chunks become raw_entries with source_type=events after index rebuild', async () => {
+  test('brain chunk read reconstructs content with filterMechanical applied', async () => {
     await brain(['queue']);
     const db = openDb();
-    db.prepare(`INSERT INTO raw_events
+    const content = 'User: run the check\n\n[tool: Bash]\nls -la\n\nAssistant: done.';
+    const insertRes = db.prepare(`INSERT INTO raw_events
       (source_type, project, external_id, timestamp, content, title, processed, chunked)
-      VALUES ('llm_chat', 'flow', 'evt-flow-1', '2026-04-18T12:00:00Z',
-              'User: hi\n\nAssistant: ok', 'Test', 0, 0)`).run();
+      VALUES ('llm_chat', 'readtest', 'evt-read-1', '2026-04-18T12:00:00Z', ?, 'Test', 0, 0)`).run(content);
+    const evtId = Number(insertRes.lastInsertRowid);
     db.close();
 
-    await chunker(['--project', 'flow']);
-    await brain(['index', 'rebuild']);
+    await chunker(['--project', 'readtest']);
 
     const db2 = openDb();
-    const count = (db2.prepare(`SELECT COUNT(*) AS c FROM raw_entries
-                                 WHERE source_type = 'events' AND project = 'flow'`).get() as any).c;
-    expect(count).toBe(1);
+    const cv = db2.prepare(`SELECT id FROM chunks_virtual WHERE source_event_id = ? ORDER BY id LIMIT 1`).get(evtId) as any;
     db2.close();
+
+    const res = await brain(['chunk', 'read', String(cv.id)]);
+    expect(res.code).toBe(0);
+    // Bash block is gone; role markers and prose preserved.
+    expect(res.stdout).toContain('User: run the check');
+    expect(res.stdout).not.toContain('ls -la');
+  });
+});
+
+// ---------- ARTIFACTS (v11) ----------
+
+describe('artifacts — batch + list + supersede + bump-correction', () => {
+  async function artifactBatch(inputs: any[]): Promise<{ code: number; stdout: string }> {
+    const proc = Bun.spawn(['bun', BRAIN_TS, 'artifact', 'batch'], {
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
+      stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
+    });
+    proc.stdin.write(JSON.stringify(inputs));
+    await proc.stdin.end();
+    const [stdout, _, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { code: code || 0, stdout };
+  }
+
+  test('batch upserts by (project, type, idempotency_key); second call is dedup', async () => {
+    await brain(['queue']);
+    const input = [{
+      project: 'mm', type: 'decision', idempotency_key: 'dec-1',
+      data: { statement: 'x' },
+    }];
+    const first = await artifactBatch(input);
+    expect(first.code).toBe(0);
+    const firstParsed = JSON.parse(first.stdout);
+    expect(firstParsed[0].created).toBe(true);
+
+    const second = await artifactBatch(input);
+    expect(second.code).toBe(0);
+    const secondParsed = JSON.parse(second.stdout);
+    expect(secondParsed[0].id).toBe(firstParsed[0].id);
+    expect(secondParsed[0].created).toBe(false);
+
+    const listRes = await brain(['artifact', 'list', '--project', 'mm', '--type', 'decision']);
+    expect(listRes.code).toBe(0);
+    const rows = JSON.parse(listRes.stdout);
+    expect(rows.length).toBe(1);
+  });
+
+  test('supersede sets superseded_by and retires the old row', async () => {
+    await brain(['queue']);
+    const batch1 = await artifactBatch([
+      { project: 'mm', type: 'decision', idempotency_key: 'old', data: { statement: 'v1' } },
+      { project: 'mm', type: 'decision', idempotency_key: 'new', data: { statement: 'v2' } },
+    ]);
+    const [oldArt, newArt] = JSON.parse(batch1.stdout);
+    const sup = await brain(['artifact', 'supersede', String(oldArt.id), String(newArt.id)]);
+    expect(sup.code).toBe(0);
+
+    const listRes = await brain(['artifact', 'list', '--project', 'mm']);
+    const rows = JSON.parse(listRes.stdout);
+    const oldRow = rows.find((r: any) => r.id === oldArt.id);
+    const newRow = rows.find((r: any) => r.id === newArt.id);
+    expect(oldRow.status).toBe('retired');
+    expect(oldRow.superseded_by).toBe(newArt.id);
+    expect(newRow.status).toBe('active');
+  });
+
+  test('bump-correction increments count + sets last_seen', async () => {
+    await brain(['queue']);
+    const batch = await artifactBatch([{
+      project: 'mm', type: 'correction', idempotency_key: 'corr-a',
+      data: { previous_belief: 'a', corrected_view: 'b', count: 1 },
+    }]);
+    const [art] = JSON.parse(batch.stdout);
+
+    const bump = await brain(['artifact', 'bump-correction', String(art.id)]);
+    expect(bump.code).toBe(0);
+    const parsed = JSON.parse(bump.stdout);
+    expect(parsed.count).toBe(2);
+    expect(typeof parsed.last_seen).toBe('string');
+  });
+});
+
+describe('brain backup — WAL checkpoint + VACUUM INTO', () => {
+  test('produces a valid SQLite file readable at schema_version=11', async () => {
+    await brain(['queue']);
+    const target = path.join(tmpRoot, 'meta', 'snap.db');
+    const res = await brain(['backup', '--target', target]);
+    expect(res.code).toBe(0);
+    expect(fs.existsSync(target)).toBe(true);
+    const snap = new Database(target, { readonly: true });
+    const v = (snap.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any).version;
+    expect(v).toBe(11);
+    snap.close();
+  });
+});
+
+describe('filterMechanical — narrative filter semantics', () => {
+  test('strips noise-tool blocks, preserves error lines, compresses Edit', async () => {
+    const { filterMechanical } = await import(path.join(REPO, 'src', 'narrative.ts'));
+    const input = [
+      'User: list',
+      '',
+      '[tool: Bash]',
+      'ls -la',
+      'Error: permission denied',
+      'trailing log line',
+      '',
+      'Assistant: here is the fix',
+      '',
+      '[tool: Edit]',
+      '- old',
+      '+ new',
+      '',
+      'User: done',
+    ].join('\n');
+    const out = filterMechanical(input);
+    expect(out).toContain('User: list');
+    expect(out).not.toContain('ls -la');
+    expect(out).not.toContain('trailing log line');
+    expect(out).toContain('Error: permission denied');
+    expect(out).toContain('[code-change: Edit]');
+    expect(out).toContain('- old');
+    expect(out).toContain('+ new');
   });
 });
 
