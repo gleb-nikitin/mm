@@ -207,14 +207,44 @@ export function initDb() {
 
 // --- Common Logic ---
 
+// Resolve external session ids to ac participant ids (e.g. "mm_cto") by
+// reading ac's msg.db read-only. Fails silently: if the DB is missing or
+// the query errors, returns an empty map and mm renders today's shape.
+export function resolveParticipantIds(externalIds: string[]): Map<string, string> {
+  const result = new Map<string, string>();
+  if (externalIds.length === 0) return result;
+
+  const acDbPath = process.env.MT_AC_DB_PATH || '/Users/glebnikitin/work/code/ac/data/msg.db';
+  if (!fs.existsSync(acDbPath)) return result;
+
+  let acDb: Database | null = null;
+  try {
+    acDb = new Database(acDbPath, { readonly: true });
+    const placeholders = externalIds.map(() => '?').join(',');
+    const rows = acDb.prepare(
+      `SELECT id, participant_id FROM llm_sessions WHERE is_active = 1 AND id IN (${placeholders})`
+    ).all(...externalIds) as Array<{ id: string; participant_id: string }>;
+    for (const row of rows) {
+      if (row.participant_id) result.set(row.id, row.participant_id);
+    }
+  } catch {
+    // Silent fallback — mm must stay runnable standalone.
+  } finally {
+    if (acDb) {
+      try { acDb.close(); } catch {}
+    }
+  }
+  return result;
+}
+
 export function renderActiveAgentsMarkdown(maxAgeSeconds: number = 300): string {
   const rows = db.prepare(`
-    SELECT 
-      provider, 
-      project, 
-      cwd, 
-      external_id, 
-      model, 
+    SELECT
+      provider,
+      project,
+      cwd,
+      external_id,
+      model,
       last_user_snippet,
       CAST(strftime('%s', 'now') - (last_mtime / 1000.0) AS INTEGER) as seconds_ago
     FROM import_state
@@ -234,9 +264,17 @@ export function renderActiveAgentsMarkdown(maxAgeSeconds: number = 300): string 
     return md;
   }
 
+  const externalIds = rows.map(r => r.external_id).filter(Boolean) as string[];
+  const participantMap = resolveParticipantIds(externalIds);
+
   for (const row of rows) {
     const timeStr = formatRelativeTime(row.seconds_ago);
-    md += `- **${row.provider || 'unknown'}** · \`${row.project || 'unknown'}\` · ${timeStr} ago · \`${row.model || 'unknown'}\`\n`;
+    const pid = row.external_id ? participantMap.get(row.external_id) : undefined;
+    if (pid) {
+      md += `- **${pid}** · ${row.provider || 'unknown'} · \`${row.project || 'unknown'}\` · ${timeStr} ago · \`${row.model || 'unknown'}\`\n`;
+    } else {
+      md += `- **${row.provider || 'unknown'}** · \`${row.project || 'unknown'}\` · ${timeStr} ago · \`${row.model || 'unknown'}\`\n`;
+    }
     md += `  cwd: \`${row.cwd || 'unknown'}\`\n`;
     md += `  external_id: \`${row.external_id || 'unknown'}\`\n`;
     if (row.last_user_snippet) {
