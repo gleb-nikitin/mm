@@ -18,7 +18,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { initDb, db } from '../src/core.ts';
+import { initDb, db, upsertRawEvent } from '../src/core.ts';
 
 type Flags = {
   days: number;
@@ -308,13 +308,8 @@ async function main() {
       model = COALESCE(excluded.model, model),
       last_user_snippet = excluded.last_user_snippet,
       min_turns_ok = excluded.min_turns_ok`);
-  const insertEvent = flags.dryRun ? null : db.prepare(`INSERT OR IGNORE INTO raw_events
-    (source_type, project, external_id, timestamp, content, title, participants, metadata, processed, deduped)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1)`);
-  const insertFts = flags.dryRun ? null : db.prepare(`INSERT INTO events_fts
-    (external_id, project, source_type, title, content) VALUES (?, ?, ?, ?, ?)`);
-
   let imported = 0;
+  let updated = 0;
   let skippedProject = 0;
   let skippedMinTurns = 0;
   let skippedLive = 0;
@@ -404,20 +399,22 @@ async function main() {
       turn_count: session.turns.length,
       user_turn_count: userTurnCount,
     });
-    const res = insertEvent!.run(
-      'llm_chat',
-      session.project,
-      session.sessionId,
-      started || new Date().toISOString(),
+    const res = upsertRawEvent({
+      source_type: 'llm_chat',
+      project: session.project,
+      external_id: session.sessionId,
+      timestamp: started || new Date().toISOString(),
       content,
       title,
-      JSON.stringify(['user', 'assistant']),
+      participants: JSON.stringify(['user', 'assistant']),
       metadata,
-    );
-    if (res.changes > 0) {
-      insertFts!.run(session.sessionId, session.project, 'llm_chat', title, content);
+    });
+    if (res === 'inserted') {
       imported++;
       console.log(`  OK ${title}  ->  raw_events`);
+    } else if (res === 'updated') {
+      updated++;
+      console.log(`  UP ${title}  ->  raw_events (updated, chunks reset)`);
     } else {
       duplicate++;
     }
@@ -426,6 +423,7 @@ async function main() {
   console.log();
   console.log(`Summary:`);
   console.log(`  imported:          ${imported}${flags.dryRun ? ' (dry-run)' : ''}`);
+  console.log(`  updated:           ${updated}`);
   console.log(`  duplicate (dedup): ${duplicate}`);
   console.log(`  skipped (project): ${skippedProject}`);
   console.log(`  skipped (turns):   ${skippedMinTurns}`);

@@ -3,6 +3,7 @@ import * as path from 'path';
 import {
   initDb, hybridSearch, getStats, queryBrain, validateClaim, addToBrain, PATHS,
   renderActiveAgentsMarkdown, listArtifacts, queueChunks, readChunk, db,
+  searchArtifacts,
 } from './core.ts';
 import { filterMechanical } from './narrative.ts';
 
@@ -54,6 +55,7 @@ Endpoints:
 - \`/chunks?project=&limit=\`: JSON list of pending chunks_virtual.
 - \`/chunk/:id\`: JSON — reconstructed chunk content + metadata.
 - \`/artifact/:id\`: JSON — artifact row + enriched sources (each with reconstructed text span).
+- \`/artifacts-search?q=&project=&type=&status=&limit=\`: FTS over artifact data, returns rows + snippet (status default: active).
 - \`/artifacts-ui\`: Artifacts browser UI.
 - \`/chunks-ui\`: Chunks browser UI.
 - \`/raw-ui\`: Plain HTML dump of every table. No filters, no JS.
@@ -85,9 +87,18 @@ async function serveUiFile(relPath: string): Promise<Response> {
 }
 
 const PORT = parseInt(process.env.MT_PORT || '3000', 10);
+// Default to localhost-only. /raw-ui, /chunk/:id, /artifact/:id, and /active
+// expose raw transcript data; exposing them on a public interface would leak
+// real conversations. Set MT_BIND=0.0.0.0 explicitly to override — you'll get
+// a startup warning so it's not accidental.
+const HOST = process.env.MT_BIND || '127.0.0.1';
+if (HOST !== '127.0.0.1' && HOST !== 'localhost') {
+  console.warn(`⚠️  MT_BIND=${HOST}: API is reachable beyond localhost. Raw transcripts are exposed without auth — only do this on a trusted network.`);
+}
 
 const server = Bun.serve({
   port: PORT,
+  hostname: HOST,
   idleTimeout: 180,
   async fetch(req) {
     const url = new URL(req.url);
@@ -148,6 +159,18 @@ const server = Bun.serve({
         for (const r of artifactsByType) md += `- ${r.type}: ${r.c}\n`;
       }
       return new Response(md, { headers: { "Content-Type": "text/markdown" } });
+    }
+
+    if (url.pathname === "/artifacts-search") {
+      const q = url.searchParams.get("q") || "";
+      if (!q) return new Response(JSON.stringify([]), { headers: { "Content-Type": "application/json" } });
+      const results = searchArtifacts(q, {
+        project: url.searchParams.get("project") || null,
+        type:    url.searchParams.get("type") || null,
+        status:  url.searchParams.get("status") || "active",
+        limit:   parseInt(url.searchParams.get("limit") || "50", 10),
+      });
+      return new Response(JSON.stringify(results), { headers: { "Content-Type": "application/json" } });
     }
 
     if (url.pathname === "/artifacts") {
@@ -310,7 +333,7 @@ const server = Bun.serve({
   },
 });
 
-console.log(`🚀 Brain API listening on http://localhost:${server.port}`);
+console.log(`🚀 Brain API listening on http://${HOST}:${server.port}`);
 
 // --- /raw-ui: dump every row of every table. No filters, no nav, no JS. ---
 

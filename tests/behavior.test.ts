@@ -564,4 +564,114 @@ describe('import-claude dedup', () => {
     expect(second.out).toContain('duplicate (dedup): 1');
     expect(second.out).toContain('imported:          0');
   });
+
+  test('extending a session (same id, new turns) updates content and resets chunked', async () => {
+    const projectsDir = path.join(tmpRoot, 'claude-projects');
+    const sessionsDir = path.join(projectsDir, '-Users-test-work-mm');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const jsonl = path.join(sessionsDir, 'sess-grow.jsonl');
+
+    const writeJsonl = (lines: any[]) => {
+      fs.writeFileSync(jsonl, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
+    };
+
+    const baseTurns = [
+      { sessionId: 'sess-grow', type: 'user',      timestamp: '2026-04-18T10:00:00Z', cwd: '/Users/test/work/mm', message: { content: 'Hello' } },
+      { sessionId: 'sess-grow', type: 'assistant', timestamp: '2026-04-18T10:00:05Z', message: { model: 'claude-opus-4-7', content: [{ type: 'text', text: 'Hi!' }] } },
+    ];
+    writeJsonl(baseTurns);
+    const aged = (Date.now() - 10 * 60 * 1000) / 1000;
+    fs.utimesSync(jsonl, aged, aged);
+
+    const runImporter = async () => {
+      const proc = Bun.spawn(['bun', IMPORT_CLAUDE_TS, '--projects-dir', projectsDir, '--days', '0', '--min-turns', '1'], {
+        env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
+        stdout: 'pipe', stderr: 'pipe',
+      });
+      const [out, , code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      return { code: code || 0, out };
+    };
+
+    const first = await runImporter();
+    expect(first.code).toBe(0);
+    expect(first.out).toContain('imported:          1');
+
+    // Simulate the chunker having already run against the original content.
+    const db1 = openDb();
+    db1.prepare(`UPDATE raw_events SET chunked = 1 WHERE external_id = 'sess-grow'`).run();
+    const contentBefore = (db1.prepare(`SELECT content, content_hash FROM raw_events WHERE external_id = 'sess-grow'`).get() as any);
+    db1.close();
+    expect(contentBefore.content).toContain('Hi!');
+    expect(contentBefore.content_hash).toBeTruthy();
+
+    // Extend the session with new turns and bump mtime.
+    const extendedTurns = [
+      ...baseTurns,
+      { sessionId: 'sess-grow', type: 'user',      timestamp: '2026-04-18T10:01:00Z', cwd: '/Users/test/work/mm', message: { content: 'One more thing — UNIQUE_NEW_TURN_TOKEN' } },
+      { sessionId: 'sess-grow', type: 'assistant', timestamp: '2026-04-18T10:01:05Z', message: { model: 'claude-opus-4-7', content: [{ type: 'text', text: 'Sure.' }] } },
+    ];
+    writeJsonl(extendedTurns);
+    const aged2 = (Date.now() - 9 * 60 * 1000) / 1000;
+    fs.utimesSync(jsonl, aged2, aged2);
+
+    const second = await runImporter();
+    expect(second.code).toBe(0);
+    expect(second.out).toContain('updated:           1');
+
+    const db2 = openDb();
+    const row = db2.prepare(`SELECT content, content_hash, chunked FROM raw_events WHERE external_id = 'sess-grow'`).get() as any;
+    expect(row.content).toContain('UNIQUE_NEW_TURN_TOKEN');
+    expect(row.content_hash).not.toBe(contentBefore.content_hash);
+    expect(row.chunked).toBe(0); // reset so chunker re-emits
+    // Row count unchanged (upsert, not duplicate insert).
+    expect((db2.prepare(`SELECT COUNT(*) AS c FROM raw_events WHERE external_id = 'sess-grow'`).get() as any).c).toBe(1);
+    db2.close();
+  });
+});
+
+// ---------- ARTIFACT SEARCH (FTS) ----------
+
+describe('brain artifact search — FTS over artifact data', () => {
+  async function artifactBatch(inputs: any[]): Promise<void> {
+    const proc = Bun.spawn(['bun', BRAIN_TS, 'artifact', 'batch'], {
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
+      stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
+    });
+    proc.stdin.write(JSON.stringify(inputs));
+    await proc.stdin.end();
+    await proc.exited;
+  }
+
+  test('matches on statement text across types with project + type filters', async () => {
+    await brain(['queue']);
+
+    await artifactBatch([
+      { project: 'mm', type: 'decision', idempotency_key: 'search-1',
+        data: { statement: 'Use virtual chunks emitted by the narrative chunker' } },
+      { project: 'mm', type: 'bug', idempotency_key: 'search-2',
+        data: { symptom: 'Librarian prompt carries v10 extraction buckets', severity: 'high', status: 'fixed' } },
+      { project: 'other', type: 'decision', idempotency_key: 'search-3',
+        data: { statement: 'Unrelated project decision' } },
+    ]);
+
+    const byStatement = await brain(['artifact', 'search', 'narrative chunker', '--project', 'mm']);
+    expect(byStatement.code).toBe(0);
+    const hits1 = JSON.parse(byStatement.stdout);
+    expect(hits1.length).toBeGreaterThanOrEqual(1);
+    expect(hits1[0].idempotency_key).toBe('search-1');
+    expect(hits1[0].snippet.length).toBeGreaterThan(0);
+
+    const bySymptom = await brain(['artifact', 'search', 'extraction buckets', '--project', 'mm', '--type', 'bug']);
+    const hits2 = JSON.parse(bySymptom.stdout);
+    expect(hits2.length).toBe(1);
+    expect(hits2[0].idempotency_key).toBe('search-2');
+
+    const scoped = await brain(['artifact', 'search', 'decision', '--project', 'mm']);
+    const hits3 = JSON.parse(scoped.stdout);
+    expect(hits3.every((h: any) => h.project === 'mm')).toBe(true);
+  });
 });

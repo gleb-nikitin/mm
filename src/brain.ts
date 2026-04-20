@@ -12,7 +12,7 @@ import {
   snapshotWiki, detectWikiChanges, timelineCitesRaw, timelineCitesEvent,
   backfillClaimsFromTimeline, backfillClaimsFromTimelineEvent, refreshSourceCount,
   walkWiki, wikiPath,
-  batchArtifacts, listArtifacts, listArtifactKeys, supersedeArtifact, bumpCorrection,
+  batchArtifacts, listArtifacts, listArtifactKeys, searchArtifacts, supersedeArtifact, bumpCorrection,
   readChunk, queueChunks, markChunkProcessed, vacuumBackup,
   type ArtifactInput,
 } from './core.ts';
@@ -618,6 +618,23 @@ artifactCmd.command('list')
       limit: parseInt(opts.limit, 10) || 200,
     });
     console.log(JSON.stringify(rows, null, 2));
+  });
+
+artifactCmd.command('search')
+  .description('FTS over artifact data; returns ranked matches with snippets.')
+  .argument('<query>', 'Search terms')
+  .option('-p, --project <project>', 'Filter by project')
+  .option('-t, --type <type>', 'Filter by type')
+  .option('-s, --status <status>', 'Filter by status (active|retired|invalid|all)', 'active')
+  .option('-l, --limit <n>', 'Limit results', '50')
+  .action((query, opts) => {
+    const results = searchArtifacts(query, {
+      project: opts.project ?? null,
+      type: opts.type ?? null,
+      status: opts.status === 'all' ? null : opts.status,
+      limit: parseInt(opts.limit, 10) || 50,
+    });
+    console.log(JSON.stringify(results, null, 2));
   });
 
 artifactCmd.command('keys')

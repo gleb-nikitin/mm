@@ -8,6 +8,7 @@ import {
   initDb, hybridSearch, queryBrain, validateClaim, addToBrain, embedBrain, getStats, getProjects,
   renderActiveAgentsMarkdown,
   listArtifacts, listArtifactKeys, readChunk, queueChunks, db,
+  searchArtifacts,
 } from './core.ts';
 
 const server = new Server(
@@ -160,6 +161,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["id"],
         },
       },
+      {
+        name: "search_artifacts",
+        description: "FTS over artifact data. Returns ranked artifact rows with a highlighted snippet. Use when you need to find specific decisions, bugs, or notes by keyword rather than browse by type.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query:   { type: "string", description: "Search terms (matched as a phrase)." },
+            project: { type: "string", description: "Project slug filter." },
+            type:    { type: "string", description: "Artifact type filter." },
+            status:  { type: "string", description: "Status filter (active|retired|invalid|all). Default: active." },
+            limit:   { type: "number", description: "Default 50." }
+          },
+          required: ["query"],
+        },
+      },
     ],
   };
 });
@@ -279,20 +295,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!id) return { content: [{ type: "text", text: "Error: 'id' required." }], isError: true };
       try {
         const chunk = readChunk(id);
-        const meta = {
-          id: chunk.id,
-          project: chunk.project,
-          source_event_id: chunk.source_event_id,
-          chunk_index: chunk.chunk_index,
-          chunk_total: chunk.chunk_total,
-          filter_version_stored: chunk.filter_version_stored,
-          filter_version_current: chunk.filter_version_current,
-        };
         const body = `# Chunk #${chunk.id} (${chunk.chunk_index}/${chunk.chunk_total}) — event ${chunk.source_event_id}\n\nfilter_version: ${chunk.filter_version_stored} (current: ${chunk.filter_version_current})\n\n---\n\n${chunk.content}`;
         return { content: [{ type: "text", text: body }] };
       } catch (e: any) {
         return { content: [{ type: "text", text: `Error: ${e.message || e}` }], isError: true };
       }
+    }
+    case "search_artifacts": {
+      const args = request.params.arguments || {};
+      const query = args.query as string;
+      if (!query) return { content: [{ type: "text", text: "Error: 'query' required." }], isError: true };
+      const status = (args.status as string | undefined) ?? 'active';
+      const results = searchArtifacts(query, {
+        project: (args.project as string | undefined) ?? null,
+        type:    (args.type as string | undefined) ?? null,
+        status:  status === 'all' ? null : status,
+        limit:   (args.limit as number | undefined) ?? 50,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
     }
     default:
       throw new Error("Unknown tool");

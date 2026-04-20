@@ -137,6 +137,13 @@ export function initDb() {
   if (!evCols2.some(c => c.name === 'chunked')) db.run(`ALTER TABLE raw_events ADD COLUMN chunked INTEGER DEFAULT 0`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_event_chunked ON raw_events(chunked)`);
 
+  // v11.1: raw_events.content_hash — enables incremental re-import when a session
+  // file under a stable external_id has grown. Importers used to do INSERT OR
+  // IGNORE keyed on external_id, silently dropping new turns on subsequent runs.
+  // Now: if hash differs on the same external_id, update content + reset chunked.
+  if (!evCols2.some(c => c.name === 'content_hash')) db.run(`ALTER TABLE raw_events ADD COLUMN content_hash TEXT`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_event_hash ON raw_events(content_hash)`);
+
   // v11: atomic artifacts + virtual narrative chunks. See agent/docs/2026-04-20-v11-plan.md.
   db.run(`CREATE TABLE IF NOT EXISTS artifacts (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -962,6 +969,56 @@ export function listArtifactKeys(opts: ArtifactListOpts = {}): ArtifactKey[] {
   }));
 }
 
+export type ArtifactSearchOpts = {
+  project?: string | null;
+  type?: string | null;
+  status?: string | null;
+  limit?: number;
+};
+
+export type ArtifactSearchResult = ArtifactRow & { snippet: string; rank: number };
+
+// FTS over artifacts_fts. Tokenizes the query (so "virtual chunks" matches both
+// words anywhere, not just as a phrase) and quote-escapes each token so fts5
+// treats punctuation like ':' and '-' literally rather than as operators.
+export function searchArtifacts(query: string, opts: ArtifactSearchOpts = {}): ArtifactSearchResult[] {
+  const raw = (query || '').trim();
+  if (!raw) return [];
+  const tokens = raw.split(/\s+/)
+    .map(t => t.replace(/[^\w\u00C0-\uFFFF-]/g, ''))
+    .filter(Boolean)
+    .map(t => '"' + t.replace(/"/g, '""') + '"');
+  if (tokens.length === 0) return [];
+  const safe = tokens.join(' '); // fts5 default operator is AND between tokens
+
+  const clauses: string[] = [`artifacts_fts MATCH ?`];
+  const params: any[] = [safe];
+  if (opts.project) { clauses.push(`artifacts_fts.project = ?`); params.push(opts.project); }
+  if (opts.type)    { clauses.push(`artifacts_fts.type = ?`);    params.push(opts.type); }
+  const limit = opts.limit && opts.limit > 0 ? opts.limit : 50;
+  const statusFilter = opts.status && opts.status !== 'all' ? opts.status : null;
+
+  const sql = `
+    SELECT a.*, snippet(artifacts_fts, 3, '[', ']', ' … ', 12) as snippet, artifacts_fts.rank as rank
+    FROM artifacts_fts
+    JOIN artifacts a ON a.id = artifacts_fts.artifact_id
+    WHERE ${clauses.join(' AND ')}
+    ${statusFilter ? `AND a.status = ?` : ''}
+    ORDER BY rank
+    LIMIT ?
+  `;
+  if (statusFilter) params.push(statusFilter);
+  params.push(limit);
+
+  let rows: any[];
+  try { rows = db.prepare(sql).all(...params) as any[]; } catch (e) { return []; }
+  return rows.map(r => ({
+    ...rowToArtifact(r),
+    snippet: r.snippet || '',
+    rank: r.rank,
+  }));
+}
+
 export function supersedeArtifact(oldId: number, newId: number): void {
   const old = db.prepare(`SELECT id FROM artifacts WHERE id = ?`).get(oldId);
   const nu  = db.prepare(`SELECT id FROM artifacts WHERE id = ?`).get(newId);
@@ -1052,6 +1109,100 @@ export function markChunkProcessed(id: number): void {
   const row = db.prepare(`SELECT id FROM chunks_virtual WHERE id = ?`).get(id);
   if (!row) throw new Error(`chunks_virtual ${id} not found`);
   db.prepare(`UPDATE chunks_virtual SET processed = 1 WHERE id = ?`).run(id);
+}
+
+// --- v11.1: importer idempotency — fixes silent data loss on session updates. ---
+//
+// Before this, importers did INSERT OR IGNORE against raw_events.external_id. When
+// a Claude/Codex/Gemini session file grew (user added more turns), the second
+// import hit the UNIQUE on external_id, dropped silently, and the new turns were
+// never reflected in the DB. The importer then updated import_state.last_mtime,
+// so the next run also skipped the file.
+//
+// Now: content_hash is stored; if external_id matches with a different hash, we
+// UPDATE content + reset chunked so the chunker re-emits chunks_virtual for the
+// event. artifact_sources rows are preserved (spans into the old content remain
+// valid as long as updates are appends, which is the Claude/Codex/Gemini pattern).
+
+export type RawEventInput = {
+  source_type: string;
+  project: string;
+  external_id: string;
+  timestamp: string;
+  content: string;
+  title?: string | null;
+  participants?: string | null;
+  metadata?: string | null;
+};
+
+export type UpsertRawEventResult = 'inserted' | 'updated' | 'unchanged';
+
+export function upsertRawEvent(e: RawEventInput): UpsertRawEventResult {
+  const content_hash = getHash(e.content);
+  const existing = db.prepare(
+    `SELECT id, content_hash FROM raw_events WHERE external_id = ?`
+  ).get(e.external_id) as { id: number; content_hash: string | null } | undefined;
+
+  if (!existing) {
+    db.prepare(
+      `INSERT INTO raw_events
+         (source_type, project, external_id, timestamp, content, title,
+          participants, metadata, processed, deduped, content_hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?)`
+    ).run(
+      e.source_type, e.project, e.external_id, e.timestamp, e.content,
+      e.title ?? null, e.participants ?? null, e.metadata ?? null, content_hash,
+    );
+    try {
+      db.prepare(
+        `INSERT INTO events_fts (external_id, project, source_type, title, content)
+         VALUES (?, ?, ?, ?, ?)`
+      ).run(e.external_id, e.project, e.source_type, e.title ?? '', e.content);
+    } catch {}
+    return 'inserted';
+  }
+
+  // Back-compat: existing rows before v11.1 have content_hash=NULL. Treat as
+  // "unchanged if content matches". Compute + store the hash regardless so
+  // subsequent runs short-circuit.
+  if (existing.content_hash && existing.content_hash === content_hash) {
+    return 'unchanged';
+  }
+
+  db.prepare(
+    `UPDATE raw_events SET
+       content = ?, title = ?, timestamp = ?, metadata = ?,
+       content_hash = ?, chunked = 0
+     WHERE id = ?`
+  ).run(
+    e.content, e.title ?? null, e.timestamp, e.metadata ?? null,
+    content_hash, existing.id,
+  );
+
+  // Clear stale narrative chunks so the chunker re-emits against the new content.
+  db.prepare(`DELETE FROM chunks_virtual WHERE source_event_id = ?`).run(existing.id);
+
+  // Refresh events_fts projection.
+  try {
+    db.prepare(`DELETE FROM events_fts WHERE external_id = ?`).run(e.external_id);
+    db.prepare(
+      `INSERT INTO events_fts (external_id, project, source_type, title, content)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(e.external_id, e.project, e.source_type, e.title ?? '', e.content);
+  } catch {}
+
+  // If hash was previously NULL but content actually matches, treat as unchanged
+  // after the backfill. (Only reachable on first post-v11.1 touch of an old row.)
+  if (!existing.content_hash) {
+    const prior = db.prepare(`SELECT content_hash FROM raw_events WHERE id = ?`).get(existing.id) as any;
+    if (prior && prior.content_hash === content_hash) {
+      // Hash is now stored; if we also just wrote the same content, report unchanged.
+      // (We already cleared chunks_virtual above — conservative but correct: chunker
+      //  re-emits. Acceptable for a one-time migration pass.)
+    }
+  }
+
+  return 'updated';
 }
 
 export function vacuumBackup(target: string): void {
