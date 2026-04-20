@@ -14,10 +14,11 @@ No wiki files. No markdown append. No file I/O at all. The DB is operational mem
 1. **Read the chunk**: `bun run brain chunk read <id>`. Metadata goes to stderr, content to stdout.
 2. **Scan for signal** across the artifact types below. Most chunks have 2–4 populated types. Many have none — that is valid.
 3. **Compute a stable `idempotency_key`** per artifact: `<type>:<project>:<slug-of-core-field>` (e.g. `decision:mm:chunks-virtual-only`). Re-reading the same chunk must produce the same keys so `brain artifact batch` deduplicates.
-4. **Emit ONE `brain artifact batch` call** with all artifacts from this chunk. Pipe JSON to stdin. Core-side upsert handles dedup — do NOT call `artifact list` first.
-5. **Explicit supersession only**: if the chunk itself shows a direct contradiction with a known active artifact (the user or agent says "we previously decided X, but now…"), emit `brain artifact supersede <old-id> <new-id>` after the batch. Do not scan the artifact table hunting for implicit contradictions.
-6. **Corrections**: before emitting a new `correction`, call `brain artifact list --project <p> --type correction` and match on `previous_belief` / `corrected_view`. If matched, call `brain artifact bump-correction <id>` instead of creating a duplicate.
-7. **Mark consumed**: `bun run brain chunk mark-processed <id>`.
+4. **Check the "Known Artifacts" list** (injected into your session prompt by `process-new.command`). If your candidate `idempotency_key` is already there, skip it — don't re-emit. This blinds-check replaces the round-trip `brain artifact list` call from earlier drafts.
+5. **Emit ONE `brain artifact batch` call** with all remaining artifacts from this chunk. Pipe JSON to stdin. Core-side upsert handles dedup as a safety net — but the "Known Artifacts" check is your primary token saver.
+6. **Explicit supersession only**: if the chunk itself shows a direct contradiction with a known active artifact (the user or agent says "we previously decided X, but now…"), emit `brain artifact supersede <old-id> <new-id>` after the batch. Do not scan the artifact table hunting for implicit contradictions.
+7. **Corrections**: before emitting a new `correction`, check the "Known Artifacts" list for a matching `previous_belief` / `corrected_view`. If matched, call `brain artifact bump-correction <id>` instead of creating a duplicate.
+8. **Mark consumed**: `bun run brain chunk mark-processed <id>`.
 
 ## Artifact types
 

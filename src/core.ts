@@ -928,6 +928,40 @@ export function listArtifacts(opts: ArtifactListOpts = {}): ArtifactRow[] {
   return rows.map(rowToArtifact);
 }
 
+export type ArtifactKey = {
+  id: number;
+  type: string;
+  idempotency_key: string;
+  summary: string;
+};
+
+// Field order mirrors the viewer's summarize() — try the canonical "core field"
+// for each type, fall back to a JSON snippet.
+const SUMMARY_FIELDS = [
+  'statement', 'symptom', 'problem', 'pattern', 'note',
+  'technology', 'area', 'error_message', 'previous_belief',
+];
+
+function summarizeArtifactData(data: Record<string, unknown>, cap = 120): string {
+  for (const f of SUMMARY_FIELDS) {
+    const v = (data as any)[f];
+    if (typeof v === 'string' && v.trim()) {
+      return v.length > cap ? v.slice(0, cap - 1).trimEnd() + '…' : v;
+    }
+  }
+  const fallback = JSON.stringify(data);
+  return fallback.length > cap ? fallback.slice(0, cap - 1) + '…' : fallback;
+}
+
+export function listArtifactKeys(opts: ArtifactListOpts = {}): ArtifactKey[] {
+  return listArtifacts(opts).map(a => ({
+    id: a.id,
+    type: a.type,
+    idempotency_key: a.idempotency_key,
+    summary: summarizeArtifactData(a.data),
+  }));
+}
+
 export function supersedeArtifact(oldId: number, newId: number): void {
   const old = db.prepare(`SELECT id FROM artifacts WHERE id = ?`).get(oldId);
   const nu  = db.prepare(`SELECT id FROM artifacts WHERE id = ?`).get(newId);

@@ -12,7 +12,7 @@ import {
   snapshotWiki, detectWikiChanges, timelineCitesRaw, timelineCitesEvent,
   backfillClaimsFromTimeline, backfillClaimsFromTimelineEvent, refreshSourceCount,
   walkWiki, wikiPath,
-  batchArtifacts, listArtifacts, supersedeArtifact, bumpCorrection,
+  batchArtifacts, listArtifacts, listArtifactKeys, supersedeArtifact, bumpCorrection,
   readChunk, queueChunks, markChunkProcessed, vacuumBackup,
   type ArtifactInput,
 } from './core.ts';
@@ -618,6 +618,25 @@ artifactCmd.command('list')
       limit: parseInt(opts.limit, 10) || 200,
     });
     console.log(JSON.stringify(rows, null, 2));
+  });
+
+artifactCmd.command('keys')
+  .description('Compact one-line-per-artifact projection (for Librarian prompt injection).')
+  .option('-p, --project <project>', 'Filter by project')
+  .option('-t, --type <type>', 'Filter by type')
+  .option('-s, --status <status>', 'Filter by status (active|retired|invalid)', 'active')
+  .option('-l, --limit <n>', 'Limit results', '500')
+  .action((opts) => {
+    const rows = listArtifactKeys({
+      project: opts.project ?? null,
+      type: opts.type ?? null,
+      status: opts.status === 'all' ? null : opts.status,
+      limit: parseInt(opts.limit, 10) || 500,
+    });
+    if (rows.length === 0) { console.log('(none)'); return; }
+    for (const r of rows) {
+      console.log(`#${r.id} ${r.type} ${r.idempotency_key} | ${r.summary}`);
+    }
   });
 
 artifactCmd.command('supersede')

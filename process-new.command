@@ -41,6 +41,11 @@ $(cat agent/roles/lib/soul-interactive.md)
 ## Handoff
 $(cat agent/roles/lib/handoff.md 2>/dev/null || echo "No previous handoff.")
 
+## Known Artifacts (project: mm, status=active)
+Before emitting, scan this list. If your candidate artifact's idempotency_key is already here, skip it (or call \`bump-correction\` for corrections). Supersede only when the chunk shows a direct contradiction.
+
+$(bun run brain artifact keys --project mm --status active --limit 500)
+
 ## Unprocessed Chunks (project: mm)
 $(bun run brain chunk queue --project mm)
 
@@ -48,6 +53,7 @@ $(bun run brain chunk queue --project mm)
 Drain the unprocessed chunks_virtual queue using the extraction protocol in meta/skills/ingest.md.
 For each chunk: \`brain chunk read <id>\`, scan artifact types, emit one
 \`brain artifact batch\` call, then \`brain chunk mark-processed <id>\`.
+Cross-reference the "Known Artifacts" list above to avoid re-emitting what's already there.
 No wiki-page edits. No file I/O. Skip chunks with no signal.
 Exit when queue is empty or context hits ~80%.
 EOF
