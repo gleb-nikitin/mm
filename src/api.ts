@@ -2,9 +2,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   initDb, hybridSearch, getStats, queryBrain, validateClaim, addToBrain, PATHS,
-  renderActiveAgentsMarkdown, listArtifacts, queueChunks, readChunk, db,
+  renderActiveAgentsMarkdown, getActiveAgents, listArtifacts, queueChunks, readChunk, db,
   searchArtifacts, getBrief, renderBrief,
 } from './core.ts';
+import { getActiveAgentsLive } from './session-probe.ts';
 import { filterMechanical } from './narrative.ts';
 
 // Ensure DB is ready on fresh roots
@@ -119,8 +120,18 @@ const server = Bun.serve({
 
     if (url.pathname === "/active") {
       const maxAge = parseInt(url.searchParams.get("max_age_seconds") || "300", 10);
-      const md = renderActiveAgentsMarkdown(maxAge);
-      return new Response(md, { headers: { "Content-Type": "text/markdown" } });
+      const live = url.searchParams.get("probe") === "live";
+      const wantJson = url.searchParams.get("format") === "json";
+      const agents = live
+        ? getActiveAgentsLive({ maxAgeSeconds: maxAge })
+        : getActiveAgents({ maxAgeSeconds: maxAge });
+      if (wantJson) {
+        const body = JSON.stringify({ agents, generated_at: new Date().toISOString() });
+        return new Response(body, { headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(renderActiveAgentsMarkdown(agents, maxAge), {
+        headers: { "Content-Type": "text/markdown" },
+      });
     }
 
     if (url.pathname === "/brief") {

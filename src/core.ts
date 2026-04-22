@@ -280,8 +280,7 @@ export function getActiveAgents(opts: { maxAgeSeconds?: number; project?: string
   }));
 }
 
-export function renderActiveAgentsMarkdown(maxAgeSeconds: number = 300): string {
-  const agents = getActiveAgents({ maxAgeSeconds });
+export function renderActiveAgentsMarkdown(agents: ActiveAgentRow[], maxAgeSeconds: number = 300): string {
   const nowIso = new Date().toISOString();
   let md = `# Active agents (last ${Math.floor(maxAgeSeconds / 60)} min)\n\n`;
   md += `_Generated: ${nowIso}_\n\n`;

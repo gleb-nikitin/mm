@@ -6,7 +6,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import {
   initDb, hybridSearch, queryBrain, validateClaim, addToBrain, embedBrain, getStats, getProjects,
-  renderActiveAgentsMarkdown,
+  renderActiveAgentsMarkdown, getActiveAgents,
   listArtifacts, listArtifactKeys, readChunk, queueChunks, db,
   searchArtifacts, getBrief, renderBrief,
 } from './core.ts';
@@ -237,7 +237,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     case "list_active_agents": {
       const args = request.params.arguments || {};
-      const md = renderActiveAgentsMarkdown((args.max_age_seconds as number) || 300);
+      const maxAge = (args.max_age_seconds as number) || 300;
+      const md = renderActiveAgentsMarkdown(getActiveAgents({ maxAgeSeconds: maxAge }), maxAge);
       return { content: [{ type: "text", text: md }] };
     }
     case "get_brief": {
