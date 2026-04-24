@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { resolveParticipantIds } from '../src/core';
+import { resolveParticipantIds, resolveAcDbPath } from '../src/core';
 import { getActiveAgentsLive } from '../src/session-probe';
 
 let tmpDir: string;
@@ -86,6 +86,76 @@ describe('resolveParticipantIds', () => {
     const out = resolveParticipantIds(['sess-known', 'sess-unknown']);
     expect(out.get('sess-known')).toBe('mm_cto');
     expect(out.has('sess-unknown')).toBe(false);
+  });
+});
+
+// ---------- resolveAcDbPath (path precedence) ----------
+
+describe('resolveAcDbPath', () => {
+  let pathTmp: string;
+  let savedPathEnv: string | undefined;
+  beforeEach(() => {
+    pathTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mm-ac-db-path-'));
+    savedPathEnv = process.env.MT_AC_DB_PATH;
+    delete process.env.MT_AC_DB_PATH;
+  });
+  afterEach(() => {
+    if (savedPathEnv === undefined) delete process.env.MT_AC_DB_PATH;
+    else process.env.MT_AC_DB_PATH = savedPathEnv;
+    fs.rmSync(pathTmp, { recursive: true, force: true });
+  });
+
+  test('env value wins — returned even if target does not exist', () => {
+    const envOverride = path.join(pathTmp, 'does-not-exist.db');
+    const resolved = resolveAcDbPath({
+      envValue: envOverride,
+      prodPath: path.join(pathTmp, 'prod.db'),
+      workspacePath: path.join(pathTmp, 'workspace.db'),
+    });
+    expect(resolved).toBe(envOverride);
+  });
+
+  test('prod preferred over workspace when both exist', () => {
+    const prodPath = path.join(pathTmp, 'prod.db');
+    const workspacePath = path.join(pathTmp, 'workspace.db');
+    fs.writeFileSync(prodPath, '');
+    fs.writeFileSync(workspacePath, '');
+    const resolved = resolveAcDbPath({ prodPath, workspacePath });
+    expect(resolved).toBe(prodPath);
+  });
+
+  test('workspace fallback when prod absent', () => {
+    const prodPath = path.join(pathTmp, 'prod.db');
+    const workspacePath = path.join(pathTmp, 'workspace.db');
+    fs.writeFileSync(workspacePath, '');
+    // prodPath intentionally not created
+    const resolved = resolveAcDbPath({ prodPath, workspacePath });
+    expect(resolved).toBe(workspacePath);
+  });
+
+  test('neither exists → workspace returned (caller existsSync handles final gap)', () => {
+    const prodPath = path.join(pathTmp, 'prod.db');
+    const workspacePath = path.join(pathTmp, 'workspace.db');
+    const resolved = resolveAcDbPath({ prodPath, workspacePath });
+    expect(resolved).toBe(workspacePath);
+  });
+
+  test('integration: resolveParticipantIds reads through prod when prod DB is seeded', () => {
+    const prodPath = path.join(pathTmp, 'prod.db');
+    const workspacePath = path.join(pathTmp, 'workspace.db');
+    // Prod has the live data
+    const prodDb = makeAcShapeDb(prodPath);
+    prodDb.exec(`INSERT INTO participants (id, project, role) VALUES ('mm_cto', 'mm', 'cto')`);
+    prodDb.exec(`INSERT INTO llm_sessions (id, participant_id, is_active) VALUES ('sess-prod', 'mm_cto', 1)`);
+    prodDb.close();
+    // Workspace is empty (realistic: workspace DB exists but has no active sessions)
+    const wsDb = makeAcShapeDb(workspacePath);
+    wsDb.close();
+
+    // Point env at prod via the env-var surface (integration contract)
+    process.env.MT_AC_DB_PATH = prodPath;
+    const out = resolveParticipantIds(['sess-prod']);
+    expect(out.get('sess-prod')).toBe('mm_cto');
   });
 });
 

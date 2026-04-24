@@ -1,5 +1,6 @@
 import { Database } from 'bun:sqlite';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import yaml from 'js-yaml';
 import { execFileSync } from 'child_process';
@@ -207,6 +208,25 @@ export function initDb() {
 
 // --- Common Logic ---
 
+// Resolve which ac msg.db to read. Precedence: explicit env override > Prod DB
+// (Aurora Core.app data dir, the live write target) > ac workspace DB (used by
+// tests and standalone bun invocations). Env wins even if the target doesn't
+// exist — caller's existsSync check treats that as "silent fallback".
+export interface AcDbPathOpts {
+  envValue?: string;
+  prodPath?: string;
+  workspacePath?: string;
+}
+
+export function resolveAcDbPath(opts: AcDbPathOpts = {}): string {
+  const envValue = opts.envValue ?? process.env.MT_AC_DB_PATH;
+  if (envValue) return envValue;
+  const prodPath = opts.prodPath
+    ?? path.join(os.homedir(), 'Library/Application Support/com.aurora.core/data/msg.db');
+  if (fs.existsSync(prodPath)) return prodPath;
+  return opts.workspacePath ?? '/Users/glebnikitin/work/code/ac/data/msg.db';
+}
+
 // Resolve external session ids to ac participant ids (e.g. "mm_cto") by
 // reading ac's msg.db read-only. Fails silently: if the DB is missing or
 // the query errors, returns an empty map and mm renders today's shape.
@@ -214,7 +234,7 @@ export function resolveParticipantIds(externalIds: string[]): Map<string, string
   const result = new Map<string, string>();
   if (externalIds.length === 0) return result;
 
-  const acDbPath = process.env.MT_AC_DB_PATH || '/Users/glebnikitin/work/code/ac/data/msg.db';
+  const acDbPath = resolveAcDbPath();
   if (!fs.existsSync(acDbPath)) return result;
 
   let acDb: Database | null = null;
