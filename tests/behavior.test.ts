@@ -14,6 +14,7 @@ import { Database } from 'bun:sqlite';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as net from 'net';
 
 const REPO = path.resolve(new URL('..', import.meta.url).pathname);
 const BRAIN_TS = path.join(REPO, 'src', 'brain.ts');
@@ -96,18 +97,34 @@ ${opts.timeline ?? ''}
   fs.writeFileSync(path.join(tmpRoot, 'wiki', `${slug}.md`), body);
 }
 
+async function getFreePort(): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        server.close(() => reject(new Error('failed to allocate test port')));
+        return;
+      }
+      const port = address.port;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
 // ---------- SCHEMA ----------
 
-describe('schema migration', () => {
-  test('fresh root bootstraps to v11', async () => {
+describe.serial('schema migration', () => {
+  test.serial('fresh root bootstraps to v12', async () => {
     await brain(['queue']);
     const db = openDb();
     const version = (db.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any).version;
-    expect(version).toBe(11);
+    expect(version).toBe(12);
     const tbls = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r: any) => r.name);
     for (const name of [
       'raw_entries', 'raw_events', 'wiki_pages', 'claims', 'claim_sources', 'claim_sources_event', 'import_state',
-      'artifacts', 'artifact_sources', 'chunks_virtual',
+      'artifacts', 'artifact_sources', 'chunks_virtual', 'session_index', 'session_message_links',
     ]) {
       expect(tbls).toContain(name);
     }
@@ -123,14 +140,18 @@ describe('schema migration', () => {
     for (const name of ['source_event_id', 'segment_start', 'segment_end', 'filter_version', 'processed']) {
       expect(cvCols).toContain(name);
     }
+    const sessionCols = db.prepare("PRAGMA table_info(session_index)").all().map((c: any) => c.name);
+    for (const name of ['vendor', 'session_id', 'participant_id', 'project_role', 'state']) {
+      expect(sessionCols).toContain(name);
+    }
     db.close();
   });
 });
 
 // ---------- OPTION A: RAW RETRO-SWEEP ----------
 
-describe('brain process — Phase 1 retro-sweep', () => {
-  test('raw entry cited by wiki timeline gets retro-linked without LLM', async () => {
+describe.serial('brain process — Phase 1 retro-sweep', () => {
+  test.serial('raw entry cited by wiki timeline gets retro-linked without LLM', async () => {
     // Seed a raw file
     const rawDir = path.join(tmpRoot, 'raw', 'docs', 'test');
     fs.mkdirSync(rawDir, { recursive: true });
@@ -159,7 +180,7 @@ describe('brain process — Phase 1 retro-sweep', () => {
     db.close();
   });
 
-  test('raw entry with no citation stays processed=0 when LLM is unavailable', async () => {
+  test.serial('raw entry with no citation stays processed=0 when LLM is unavailable', async () => {
     const rawDir = path.join(tmpRoot, 'raw', 'docs', 'test');
     fs.mkdirSync(rawDir, { recursive: true });
     fs.writeFileSync(path.join(rawDir, 'uncited.md'), '# Uncited\n\nAdded: now\n\n---\n\nBody.\n');
@@ -181,8 +202,8 @@ describe('brain process — Phase 1 retro-sweep', () => {
 
 // ---------- OPTION A: EVENT RETRO-SWEEP ----------
 
-describe('brain process — event retro-sweep', () => {
-  test('event cited by wiki timeline via `event:<id>` gets retro-linked', async () => {
+describe.serial('brain process — event retro-sweep', () => {
+  test.serial('event cited by wiki timeline via `event:<id>` gets retro-linked', async () => {
     await brain(['queue']); // bootstraps schema
     const db = openDb();
     // Seed a raw_event
@@ -216,8 +237,8 @@ describe('brain process — event retro-sweep', () => {
 
 // ---------- HYBRID SEARCH: event reserved lane ----------
 
-describe('hybridSearch — events surface via reserved lane', () => {
-  test('event row appears in brain search output even with wiki hits', async () => {
+describe.serial('hybridSearch — events surface via reserved lane', () => {
+  test.serial('event row appears in brain search output even with wiki hits', async () => {
     await brain(['queue']); // bootstrap
     const db = openDb();
     // Seed enough wiki pages to dominate RRF
@@ -244,8 +265,8 @@ describe('hybridSearch — events surface via reserved lane', () => {
 
 // ---------- /active endpoint shape ----------
 
-describe('GET /active markdown shape', () => {
-  test('populated + empty forms match the canonical template', async () => {
+describe.serial('GET /active markdown shape', () => {
+  test.serial('populated + empty forms match the canonical template', async () => {
     await brain(['queue']); // bootstrap
     const db = openDb();
     // Seed an import_state row visible to /active
@@ -257,21 +278,27 @@ describe('GET /active markdown shape', () => {
       );
     db.close();
 
-    // Spawn API on a high random port so we don't collide with a real API on :3000.
-    const testPort = 30000 + Math.floor(Math.random() * 30000);
+    const testPort = await getFreePort();
     const api = Bun.spawn(['bun', API_TS], {
       env: { ...process.env, MT_BRAIN_ROOT: tmpRoot, MT_PORT: String(testPort) },
       stdout: 'pipe', stderr: 'pipe',
     });
     const base = `http://localhost:${testPort}`;
+    let ready = false;
     for (let i = 0; i < 40; i++) {
       try {
         const r = await fetch(`${base}/stats`);
-        if (r.ok) break;
+        if (r.ok) { ready = true; break; }
       } catch {}
+      if (api.exitCode !== null) break;
       await new Promise(r => setTimeout(r, 100));
     }
     try {
+      if (!ready) {
+        api.kill();
+        const stderr = await new Response(api.stderr).text();
+        throw new Error(stderr || `API did not start on ${base}`);
+      }
       const r = await fetch(`${base}/active?max_age_seconds=600`);
       expect(r.ok).toBe(true);
       const md = await r.text();
@@ -298,7 +325,7 @@ describe('GET /active markdown shape', () => {
 
 // ---------- CHUNKER ----------
 
-describe('chunk-events — raw_events to chunks_virtual (v11)', () => {
+describe.serial('chunk-events — raw_events to chunks_virtual (v11)', () => {
   async function chunker(args: string[] = []) {
     const proc = Bun.spawn(['bun', CHUNK_EVENTS_TS, ...args], {
       env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
@@ -312,7 +339,7 @@ describe('chunk-events — raw_events to chunks_virtual (v11)', () => {
     return { code: code || 0, stdout, stderr };
   }
 
-  test('splits a session at turn boundaries and emits contiguous chunks_virtual spans', async () => {
+  test.serial('splits a session at turn boundaries and emits contiguous chunks_virtual spans', async () => {
     await brain(['queue']);
 
     const bigTurn = (role: string, tag: string) => `${role}: ${tag} `.padEnd(6_000, 'x');
@@ -357,7 +384,7 @@ describe('chunk-events — raw_events to chunks_virtual (v11)', () => {
     db2.close();
   });
 
-  test('re-running is idempotent (chunked rows skipped)', async () => {
+  test.serial('re-running is idempotent (chunked rows skipped)', async () => {
     await brain(['queue']);
     const db = openDb();
     db.prepare(`INSERT INTO raw_events
@@ -367,15 +394,17 @@ describe('chunk-events — raw_events to chunks_virtual (v11)', () => {
     db.close();
 
     const first = await chunker(['--project', 'idem']);
+    if (first.code !== 0) throw new Error(first.stderr || first.stdout);
     expect(first.code).toBe(0);
     expect(first.stdout).toContain('1 events');
 
     const second = await chunker(['--project', 'idem']);
+    if (second.code !== 0) throw new Error(second.stderr || second.stdout);
     expect(second.code).toBe(0);
     expect(second.stdout).toContain('nothing to do');
   });
 
-  test('brain chunk read reconstructs content with filterMechanical applied', async () => {
+  test.serial('brain chunk read reconstructs content with filterMechanical applied', async () => {
     await brain(['queue']);
     const db = openDb();
     const content = 'User: run the check\n\n[tool: Bash]\nls -la\n\nAssistant: done.';
@@ -385,7 +414,8 @@ describe('chunk-events — raw_events to chunks_virtual (v11)', () => {
     const evtId = Number(insertRes.lastInsertRowid);
     db.close();
 
-    await chunker(['--project', 'readtest']);
+    const chunkRes = await chunker(['--project', 'readtest']);
+    expect(chunkRes.code).toBe(0);
 
     const db2 = openDb();
     const cv = db2.prepare(`SELECT id FROM chunks_virtual WHERE source_event_id = ? ORDER BY id LIMIT 1`).get(evtId) as any;
@@ -398,7 +428,7 @@ describe('chunk-events — raw_events to chunks_virtual (v11)', () => {
     expect(res.stdout).not.toContain('ls -la');
   });
 
-  test('session grown after chunking: stale chunks cleared on next chunker run (no --rechunk)', async () => {
+  test.serial('session grown after chunking: stale chunks cleared on next chunker run (no --rechunk)', async () => {
     await brain(['queue']);
     const baseTurn = (t: string) => `User: ${t}\n\nAssistant: reply ${t}`;
     const initial = baseTurn('Q1');
@@ -447,7 +477,7 @@ describe('chunk-events — raw_events to chunks_virtual (v11)', () => {
 
 // ---------- ARTIFACTS (v11) ----------
 
-describe('artifacts — batch + list + supersede + bump-correction', () => {
+describe.serial('artifacts — batch + list + supersede + bump-correction', () => {
   async function artifactBatch(inputs: any[]): Promise<{ code: number; stdout: string }> {
     const proc = Bun.spawn(['bun', BRAIN_TS, 'artifact', 'batch'], {
       env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
@@ -463,7 +493,7 @@ describe('artifacts — batch + list + supersede + bump-correction', () => {
     return { code: code || 0, stdout };
   }
 
-  test('batch upserts by (project, type, idempotency_key); second call is dedup', async () => {
+  test.serial('batch upserts by (project, type, idempotency_key); second call is dedup', async () => {
     await brain(['queue']);
     const input = [{
       project: 'mm', type: 'decision', idempotency_key: 'dec-1',
@@ -486,7 +516,7 @@ describe('artifacts — batch + list + supersede + bump-correction', () => {
     expect(rows.length).toBe(1);
   });
 
-  test('supersede sets superseded_by and retires the old row', async () => {
+  test.serial('supersede sets superseded_by and retires the old row', async () => {
     await brain(['queue']);
     const batch1 = await artifactBatch([
       { project: 'mm', type: 'decision', idempotency_key: 'old', data: { statement: 'v1' } },
@@ -505,7 +535,7 @@ describe('artifacts — batch + list + supersede + bump-correction', () => {
     expect(newRow.status).toBe('active');
   });
 
-  test('bump-correction increments count + sets last_seen', async () => {
+  test.serial('bump-correction increments count + sets last_seen', async () => {
     await brain(['queue']);
     const batch = await artifactBatch([{
       project: 'mm', type: 'correction', idempotency_key: 'corr-a',
@@ -521,8 +551,8 @@ describe('artifacts — batch + list + supersede + bump-correction', () => {
   });
 });
 
-describe('brain backup — WAL checkpoint + VACUUM INTO', () => {
-  test('produces a valid SQLite file readable at schema_version=11', async () => {
+describe.serial('brain backup — WAL checkpoint + VACUUM INTO', () => {
+  test.serial('produces a valid SQLite file readable at schema_version=12', async () => {
     await brain(['queue']);
     const target = path.join(tmpRoot, 'meta', 'snap.db');
     const res = await brain(['backup', '--target', target]);
@@ -530,13 +560,13 @@ describe('brain backup — WAL checkpoint + VACUUM INTO', () => {
     expect(fs.existsSync(target)).toBe(true);
     const snap = new Database(target, { readonly: true });
     const v = (snap.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any).version;
-    expect(v).toBe(11);
+    expect(v).toBe(12);
     snap.close();
   });
 });
 
-describe('filterMechanical — narrative filter semantics', () => {
-  test('strips noise-tool blocks, preserves error lines, compresses Edit', async () => {
+describe.serial('filterMechanical — narrative filter semantics', () => {
+  test.serial('strips noise-tool blocks, preserves error lines, compresses Edit', async () => {
     const { filterMechanical } = await import(path.join(REPO, 'src', 'narrative.ts'));
     const input = [
       'User: list',
@@ -567,8 +597,8 @@ describe('filterMechanical — narrative filter semantics', () => {
 
 // ---------- IMPORTER DEDUP ----------
 
-describe('import-claude dedup', () => {
-  test('re-running the importer against the same JSONL yields 0 new rows', async () => {
+describe.serial('import-claude dedup', () => {
+  test.serial('re-running the importer against the same JSONL yields 0 new rows', async () => {
     // Build a synthetic claude projects tree
     const projectsDir = path.join(tmpRoot, 'claude-projects');
     const sessionsDir = path.join(projectsDir, '-Users-test-work-mm');
@@ -602,7 +632,7 @@ describe('import-claude dedup', () => {
     expect(first.out).toContain('imported:          1');
 
     const db = openDb();
-    expect((db.prepare('SELECT COUNT(*) AS c FROM raw_events WHERE external_id = ?').get('sess-dedup') as any).c).toBe(1);
+    expect((db.prepare('SELECT COUNT(*) AS c FROM raw_events WHERE external_id = ?').get('claude:sess-dedup') as any).c).toBe(1);
     db.close();
 
     const second = await runImporter(['--force']);
@@ -611,7 +641,7 @@ describe('import-claude dedup', () => {
     expect(second.out).toContain('imported:          0');
   });
 
-  test('extending a session with processed=1 re-chunks AND resets processed (was stranded under v11.1)', async () => {
+  test.serial('extending a session with processed=1 re-chunks AND resets processed (was stranded under v11.1)', async () => {
     const projectsDir = path.join(tmpRoot, 'claude-projects');
     const sessionsDir = path.join(projectsDir, '-Users-test-work-mm');
     fs.mkdirSync(sessionsDir, { recursive: true });
@@ -641,7 +671,7 @@ describe('import-claude dedup', () => {
 
     // Simulate a v10 wiki ingest having already processed this row.
     const db1 = openDb();
-    db1.prepare(`UPDATE raw_events SET processed = 1, chunked = 1 WHERE external_id = 'sess-processed'`).run();
+    db1.prepare(`UPDATE raw_events SET processed = 1, chunked = 1 WHERE external_id = 'claude:sess-processed'`).run();
     db1.close();
 
     writeJsonl([
@@ -655,14 +685,14 @@ describe('import-claude dedup', () => {
     await runImporter();
 
     const db2 = openDb();
-    const row = db2.prepare(`SELECT content, processed, chunked FROM raw_events WHERE external_id = 'sess-processed'`).get() as any;
+    const row = db2.prepare(`SELECT content, processed, chunked FROM raw_events WHERE external_id = 'claude:sess-processed'`).get() as any;
     db2.close();
     expect(row.content).toContain('UNIQUE_LATER');
     expect(row.processed).toBe(0); // reset — row is no longer stranded
     expect(row.chunked).toBe(0);
   });
 
-  test('upsertRawEvent keeps raw_events and events_fts in sync when project changes', async () => {
+  test.serial('upsertRawEvent keeps raw_events and events_fts in sync when project changes', async () => {
     // Use a direct bun -e invocation so we can control inputs precisely.
     const proc = Bun.spawn(['bun', '-e', `
       import { initDb, db, upsertRawEvent } from '${path.join(REPO, 'src', 'core.ts')}';
@@ -699,7 +729,7 @@ describe('import-claude dedup', () => {
     expect(state.re.project).toBe(state.fts.project);
   });
 
-  test('upsertRawEvent is transactional — FTS failure rolls back the raw_events update', async () => {
+  test.serial('upsertRawEvent is transactional — FTS failure rolls back the raw_events update', async () => {
     // Seed one row, then corrupt events_fts so the UPDATE path's DELETE/INSERT
     // will fail. The tx wrap must ensure raw_events.content doesn't move.
     const proc = Bun.spawn(['bun', '-e', `
@@ -735,7 +765,7 @@ describe('import-claude dedup', () => {
     expect(parsed.chunked).toBe(0);            // original insert state preserved
   });
 
-  test('extending a session (same id, new turns) updates content and resets chunked', async () => {
+  test.serial('extending a session (same id, new turns) updates content and resets chunked', async () => {
     const projectsDir = path.join(tmpRoot, 'claude-projects');
     const sessionsDir = path.join(projectsDir, '-Users-test-work-mm');
     fs.mkdirSync(sessionsDir, { recursive: true });
@@ -758,12 +788,12 @@ describe('import-claude dedup', () => {
         env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
         stdout: 'pipe', stderr: 'pipe',
       });
-      const [out, , code] = await Promise.all([
+      const [out, err, code] = await Promise.all([
         new Response(proc.stdout).text(),
         new Response(proc.stderr).text(),
         proc.exited,
       ]);
-      return { code: code || 0, out };
+      return { code: code || 0, out, err };
     };
 
     const first = await runImporter();
@@ -772,8 +802,8 @@ describe('import-claude dedup', () => {
 
     // Simulate the chunker having already run against the original content.
     const db1 = openDb();
-    db1.prepare(`UPDATE raw_events SET chunked = 1 WHERE external_id = 'sess-grow'`).run();
-    const contentBefore = (db1.prepare(`SELECT content, content_hash FROM raw_events WHERE external_id = 'sess-grow'`).get() as any);
+    db1.prepare(`UPDATE raw_events SET chunked = 1 WHERE external_id = 'claude:sess-grow'`).run();
+    const contentBefore = (db1.prepare(`SELECT content, content_hash FROM raw_events WHERE external_id = 'claude:sess-grow'`).get() as any);
     db1.close();
     expect(contentBefore.content).toContain('Hi!');
     expect(contentBefore.content_hash).toBeTruthy();
@@ -789,23 +819,24 @@ describe('import-claude dedup', () => {
     fs.utimesSync(jsonl, aged2, aged2);
 
     const second = await runImporter();
+    if (second.code !== 0) throw new Error(second.err || second.out);
     expect(second.code).toBe(0);
     expect(second.out).toContain('updated:           1');
 
     const db2 = openDb();
-    const row = db2.prepare(`SELECT content, content_hash, chunked FROM raw_events WHERE external_id = 'sess-grow'`).get() as any;
+    const row = db2.prepare(`SELECT content, content_hash, chunked FROM raw_events WHERE external_id = 'claude:sess-grow'`).get() as any;
     expect(row.content).toContain('UNIQUE_NEW_TURN_TOKEN');
     expect(row.content_hash).not.toBe(contentBefore.content_hash);
     expect(row.chunked).toBe(0); // reset so chunker re-emits
     // Row count unchanged (upsert, not duplicate insert).
-    expect((db2.prepare(`SELECT COUNT(*) AS c FROM raw_events WHERE external_id = 'sess-grow'`).get() as any).c).toBe(1);
+    expect((db2.prepare(`SELECT COUNT(*) AS c FROM raw_events WHERE external_id = 'claude:sess-grow'`).get() as any).c).toBe(1);
     db2.close();
   });
 });
 
 // ---------- ARTIFACT SEARCH (FTS) ----------
 
-describe('brain artifact search — FTS over artifact data', () => {
+describe.serial('brain artifact search — FTS over artifact data', () => {
   async function artifactBatch(inputs: any[]): Promise<void> {
     const proc = Bun.spawn(['bun', BRAIN_TS, 'artifact', 'batch'], {
       env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
@@ -816,7 +847,7 @@ describe('brain artifact search — FTS over artifact data', () => {
     await proc.exited;
   }
 
-  test('matches on statement text across types with project + type filters', async () => {
+  test.serial('matches on statement text across types with project + type filters', async () => {
     await brain(['queue']);
 
     await artifactBatch([

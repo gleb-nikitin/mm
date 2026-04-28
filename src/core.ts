@@ -23,8 +23,8 @@ for (const p of [PATHS.raw, PATHS.wiki, PATHS.meta]) {
 // --- Database ---
 export const db = new Database(PATHS.db);
 try {
-  db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA busy_timeout = 5000;');
+  db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
 } catch (e) {}
 
@@ -203,7 +203,57 @@ export function initDb() {
   db.run(`CREATE INDEX IF NOT EXISTS idx_chunks_virtual_project_processed ON chunks_virtual(project, processed)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_chunks_virtual_source_event      ON chunks_virtual(source_event_id)`);
 
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 11)');
+  // v12: R1 session-tracker linkage index. This phase stores session identity
+  // and prompt-footer links only; usage and event-stream tables land in later
+  // R1 phases.
+  db.run(`CREATE TABLE IF NOT EXISTS session_index (
+    vendor TEXT NOT NULL CHECK(vendor IN ('claude','codex','gemini')),
+    session_id TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    raw_event_id INTEGER REFERENCES raw_events(id) ON DELETE SET NULL,
+    participant_id TEXT,
+    project TEXT NOT NULL,
+    role TEXT,
+    project_role TEXT,
+    cwd TEXT,
+    model TEXT,
+    started_at TEXT,
+    last_activity_at TEXT NOT NULL,
+    last_imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_mtime REAL NOT NULL,
+    last_log_line TEXT,
+    state TEXT NOT NULL CHECK(state IN ('working','idle','wedged','completed','orphan')),
+    orphan_reason TEXT,
+    metadata TEXT,
+    PRIMARY KEY(vendor, session_id)
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_index_project_role_state_activity ON session_index(project_role, state, last_activity_at DESC)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_index_participant_activity ON session_index(participant_id, last_activity_at DESC)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_index_state_activity ON session_index(state, last_activity_at DESC)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_index_source_path ON session_index(source_path)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_index_project_state_activity ON session_index(project, state, last_activity_at DESC)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_index_project_role_filter ON session_index(project, role, state, last_activity_at DESC)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_index_session_id ON session_index(session_id)`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS session_message_links (
+    chain_msg_id TEXT PRIMARY KEY,
+    chain TEXT,
+    seq INTEGER,
+    from_id TEXT,
+    to_id TEXT,
+    vendor TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    participant_id TEXT,
+    source_path TEXT,
+    confidence TEXT NOT NULL CHECK(confidence IN ('exact','footer','none')),
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(vendor, session_id) REFERENCES session_index(vendor, session_id)
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_message_links_session ON session_message_links(vendor, session_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_message_links_chain ON session_message_links(chain, seq)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_message_links_participant ON session_message_links(participant_id)`);
+
+  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 12)');
 }
 
 // --- Common Logic ---
@@ -598,7 +648,10 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
 
   if (!ftsQuery) return [];
 
-  const queryEmbedding = await embed(query);
+  const hasEmbeddedChunks = (db.prepare(
+    `SELECT 1 FROM chunks WHERE embedding IS NOT NULL LIMIT 1`
+  ).get() as unknown) !== null;
+  const queryEmbedding = hasEmbeddedChunks ? await embed(query) : null;
 
   // FTS runs over the wiki search_index. Skip only when source_types is set
   // and 'wiki' is not among them; project filters don't apply to wiki pages.

@@ -11,7 +11,9 @@ Files live under `raw/<source_type>/<project>/<timestamp>.md`. Filters at query 
 
 ## Importing Claude Code, Codex, and Gemini sessions
 
-The current session importers — **`scripts/import-claude.ts`**, **`import-codex.ts`**, **`import-gemini.ts`** — read JSONL/JSON under the vendor’s app directories (`~/.claude/projects`, `~/.codex/sessions`, `~/.gemini/tmp`, …). They insert **one row per session** into **`raw_events`** and **`events_fts`**, and update **`import_state`** for the Active Agents dashboard. They **do not** write markdown under `raw/claude/...` by default.
+The current session importers — **`scripts/import-claude.ts`**, **`import-codex.ts`**, **`import-gemini.ts`** — read JSONL/JSON under the vendor’s app directories (`~/.claude/projects`, `~/.codex/sessions`, `~/.gemini/tmp`, …). They insert **one row per session** into **`raw_events`** and **`events_fts`**, update **`import_state`** for the Active Agents dashboard, and upsert **`session_index`** / **`session_message_links`** for R1 session observability. They **do not** write markdown under `raw/claude/...` by default.
+
+`raw_events.external_id` is vendor-prefixed (`claude:<session_id>`, `codex:<session_id>`, `gemini:<session_id>`) so global uniqueness survives cross-vendor session-id collisions. `import_state.external_id` intentionally remains the raw vendor session id because `/active` and ac `llm_sessions.id` matching depend on that raw id.
 
 ```sh
 # Default: last 30 days, min user turns, no thinking blocks, etc.
@@ -37,6 +39,14 @@ Flags (Claude script; Codex/Gemini have analogous flags — `--help` on each):
 **Turning a single session into the wiki without chunking:** **`brain ingest-event <external_id>`** (Gemini + timeline `event:…` citation). Session rows are also **searchable immediately** via hybrid search’s event lane.
 
 Rerunning imports uses **`INSERT OR IGNORE`** / dedup on **`external_id`** — safe to repeat.
+
+For an existing DB created before the vendor-prefixed `raw_events.external_id` convention, run:
+
+```sh
+bun scripts/backfill-r1.ts
+```
+
+The backfill populates `session_index`, records prompt-footer links when a real or derivable `chain_msg_id` exists, migrates old unprefixed `raw_events.external_id` values in place, and consolidates already-created prefixed duplicates.
 
 ## Importing Telegram chats
 

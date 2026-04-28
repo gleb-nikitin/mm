@@ -3,8 +3,10 @@
  *
  * Walks `~/.codex/sessions/*.jsonl` (or `--sessions-dir <path>` for testing),
  * filters by mtime + min-turns + project substring, flattens each session into
- * a single clean transcript, and inserts one row per session. Dedup is via
- * `external_id UNIQUE` (the Codex session id) + `INSERT OR IGNORE`.
+ * a single clean transcript, and inserts one row per session. `raw_events`
+ * stores `external_id` as `codex:<session_id>` to avoid cross-vendor
+ * collisions; `import_state.external_id` intentionally keeps the raw session
+ * id so `/active` and ac `llm_sessions.id` matching stay compatible.
  *
  * Search-visible immediately via `events_fts`. Ingestion into wiki is a
  * separate, later, targeted pass — this importer's job is only to land all
@@ -19,6 +21,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { initDb, db, upsertRawEvent } from '../src/core.ts';
+import { findRawEventIdByExternalId, recordSessionObservation } from '../src/r1/session-index.ts';
 
 type Flags = {
   days: number;
@@ -398,6 +401,7 @@ async function main() {
 
     const metadata = JSON.stringify({
       provider: 'codex',
+      session_id: session.sessionId,
       source_path: filePath,
       model: session.model,
       cwd: session.cwd,
@@ -406,16 +410,31 @@ async function main() {
       turn_count: session.turns.length,
       user_turn_count: userTurnCount,
     });
+    const namespacedExternalId = `codex:${session.sessionId}`;
     const res = upsertRawEvent({
       source_type: 'llm_chat',
       project: projectSlug,
-      external_id: session.sessionId,
+      external_id: namespacedExternalId,
       timestamp: started || new Date().toISOString(),
       content,
       title,
       participants: JSON.stringify(['user', 'assistant']),
       metadata,
     });
+    recordSessionObservation({
+      vendor: 'codex',
+      session_id: session.sessionId,
+      source_path: filePath,
+      raw_event_id: findRawEventIdByExternalId(namespacedExternalId),
+      project: projectSlug,
+      cwd: session.cwd,
+      model: session.model,
+      started_at: started || null,
+      last_activity_at: ended || started || new Date().toISOString(),
+      last_mtime: mtimeMs,
+      last_log_line: lastUserSnippet,
+      metadata,
+    }, content);
     if (res === 'inserted') {
       imported++;
       console.log(`  OK ${title}  ->  raw_events`);
