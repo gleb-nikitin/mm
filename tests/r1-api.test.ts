@@ -394,7 +394,7 @@ describe('R1 active sessions API', () => {
         project_role: 'mm/cto',
         seconds_ago: Math.floor((generatedAt - Date.parse('2026-04-22T10:05:00Z')) / 1000),
         last_log_line: 'working log',
-        state: 'working',
+        state: 'wedged',
       });
       expect(Object.keys(body.sessions[0])).toEqual(['project_role', 'seconds_ago', 'last_log_line', 'state']);
     });
@@ -422,7 +422,7 @@ describe('R1 active sessions API', () => {
         started_at: '2026-04-22T10:00:00Z',
         last_activity_at: '2026-04-22T10:05:00Z',
         last_log_line: 'working log',
-        state: 'working',
+        state: 'wedged',
       });
     });
   });
@@ -467,9 +467,12 @@ describe('R1 active sessions API', () => {
 
   test('state filters support single state and exhaustive CSV', async () => {
     await withApi(async base => {
-      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&state=working')).body)).toEqual([
+      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&state=wedged')).body)).toEqual([
         'sess-mm-cto-working',
+        'sess-mm-devops-idle',
+        'sess-ac-cto-wedged',
       ]);
+      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&state=working')).body)).toEqual([]);
       expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&state=working,idle,wedged,completed,orphan')).body)).toEqual([
         'sess-mm-cto-working',
         'sess-mm-devops-idle',

@@ -165,12 +165,22 @@ export function listSessionsBySessionId(sessionId: string): SessionIndexRow[] {
   ).all(sessionId) as SessionIndexRow[];
 }
 
+function deriveStateForIndexRow(row: SessionIndexRow, nowMs: number): SessionState {
+  return deriveSessionState({
+    linked: row.state === 'completed' ? true : row.state === 'orphan' ? false : Boolean(row.participant_id),
+    completed: row.state === 'completed',
+    explicitState: row.state === 'completed' ? 'completed' : null,
+    last_activity_at: row.last_activity_at,
+    nowMs,
+  });
+}
+
 export function listActiveSessions(filter: ActiveSessionFilter = {}): SessionIndexRow[] {
   const states = filter.states && filter.states.length > 0
     ? filter.states
     : ['working', 'idle', 'wedged'] as SessionState[];
-  const clauses = [`state IN (${states.map(() => '?').join(',')})`];
-  const params: any[] = [...states];
+  const clauses: string[] = [];
+  const params: any[] = [];
   if (filter.projects && filter.projects.length > 0) {
     clauses.push(`project IN (${filter.projects.map(() => '?').join(',')})`);
     params.push(...filter.projects);
@@ -179,13 +189,18 @@ export function listActiveSessions(filter: ActiveSessionFilter = {}): SessionInd
     clauses.push(`role IN (${filter.roles.map(() => '?').join(',')})`);
     params.push(...filter.roles);
   }
-  params.push(filter.limit ?? 50);
-  return db.prepare(
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+  const nowMs = Date.now();
+  const rows = db.prepare(
     `SELECT * FROM session_index
-     WHERE ${clauses.join(' AND ')}
-     ORDER BY last_activity_at DESC
-     LIMIT ?`
+     ${where}
+     ORDER BY last_activity_at DESC`
   ).all(...params) as SessionIndexRow[];
+  const allowed = new Set(states);
+  return rows
+    .map(row => ({ ...row, state: deriveStateForIndexRow(row, nowMs) }))
+    .filter(row => allowed.has(row.state))
+    .slice(0, filter.limit ?? 50);
 }
 
 function parseSessionUsage(row: SessionUsageRow | undefined): SessionUsage | null {

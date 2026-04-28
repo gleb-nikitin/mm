@@ -148,6 +148,60 @@ describe('R1 session linkage index', () => {
     db.close();
   });
 
+  test('listActiveSessions derives stale non-terminal state before filtering and limit', () => {
+    const res = runEval(`
+      const { initDb, db } = await import('./src/core.ts');
+      const { listActiveSessions, upsertSessionObservation } = await import('./src/r1/session-index.ts');
+      initDb();
+      const now = Date.now();
+      const iso = ms => new Date(ms).toISOString();
+      const link = { participant_id: 'mm_cto', project: 'mm', role: 'cto', project_role: 'mm/cto' };
+      const base = {
+        vendor: 'codex',
+        source_path: '/tmp/session.jsonl',
+        raw_event_id: null,
+        project: 'mm',
+        cwd: '/repo/mm',
+        model: 'gpt-5',
+        started_at: iso(now - 60 * 60 * 1000),
+        last_mtime: 1,
+        last_log_line: 'log',
+        metadata: '{}',
+      };
+      const seed = (session_id, last_activity_at, state, sessionLink = link) => {
+        upsertSessionObservation({ ...base, session_id, last_activity_at, state }, sessionLink);
+      };
+      seed('fresh-working', iso(now - 60 * 1000), 'working');
+      seed('stale-working', iso(now - 30 * 60 * 1000), 'working');
+      seed('done-old', iso(now - 60 * 60 * 1000), 'completed');
+      seed('orphan-old', iso(now - 60 * 60 * 1000), 'working', null);
+
+      const pick = rows => rows.map(row => ({ session_id: row.session_id, state: row.state }));
+      console.log(JSON.stringify({
+        defaults: pick(listActiveSessions()),
+        wedged: pick(listActiveSessions({ states: ['wedged'] })),
+        working: pick(listActiveSessions({ states: ['working'] })),
+        wedgedLimited: pick(listActiveSessions({ states: ['wedged'], limit: 1 })),
+        completed: pick(listActiveSessions({ states: ['completed'] })),
+        orphan: pick(listActiveSessions({ states: ['orphan'] })),
+        storedStale: db.prepare("SELECT state FROM session_index WHERE session_id = 'stale-working'").get().state,
+      }));
+      db.close();
+    `);
+    expect(res.exitCode).toBe(0);
+    const body = JSON.parse(new TextDecoder().decode(res.stdout));
+    expect(body.defaults).toEqual([
+      { session_id: 'fresh-working', state: 'working' },
+      { session_id: 'stale-working', state: 'wedged' },
+    ]);
+    expect(body.wedged).toEqual([{ session_id: 'stale-working', state: 'wedged' }]);
+    expect(body.working).toEqual([{ session_id: 'fresh-working', state: 'working' }]);
+    expect(body.wedgedLimited).toEqual([{ session_id: 'stale-working', state: 'wedged' }]);
+    expect(body.completed).toEqual([{ session_id: 'done-old', state: 'completed' }]);
+    expect(body.orphan).toEqual([{ session_id: 'orphan-old', state: 'orphan' }]);
+    expect(body.storedStale).toBe('working');
+  });
+
   test('prompt footer links exact ids and skips legacy footer without synthetic id', () => {
     const res = runEval(`
       const { initDb, db } = await import('./src/core.ts');
