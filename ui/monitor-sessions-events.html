@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mm - /api/v1/sessions/events</title>
+  <style>
+    :root {
+      --bg: #0a0e14;
+      --panel-bg: rgba(255, 255, 255, 0.035);
+      --panel-border: rgba(255, 255, 255, 0.08);
+      --text: #e6edf3;
+      --text-muted: rgba(230, 237, 243, 0.55);
+      --accent: #7ec8e3;
+      --accent-2: #b794f6;
+      --danger: #f87171;
+      --ok: #86efac;
+      --accent-glow: rgba(126, 200, 227, 0.15);
+      --blur: 16px;
+      --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-6: 24px;
+      --r: 8px;
+      --f: 'Monaco', 'Menlo', 'Consolas', monospace;
+      --tr: 150ms ease-out;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; min-height: 100vh; }
+    body {
+      background:
+        radial-gradient(ellipse 800px 600px at 15% 10%, rgba(126, 200, 227, 0.10) 0%, transparent 55%),
+        radial-gradient(ellipse 700px 500px at 85% 90%, rgba(183, 148, 246, 0.10) 0%, transparent 55%),
+        var(--bg);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: var(--f);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .app { max-width: 1220px; margin: 0 auto; padding: var(--sp-6) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-4); }
+    .title { font-size: 13px; font-weight: 700; letter-spacing: 0.28em; color: var(--accent); text-shadow: 0 0 12px var(--accent-glow); padding: 0 var(--sp-2); }
+    .endpoint { color: var(--text-muted); font-size: 12px; padding: 0 var(--sp-2); margin-top: calc(-1 * var(--sp-2)); overflow-wrap: anywhere; }
+    .panel { background: var(--panel-bg); backdrop-filter: blur(var(--blur)); -webkit-backdrop-filter: blur(var(--blur)); border: 1px solid var(--panel-border); border-radius: var(--r); box-shadow: 0 4px 32px rgba(0, 0, 0, 0.35); }
+    .controls { display: grid; grid-template-columns: repeat(3, minmax(140px, 1fr)) auto; gap: var(--sp-2); padding: var(--sp-3); align-items: end; }
+    label { display: flex; flex-direction: column; gap: var(--sp-1); color: var(--text-muted); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+    input { width: 100%; min-width: 0; padding: var(--sp-2) var(--sp-3); background: rgba(255, 255, 255, 0.025); border: 1px solid var(--panel-border); border-radius: 6px; color: var(--text); font: inherit; font-size: 12px; outline: none; }
+    input:focus { border-color: rgba(126, 200, 227, 0.5); }
+    .btn { padding: var(--sp-2) var(--sp-3); border: 1px solid var(--accent); border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
+    .btn:hover { background: rgba(126, 200, 227, 0.1); }
+    .meta { display: flex; justify-content: space-between; gap: var(--sp-3); padding: 0 var(--sp-3) var(--sp-3); color: var(--text-muted); font-size: 11px; flex-wrap: wrap; }
+    .status.live { color: var(--ok); }
+    .status.disconnected, .status.error { color: var(--danger); }
+    .status.reconnecting { color: var(--accent-2); }
+    .table-wrap { overflow-x: auto; padding: var(--sp-3); max-height: 70vh; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { border-bottom: 1px solid var(--panel-border); padding: var(--sp-2); text-align: left; vertical-align: top; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    th { color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    td { color: var(--text); font-size: 12px; }
+    tr:hover td { background: rgba(255, 255, 255, 0.025); }
+    pre { margin: 0; padding: var(--sp-4); overflow: auto; max-height: 70vh; color: var(--text); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+    .null { color: var(--accent-2); font-style: italic; }
+    @media (max-width: 760px) { .controls { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<!--NAV-->
+  <main class="app">
+    <div class="title">MNEMONIC · R1 MONITOR</div>
+    <div class="endpoint">Monitoring: GET /api/v1/sessions/events</div>
+
+    <section class="panel">
+      <div class="controls">
+        <label>since_id <input id="since_id" type="number" min="0" placeholder="0" /></label>
+        <label>project <input id="project" type="text" placeholder="mm" autocomplete="off" /></label>
+        <label>role <input id="role" type="text" placeholder="devops" autocomplete="off" /></label>
+        <button id="rawToggle" class="btn" type="button">View raw JSON</button>
+      </div>
+      <div class="meta">
+        <span id="requestUrl"></span>
+        <span id="status" class="status"></span>
+      </div>
+    </section>
+
+    <section class="panel" id="result"></section>
+  </main>
+
+  <script>
+    const eventTypes = ['session_started', 'session_active', 'session_idle', 'session_wedged', 'session_completed', 'session_orphaned'];
+    const fields = ['id', 'event_type', 'project_role', 'participant_id', 'session_id', 'vendor', 'timestamp', 'last_log_line', 'payload'];
+    const inputs = ['since_id', 'project', 'role'].map(id => document.getElementById(id));
+    const resultEl = document.getElementById('result');
+    const requestUrlEl = document.getElementById('requestUrl');
+    const statusEl = document.getElementById('status');
+    const rawToggle = document.getElementById('rawToggle');
+    let source = null;
+    let rows = [];
+    let rawFrames = [];
+    let errorBody = null;
+    let rawMode = false;
+    let debounceTimer = null;
+    let reconnectTimer = null;
+
+    function escapeHtml(value) {
+      return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+    }
+    function valueText(value) {
+      if (value === null) return '<span class="null">null</span>';
+      if (value === undefined) return '';
+      if (typeof value === 'object') return escapeHtml(JSON.stringify(value));
+      return escapeHtml(value);
+    }
+    function buildUrl() {
+      const url = new URL('/api/v1/sessions/events', location.origin);
+      for (const input of inputs) {
+        const value = input.value.trim();
+        if (value) url.searchParams.set(input.id, value);
+      }
+      return url;
+    }
+    function setStatus(text, className) {
+      statusEl.textContent = text;
+      statusEl.className = `status ${className || ''}`.trim();
+    }
+    function render() {
+      if (errorBody) {
+        if (rawMode) {
+          rawToggle.textContent = 'View table';
+          resultEl.innerHTML = `<pre>${escapeHtml(JSON.stringify(errorBody, null, 2))}</pre>`;
+          return;
+        }
+        rawToggle.textContent = 'View raw JSON';
+        const details = errorBody.error?.details ?? {};
+        resultEl.innerHTML = `
+          <div class="table-wrap"><table><tbody>
+            <tr><th>code</th><td title="${escapeHtml(errorBody.error?.code ?? '')}">${valueText(errorBody.error?.code)}</td></tr>
+            <tr><th>message</th><td title="${escapeHtml(errorBody.error?.message ?? '')}">${valueText(errorBody.error?.message)}</td></tr>
+            <tr><th>details</th><td title="${escapeHtml(JSON.stringify(details))}">${valueText(details)}</td></tr>
+          </tbody></table></div>`;
+        return;
+      }
+      if (rawMode) {
+        rawToggle.textContent = 'View table';
+        resultEl.innerHTML = `<pre>${escapeHtml(rawFrames.join(''))}</pre>`;
+        return;
+      }
+      rawToggle.textContent = 'View raw JSON';
+      const headers = fields.map(field => `<th>${field}</th>`).join('');
+      const body = rows.map(row => `<tr>${fields.map(field => {
+        const raw = row[field];
+        const title = raw === undefined ? '' : JSON.stringify(raw);
+        return `<td title="${escapeHtml(title)}">${valueText(raw)}</td>`;
+      }).join('')}</tr>`).join('');
+      resultEl.innerHTML = `<div class="table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+    function reconstructFrame(type, event) {
+      return `id: ${event.lastEventId}\nevent: ${type}\ndata: ${event.data}\n\n`;
+    }
+    function addEvent(type, event) {
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (error) {
+        data = { error: { code: 'parse', message: error.message, details: { data: event.data } } };
+      }
+      rows.unshift({ id: Number(event.lastEventId), ...data });
+      rows = rows.slice(0, 200);
+      rawFrames.unshift(reconstructFrame(type, event));
+      rawFrames = rawFrames.slice(0, 200);
+      render();
+    }
+    function closeSource() {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      if (source) source.close();
+      source = null;
+    }
+    function invalidSinceEnvelope(value) {
+      if (value === '') return null;
+      if (/^\d+$/.test(value)) return null;
+      return { error: { code: 'validation', message: 'since_id must be a non-negative integer', details: { value } } };
+    }
+    function connect(allowRetry = true) {
+      closeSource();
+      const url = buildUrl();
+      requestUrlEl.textContent = url.pathname + url.search;
+      errorBody = invalidSinceEnvelope(document.getElementById('since_id').value.trim());
+      if (errorBody) {
+        setStatus('400 Bad Request', 'error');
+        render();
+        return;
+      }
+      setStatus('connecting', 'reconnecting');
+      source = new EventSource(url);
+      source.onopen = () => setStatus('live', 'live');
+      for (const type of eventTypes) {
+        source.addEventListener(type, event => addEvent(type, event));
+      }
+      source.onerror = () => {
+        closeSource();
+        if (allowRetry) {
+          setStatus('reconnecting in 1s', 'reconnecting');
+          reconnectTimer = setTimeout(() => connect(false), 1000);
+        } else {
+          setStatus('disconnected', 'disconnected');
+        }
+      };
+    }
+    function reconnectForInputs() {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        rows = [];
+        rawFrames = [];
+        errorBody = null;
+        render();
+        connect(true);
+      }, 250);
+    }
+
+    inputs.forEach(input => input.addEventListener('input', reconnectForInputs));
+    rawToggle.addEventListener('click', () => { rawMode = !rawMode; render(); });
+    window.addEventListener('beforeunload', closeSource);
+    render();
+    connect(true);
+  </script>
+</body>
+</html>

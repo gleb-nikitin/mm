@@ -22,6 +22,7 @@ const NAV_LINKS: { label: string; href: string }[] = [
   { label: 'chunks',    href: '/chunks-ui' },
   { label: 'raw',       href: '/raw-ui' },
   { label: 'active',    href: '/active-ui' },
+  { label: 'monitor',   href: '/monitor' },
   { label: 'stats',     href: '/stats' },
 ];
 
@@ -66,6 +67,7 @@ Endpoints:
 - \`/artifacts-ui\`: Artifacts browser UI.
 - \`/chunks-ui\`: Chunks browser UI.
 - \`/raw-ui\`: Plain HTML dump of every table. No filters, no JS.
+- \`/monitor\`: R1 JSON/SSE monitor index.
 
 Scoping params:
 - \`source\`: comma-separated source_types (claude, telegram, chains, docs, research, knowledge).
@@ -115,6 +117,21 @@ const server = Bun.serve({
     }
     if (url.pathname === "/active-ui") {
       return serveUiFile("/active.html");
+    }
+    if (url.pathname === "/monitor") {
+      return serveUiFile("/monitor-index.html");
+    }
+    if (url.pathname === "/monitor/sessions/active") {
+      return serveUiFile("/monitor-sessions-active.html");
+    }
+    if (url.pathname === "/monitor/cost/by-session") {
+      return serveUiFile("/monitor-cost-by-session.html");
+    }
+    if (url.pathname === "/monitor/cost/by-message") {
+      return serveUiFile("/monitor-cost-by-message.html");
+    }
+    if (url.pathname === "/monitor/sessions/events") {
+      return serveUiFile("/monitor-sessions-events.html");
     }
     if (url.pathname.startsWith("/ui/")) {
       return serveUiFile(url.pathname.replace(/^\/ui/, ""));
