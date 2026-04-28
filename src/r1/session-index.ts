@@ -1,11 +1,12 @@
 import { db } from '../core.ts';
 import { resolveSessionLinks } from './ac-link.ts';
 import { recordMessageLink } from './message-link.ts';
-import type { SessionIndexRow, SessionLink, SessionObservation, Vendor } from './types.ts';
+import type { SessionIndexRow, SessionLink, SessionObservation, SessionState, Vendor } from './types.ts';
 
 export type ActiveSessionFilter = {
-  project?: string | null;
-  role?: string | null;
+  projects?: string[] | null;
+  roles?: string[] | null;
+  states?: SessionState[] | null;
   limit?: number;
 };
 
@@ -114,15 +115,18 @@ export function getSessionByVendorAndId(vendor: Vendor, sessionId: string): Sess
 }
 
 export function listActiveSessions(filter: ActiveSessionFilter = {}): SessionIndexRow[] {
-  const clauses = [`state IN ('working', 'idle', 'wedged')`];
-  const params: any[] = [];
-  if (filter.project) {
-    clauses.push('project = ?');
-    params.push(filter.project);
+  const states = filter.states && filter.states.length > 0
+    ? filter.states
+    : ['working', 'idle', 'wedged'] as SessionState[];
+  const clauses = [`state IN (${states.map(() => '?').join(',')})`];
+  const params: any[] = [...states];
+  if (filter.projects && filter.projects.length > 0) {
+    clauses.push(`project IN (${filter.projects.map(() => '?').join(',')})`);
+    params.push(...filter.projects);
   }
-  if (filter.role) {
-    clauses.push('role = ?');
-    params.push(filter.role);
+  if (filter.roles && filter.roles.length > 0) {
+    clauses.push(`role IN (${filter.roles.map(() => '?').join(',')})`);
+    params.push(...filter.roles);
   }
   params.push(filter.limit ?? 50);
   return db.prepare(

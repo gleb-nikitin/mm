@@ -7,6 +7,7 @@ import {
 } from './core.ts';
 import { getActiveAgentsLive } from './session-probe.ts';
 import { filterMechanical } from './narrative.ts';
+import { apiError, handleActiveSessions } from './r1/api.ts';
 
 // Ensure DB is ready on fresh roots
 initDb();
@@ -46,6 +47,7 @@ Endpoints:
 - \`/\`: Web UI (aurora theme).
 - \`/help\`: This markdown endpoint list.
 - \`/active?max_age_seconds=N\`: List currently-active agent sessions (Claude, Codex, Gemini).
+- \`/api/v1/sessions/active?project=&role=&state=&limit=\`: JSON session tracker view over session_index.
 - \`/brief?project=<slug>\`: CTO session-start preamble — artifacts, active agents, health (markdown).
 - \`/query?q=<question>[&source=a,b&project=x,y]\`: Ask a synthesis question, optionally scoped.
 - \`/validate?q=<claim>\`: Fact-check a specific claim.
@@ -116,6 +118,14 @@ const server = Bun.serve({
     }
     if (url.pathname === "/help") {
       return new Response(HELP_MD, { headers: { "Content-Type": "text/markdown" } });
+    }
+
+    if (url.pathname === "/api/v1/sessions/active") {
+      return handleActiveSessions(url);
+    }
+
+    if (url.pathname.startsWith("/api/v1/")) {
+      return apiError("not_found", "Unknown API route", { path: url.pathname }, 404);
     }
 
     if (url.pathname === "/active") {
