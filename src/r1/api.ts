@@ -221,6 +221,54 @@ function rowToCostResponse(usage: SessionUsage) {
   };
 }
 
+type ParticipantUsageSummary = {
+  participant_id: string;
+  tokens: ReturnType<typeof zeroTokens>;
+  cost_usd: number | null;
+  unpriced_session_count: number;
+  session_count: number;
+  by_vendor: Record<Vendor, {
+    tokens: ReturnType<typeof zeroTokens>;
+    cost_usd: number | null;
+    unpriced_session_count: number;
+    session_count: number;
+  }>;
+};
+
+function summarizeParticipantUsage(participantId: string, rows: ReturnType<typeof aggregateUsageByParticipant>): ParticipantUsageSummary {
+  const tokens = zeroTokens();
+  const byVendor: ParticipantUsageSummary['by_vendor'] = {} as any;
+  let pricedCost = 0;
+  let pricedVendorCount = 0;
+  let unpricedSessionCount = 0;
+  let sessionCount = 0;
+
+  for (const row of rows) {
+    foldTokenTotals(tokens, row.tokens);
+    if (row.cost_usd !== null) {
+      pricedCost += row.cost_usd;
+      pricedVendorCount++;
+    }
+    unpricedSessionCount += row.unpriced_session_count;
+    sessionCount += row.session_count;
+    byVendor[row.vendor] = {
+      tokens: row.tokens,
+      cost_usd: row.cost_usd,
+      unpriced_session_count: row.unpriced_session_count,
+      session_count: row.session_count,
+    };
+  }
+
+  return {
+    participant_id: participantId,
+    tokens,
+    cost_usd: sessionCount > 0 && pricedVendorCount > 0 ? pricedCost : null,
+    unpriced_session_count: unpricedSessionCount,
+    session_count: sessionCount,
+    by_vendor: byVendor,
+  };
+}
+
 function zeroTokens() {
   return { input: 0, output: 0, cached: 0, reasoning: 0 };
 }
@@ -316,7 +364,7 @@ export function handleCostByMessage(url: URL): Response {
 
 export function handleTokensByParticipant(url: URL): Response {
   try {
-    const participantId = parseRequired(url.searchParams.get('participant_id'), 'participant_id');
+    const participantId = url.searchParams.get('participant_id')?.trim() || null;
     if (url.searchParams.get('since') && url.searchParams.get('window')) {
       throw new ValidationError('since and window are mutually exclusive', {
         conflict: ['since', 'window'],
@@ -346,42 +394,26 @@ export function handleTokensByParticipant(url: URL): Response {
       until,
       vendor,
     });
-    const tokens = zeroTokens();
-    const byVendor: Record<Vendor, {
-      tokens: ReturnType<typeof zeroTokens>;
-      cost_usd: number | null;
-      unpriced_session_count: number;
-      session_count: number;
-    }> = {} as any;
-    let pricedCost = 0;
-    let pricedVendorCount = 0;
-    let unpricedSessionCount = 0;
-    let sessionCount = 0;
+    const generated_at = new Date().toISOString();
 
+    if (participantId) {
+      return json({
+        ...summarizeParticipantUsage(participantId, rows),
+        generated_at,
+      });
+    }
+
+    const byParticipant = new Map<string, typeof rows>();
     for (const row of rows) {
-      foldTokenTotals(tokens, row.tokens);
-      if (row.cost_usd !== null) {
-        pricedCost += row.cost_usd;
-        pricedVendorCount++;
-      }
-      unpricedSessionCount += row.unpriced_session_count;
-      sessionCount += row.session_count;
-      byVendor[row.vendor] = {
-        tokens: row.tokens,
-        cost_usd: row.cost_usd,
-        unpriced_session_count: row.unpriced_session_count,
-        session_count: row.session_count,
-      };
+      const participantRows = byParticipant.get(row.participant_id) ?? [];
+      participantRows.push(row);
+      byParticipant.set(row.participant_id, participantRows);
     }
 
     return json({
-      participant_id: participantId,
-      tokens,
-      cost_usd: sessionCount > 0 && pricedVendorCount > 0 ? pricedCost : null,
-      unpriced_session_count: unpricedSessionCount,
-      session_count: sessionCount,
-      by_vendor: byVendor,
-      generated_at: new Date().toISOString(),
+      participants: Array.from(byParticipant)
+        .map(([id, groupedRows]) => summarizeParticipantUsage(id, groupedRows)),
+      generated_at,
     });
   } catch (error) {
     if (error instanceof ValidationError) {

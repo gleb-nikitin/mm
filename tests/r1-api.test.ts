@@ -621,6 +621,30 @@ describe('R1 active sessions API', () => {
     });
   });
 
+  test('tokens by participant returns all participants when participant_id is absent', async () => {
+    seedParticipantUsageFixtures();
+    await withApi(async base => {
+      const { status, body } = await getJson(base, '/api/v1/tokens/by-participant');
+      expect(status).toBe(200);
+      expect(body.generated_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(body.participants.map((row: any) => row.participant_id)).toEqual(['ac_cto', 'ac_unpriced']);
+
+      const acCto = body.participants.find((row: any) => row.participant_id === 'ac_cto');
+      expect(acCto.tokens).toEqual({ input: 1700, output: 175, cached: 17, reasoning: 8 });
+      expect(acCto.cost_usd).toBeCloseTo(0.019);
+      expect(acCto.unpriced_session_count).toBe(1);
+      expect(acCto.session_count).toBe(3);
+      expect(Object.keys(acCto.by_vendor)).toEqual(['claude', 'codex', 'gemini']);
+
+      const unpriced = body.participants.find((row: any) => row.participant_id === 'ac_unpriced');
+      expect(unpriced.tokens).toEqual({ input: 100, output: 50, cached: 10, reasoning: 5 });
+      expect(unpriced.cost_usd).toBeNull();
+      expect(unpriced.unpriced_session_count).toBe(1);
+      expect(unpriced.session_count).toBe(1);
+      expect(Object.keys(unpriced.by_vendor)).toEqual(['gemini']);
+    });
+  });
+
   test('tokens by participant filters by since, window, and vendor', async () => {
     const { since24h } = seedParticipantUsageFixtures();
     await withApi(async base => {
@@ -701,12 +725,8 @@ describe('R1 active sessions API', () => {
     });
   });
 
-  test('tokens by participant validates required and filter params', async () => {
+  test('tokens by participant validates filter params', async () => {
     await withApi(async base => {
-      const missing = await getJson(base, '/api/v1/tokens/by-participant');
-      expect(missing.status).toBe(400);
-      expect(missing.body.error.code).toBe('validation');
-
       const conflict = await getJson(base, '/api/v1/tokens/by-participant?participant_id=ac_cto&since=2026-04-22T10%3A00%3A00Z&window=24h');
       expect(conflict.status).toBe(400);
       expect(conflict.body.error.details.conflict).toEqual(['since', 'window']);

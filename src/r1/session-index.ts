@@ -25,13 +25,14 @@ export type ActiveSessionFilter = {
 };
 
 export type ParticipantUsageFilter = {
-  participant_id: string;
+  participant_id?: string | null;
   since?: string | null;
   until?: string | null;
   vendor?: Vendor | null;
 };
 
 export type ParticipantUsageAggregateRow = {
+  participant_id: string;
   vendor: Vendor;
   tokens: TokenUsage;
   cost_usd: number | null;
@@ -267,8 +268,12 @@ export function getSessionUsageForMessage(chainMsgId: string): { link: SessionMe
 }
 
 export function aggregateUsageByParticipant(filter: ParticipantUsageFilter): ParticipantUsageAggregateRow[] {
-  const clauses = ['si.participant_id = ?'];
-  const params: any[] = [filter.participant_id];
+  const clauses = ['si.participant_id IS NOT NULL'];
+  const params: any[] = [];
+  if (filter.participant_id) {
+    clauses.push('si.participant_id = ?');
+    params.push(filter.participant_id);
+  }
   if (filter.since) {
     clauses.push('julianday(si.last_activity_at) >= julianday(?)');
     params.push(filter.since);
@@ -283,6 +288,7 @@ export function aggregateUsageByParticipant(filter: ParticipantUsageFilter): Par
   }
   const rows = db.prepare(
     `SELECT
+       si.participant_id AS participant_id,
        su.vendor AS vendor,
        SUM(su.input_tokens) AS input_tokens,
        SUM(su.output_tokens) AS output_tokens,
@@ -295,9 +301,10 @@ export function aggregateUsageByParticipant(filter: ParticipantUsageFilter): Par
      FROM session_usage su
      JOIN session_index si ON si.vendor = su.vendor AND si.session_id = su.session_id
      WHERE ${clauses.join(' AND ')}
-     GROUP BY su.vendor
-     ORDER BY su.vendor`
+     GROUP BY si.participant_id, su.vendor
+     ORDER BY si.participant_id, su.vendor`
   ).all(...params) as Array<{
+    participant_id: string;
     vendor: Vendor;
     input_tokens: number;
     output_tokens: number;
@@ -310,6 +317,7 @@ export function aggregateUsageByParticipant(filter: ParticipantUsageFilter): Par
   }>;
 
   return rows.map(row => ({
+    participant_id: row.participant_id,
     vendor: row.vendor,
     tokens: {
       input: row.input_tokens,

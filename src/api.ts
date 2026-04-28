@@ -52,7 +52,7 @@ Endpoints:
 - \`/api/v1/sessions/events?since_id=&project=&role=\`: SSE stream over session_events.
 - \`/api/v1/cost/by-session?session_id=&vendor=\`: JSON token and cost attribution for one session.
 - \`/api/v1/cost/by-message?chain_msg_id=\`: JSON token and cost attribution via message linkage.
-- \`/api/v1/tokens/by-participant?participant_id=&since=&until=&window=&vendor=\`: JSON token totals by participant.
+- \`/api/v1/tokens/by-participant?participant_id=&since=&until=&window=&vendor=\`: JSON token totals by participant; omit participant_id for all participants.
 - \`/brief?project=<slug>\`: CTO session-start preamble — artifacts, active agents, health (markdown).
 - \`/query?q=<question>[&source=a,b&project=x,y]\`: Ask a synthesis question, optionally scoped.
 - \`/validate?q=<claim>\`: Fact-check a specific claim.
@@ -130,6 +130,9 @@ const server = Bun.serve({
     }
     if (url.pathname === "/monitor/cost/by-message") {
       return serveUiFile("/monitor-cost-by-message.html");
+    }
+    if (url.pathname === "/monitor/tokens/by-participant") {
+      return serveUiFile("/monitor-tokens-by-participant.html");
     }
     if (url.pathname === "/monitor/sessions/events") {
       return serveUiFile("/monitor-sessions-events.html");
