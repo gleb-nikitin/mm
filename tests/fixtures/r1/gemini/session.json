@@ -1,0 +1,10 @@
+{
+  "sessionId": "gemini-fixture",
+  "startTime": "2026-04-22T10:00:00Z",
+  "lastUpdated": "2026-04-22T10:03:00Z",
+  "messages": [
+    { "id": "u1", "timestamp": "2026-04-22T10:00:00Z", "type": "user", "content": [{ "text": "hello" }] },
+    { "id": "g1", "timestamp": "2026-04-22T10:01:00Z", "type": "gemini", "model": "gemini-3-flash-preview", "content": "hi", "tokens": { "input": 50, "output": 10, "cached": 5, "thoughts": 3, "tool": 0, "total": 68 } },
+    { "id": "g2", "timestamp": "2026-04-22T10:02:00Z", "type": "gemini", "model": "gemini-3-flash-preview", "content": "fallback", "usageMetadata": { "promptTokenCount": 70, "candidatesTokenCount": 20, "cachedContentTokenCount": 7, "thoughtsTokenCount": 4 } }
+  ]
+}

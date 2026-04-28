@@ -221,38 +221,52 @@ describe('R1 session linkage index', () => {
     const importAcDbPath = path.join(importRoot, 'ac-msg.db');
     const claudeDir = path.join(importRoot, 'claude-projects');
     const projectDir = path.join(claudeDir, '-Users-test-mm');
+    const sessionFile = path.join(projectDir, 'session.jsonl');
     fs.mkdirSync(projectDir, { recursive: true });
     try {
-      fs.writeFileSync(path.join(projectDir, 'session.jsonl'), [
-        JSON.stringify({
-          type: 'user',
-          sessionId: 'sess-claude-import',
-          cwd: '/Users/test/mm',
-          timestamp: '2026-04-22T10:00:00Z',
-          message: { content: [{ type: 'text', text: 'hello' }] },
-        }),
-        JSON.stringify({
-          type: 'assistant',
-          sessionId: 'sess-claude-import',
-          cwd: '/Users/test/mm',
-          timestamp: '2026-04-22T10:00:01Z',
-          message: { model: 'claude-opus', content: [{ type: 'text', text: 'hi' }] },
-        }),
-        JSON.stringify({
-          type: 'user',
-          sessionId: 'sess-claude-import',
-          cwd: '/Users/test/mm',
-          timestamp: '2026-04-22T10:00:02Z',
-          message: { content: [{ type: 'text', text: 'second' }] },
-        }),
-        JSON.stringify({
-          type: 'assistant',
-          sessionId: 'sess-claude-import',
-          cwd: '/Users/test/mm',
-          timestamp: '2026-04-22T10:00:03Z',
-          message: { model: 'claude-opus', content: [{ type: 'text', text: 'done' }] },
-        }),
-      ].join('\n') + '\n');
+      const writeSession = (secondInputTokens: number) => {
+        fs.writeFileSync(sessionFile, [
+          JSON.stringify({
+            type: 'user',
+            sessionId: 'sess-claude-import',
+            cwd: '/Users/test/mm',
+            timestamp: '2026-04-22T10:00:00Z',
+            message: { content: [{ type: 'text', text: 'hello' }] },
+          }),
+          JSON.stringify({
+            type: 'assistant',
+            sessionId: 'sess-claude-import',
+            cwd: '/Users/test/mm',
+            timestamp: '2026-04-22T10:00:01Z',
+            message: {
+              model: 'claude-opus-4-6',
+              usage: { input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 30, cache_read_input_tokens: 40 },
+              content: [{ type: 'text', text: 'hi' }],
+            },
+          }),
+          JSON.stringify({
+            type: 'user',
+            sessionId: 'sess-claude-import',
+            cwd: '/Users/test/mm',
+            timestamp: '2026-04-22T10:00:02Z',
+            message: { content: [{ type: 'text', text: 'second' }] },
+          }),
+          JSON.stringify({
+            type: 'assistant',
+            sessionId: 'sess-claude-import',
+            cwd: '/Users/test/mm',
+            timestamp: '2026-04-22T10:00:03Z',
+            message: {
+              model: 'claude-opus-4-6',
+              usage: { input_tokens: secondInputTokens, output_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 5 },
+              content: [{ type: 'text', text: 'done' }],
+            },
+          }),
+        ].join('\n') + '\n');
+        const aged = (Date.now() - 10 * 60 * 1000) / 1000;
+        fs.utimesSync(sessionFile, aged, aged);
+      };
+      writeSession(200);
 
       const acDb = makeAcShapeDb(importAcDbPath);
       acDb.exec(`INSERT INTO participants (id, project, role) VALUES ('mm_devops', 'mm', 'devops')`);
@@ -271,6 +285,7 @@ describe('R1 session linkage index', () => {
       const db = new Database(path.join(importRoot, 'meta', 'brain.db'));
       const raw = db.prepare(`SELECT external_id FROM raw_events`).get() as any;
       const session = db.prepare(`SELECT vendor, session_id, participant_id, project_role FROM session_index`).get() as any;
+      const usage = db.prepare(`SELECT input_tokens, output_tokens, cached_tokens, reasoning_tokens, cost_usd, pricing_source, cost_breakdown FROM session_usage`).get() as any;
       expect(raw.external_id).toBe('claude:sess-claude-import');
       expect(session).toEqual({
         vendor: 'claude',
@@ -278,6 +293,33 @@ describe('R1 session linkage index', () => {
         participant_id: 'mm_devops',
         project_role: 'mm/devops',
       });
+      const breakdown = JSON.parse(usage.cost_breakdown);
+      delete usage.cost_breakdown;
+      expect(usage).toEqual({
+        input_tokens: 300,
+        output_tokens: 30,
+        cached_tokens: 80,
+        reasoning_tokens: 0,
+        cost_usd: 0.00249125,
+        pricing_source: 'pricing.toml',
+      });
+      expect(breakdown.lines.filter((line: any) => line.type.startsWith('cache'))).toEqual([
+        { type: 'cache_creation_5m', tokens: 35, rate: 6.25, cost: 0.00021875 },
+        { type: 'cache_creation_1h', tokens: 0, rate: 10, cost: 0 },
+        { type: 'cache_read', tokens: 45, rate: 0.5, cost: 0.0000225 },
+      ]);
+
+      writeSession(50);
+      const reimported = Bun.spawnSync({
+        cmd: ['bun', 'scripts/import-claude.ts', '--projects-dir', claudeDir, '--days', '365', '--force', '--min-age-seconds', '0'],
+        cwd: REPO,
+        env: { ...process.env, MT_BRAIN_ROOT: importRoot, MT_AC_DB_PATH: importAcDbPath },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      expect(reimported.exitCode).toBe(0);
+      const recomputed = db.prepare(`SELECT COUNT(*) AS c, input_tokens, output_tokens, cached_tokens FROM session_usage`).get() as any;
+      expect(recomputed).toEqual({ c: 1, input_tokens: 150, output_tokens: 30, cached_tokens: 80 });
       db.close();
     } finally {
       fs.rmSync(importRoot, { recursive: true, force: true });

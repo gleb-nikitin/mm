@@ -1,0 +1,70 @@
+# Operator-editable R1 token pricing, in USD per million tokens.
+# Source: https://platform.claude.com/docs/en/about-claude/pricing (retrieved 2026-04-28)
+# Source: https://openai.com/api/pricing/ (retrieved 2026-04-28)
+# Source: https://ai.google.dev/gemini-api/docs/pricing (retrieved 2026-04-28)
+
+[claude."claude-opus-4-7"]
+input = 5.0
+output = 25.0
+cache_creation_5m = 6.25
+cache_creation_1h = 10.0
+cache_read = 0.5
+reasoning = 25.0
+
+[claude."claude-opus-4-6"]
+input = 5.0
+output = 25.0
+cache_creation_5m = 6.25
+cache_creation_1h = 10.0
+cache_read = 0.5
+reasoning = 25.0
+
+[claude."claude-sonnet-4-6"]
+input = 3.0
+output = 15.0
+cache_creation_5m = 3.75
+cache_creation_1h = 6.0
+cache_read = 0.3
+reasoning = 15.0
+
+[codex."gpt-5.5"]
+input = 5.0
+output = 30.0
+cached = 0.5
+reasoning = 30.0
+
+[codex."gpt-5.4"]
+input = 2.5
+output = 15.0
+cached = 0.25
+reasoning = 15.0
+
+[codex."gpt-5.4-mini"]
+input = 0.75
+output = 4.5
+cached = 0.075
+reasoning = 4.5
+
+[gemini."gemini-3-flash-preview"]
+input = 0.5
+output = 3.0
+cached = 0.05
+reasoning = 3.0
+
+[gemini."gemini-2.5-pro"]
+input = 1.25
+output = 10.0
+cached = 0.31
+reasoning = 10.0
+
+[gemini."gemini-2.5-flash"]
+input = 0.3
+output = 2.5
+cached = 0.03
+reasoning = 2.5
+
+[gemini."gemini-2.5-flash-lite"]
+input = 0.1
+output = 0.4
+cached = 0.01
+reasoning = 0.4

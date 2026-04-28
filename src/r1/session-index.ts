@@ -1,7 +1,18 @@
 import { db } from '../core.ts';
 import { resolveSessionLinks } from './ac-link.ts';
 import { recordMessageLink } from './message-link.ts';
-import type { SessionIndexRow, SessionLink, SessionObservation, SessionState, Vendor } from './types.ts';
+import { priceUsage } from './pricing.ts';
+import type {
+  SessionIndexRow,
+  SessionLink,
+  SessionMessageLink,
+  SessionObservation,
+  SessionState,
+  SessionUsage,
+  SessionUsageRow,
+  TokenUsage,
+  Vendor,
+} from './types.ts';
 
 export type ActiveSessionFilter = {
   projects?: string[] | null;
@@ -114,6 +125,12 @@ export function getSessionByVendorAndId(vendor: Vendor, sessionId: string): Sess
   return row ?? null;
 }
 
+export function listSessionsBySessionId(sessionId: string): SessionIndexRow[] {
+  return db.prepare(
+    `SELECT * FROM session_index WHERE session_id = ? ORDER BY vendor`
+  ).all(sessionId) as SessionIndexRow[];
+}
+
 export function listActiveSessions(filter: ActiveSessionFilter = {}): SessionIndexRow[] {
   const states = filter.states && filter.states.length > 0
     ? filter.states
@@ -135,4 +152,67 @@ export function listActiveSessions(filter: ActiveSessionFilter = {}): SessionInd
      ORDER BY last_activity_at DESC
      LIMIT ?`
   ).all(...params) as SessionIndexRow[];
+}
+
+function parseSessionUsage(row: SessionUsageRow | undefined): SessionUsage | null {
+  if (!row) return null;
+  return {
+    ...row,
+    cost_breakdown: JSON.parse(row.cost_breakdown),
+  };
+}
+
+export function recordSessionUsage(vendor: Vendor, sessionId: string, usage: TokenUsage, model: string | null): void {
+  const session = getSessionByVendorAndId(vendor, sessionId);
+  if (!session) {
+    throw new Error(`session_index row missing for ${vendor}:${sessionId}`);
+  }
+  const effectiveModel = model ?? session.model;
+  const priced = priceUsage(vendor, effectiveModel, usage);
+  db.prepare(
+    `INSERT INTO session_usage
+       (vendor, session_id, participant_id, model, input_tokens, output_tokens,
+        cached_tokens, reasoning_tokens, cost_usd, cost_breakdown, pricing_source, priced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(vendor, session_id) DO UPDATE SET
+       participant_id = excluded.participant_id,
+       model = excluded.model,
+       input_tokens = excluded.input_tokens,
+       output_tokens = excluded.output_tokens,
+       cached_tokens = excluded.cached_tokens,
+       reasoning_tokens = excluded.reasoning_tokens,
+       cost_usd = excluded.cost_usd,
+       cost_breakdown = excluded.cost_breakdown,
+       pricing_source = excluded.pricing_source,
+       priced_at = excluded.priced_at`
+  ).run(
+    vendor,
+    sessionId,
+    session.participant_id,
+    effectiveModel,
+    usage.input,
+    usage.output,
+    usage.cached,
+    usage.reasoning,
+    priced.cost_usd,
+    JSON.stringify(priced.cost_breakdown),
+    priced.cost_breakdown.source,
+  );
+}
+
+export function getSessionUsage(vendor: Vendor, sessionId: string): SessionUsage | null {
+  const row = db.prepare(
+    `SELECT * FROM session_usage WHERE vendor = ? AND session_id = ?`
+  ).get(vendor, sessionId) as SessionUsageRow | undefined;
+  return parseSessionUsage(row);
+}
+
+export function getSessionUsageForMessage(chainMsgId: string): { link: SessionMessageLink; usage: SessionUsage } | null {
+  const link = db.prepare(
+    `SELECT * FROM session_message_links WHERE chain_msg_id = ?`
+  ).get(chainMsgId) as SessionMessageLink | undefined;
+  if (!link) return null;
+  const usage = getSessionUsage(link.vendor, link.session_id);
+  if (!usage) return null;
+  return { link, usage };
 }

@@ -57,6 +57,77 @@ function seedSessions(): void {
   }
 }
 
+function costBreakdown(model: string) {
+  return JSON.stringify({
+    model,
+    source: 'pricing.toml',
+    lines: [
+      { type: 'input', tokens: 1000, rate: 5, cost: 0.005 },
+      { type: 'output', tokens: 200, rate: 25, cost: 0.005 },
+      { type: 'cached', tokens: 100, rate: 0.5, cost: 0.00005 },
+      { type: 'reasoning', tokens: 50, rate: 25, cost: 0.00125 },
+    ],
+  });
+}
+
+function seedCostFixtures(): void {
+  const dbPath = path.join(tmpRoot, 'meta', 'brain.db');
+  const db = new Database(dbPath);
+  try {
+    const insertSession = db.prepare(`
+      INSERT INTO session_index
+        (vendor, session_id, source_path, participant_id, project, role,
+         project_role, cwd, model, started_at, last_activity_at, last_mtime,
+         last_log_line, state, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}')
+    `);
+    insertSession.run(
+      'claude', 'shared-cost-session', '/tmp/shared-a', 'mm_cto', 'mm', 'cto',
+      'mm/cto', '/repo/mm', 'claude-opus-4-6', '2026-04-22T11:00:00Z',
+      '2026-04-22T11:01:00Z', 1, 'shared a', 'completed',
+    );
+    insertSession.run(
+      'codex', 'shared-cost-session', '/tmp/shared-b', 'mm_devops', 'mm', 'devops',
+      'mm/devops', '/repo/mm', 'gpt-5.4', '2026-04-22T11:00:00Z',
+      '2026-04-22T11:01:00Z', 1, 'shared b', 'completed',
+    );
+
+    const insertUsage = db.prepare(`
+      INSERT INTO session_usage
+        (vendor, session_id, participant_id, model, input_tokens, output_tokens,
+         cached_tokens, reasoning_tokens, cost_usd, cost_breakdown, pricing_source, priced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertUsage.run(
+      'claude', 'sess-mm-cto-working', 'mm_cto', 'claude-opus-4-6',
+      1000, 200, 100, 50, 0.0113, costBreakdown('claude-opus-4-6'),
+      'pricing.toml', '2026-04-22T12:00:00Z',
+    );
+    insertUsage.run(
+      'claude', 'shared-cost-session', 'mm_cto', 'claude-opus-4-6',
+      1000, 200, 100, 50, 0.0113, costBreakdown('claude-opus-4-6'),
+      'pricing.toml', '2026-04-22T12:00:00Z',
+    );
+    insertUsage.run(
+      'codex', 'shared-cost-session', 'mm_devops', 'gpt-5.4',
+      500, 60, 30, 20, 0.002, costBreakdown('gpt-5.4'),
+      'pricing.toml', '2026-04-22T12:00:00Z',
+    );
+
+    db.prepare(`
+      INSERT INTO session_message_links
+        (chain_msg_id, chain, seq, from_id, to_id, vendor, session_id,
+         participant_id, source_path, confidence)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'xco-1', 'xco', 1, 'mm_cto', 'mm_devops', 'claude',
+      'sess-mm-cto-working', 'mm_cto', '/tmp/a', 'exact',
+    );
+  } finally {
+    db.close();
+  }
+}
+
 async function spawnApi(): Promise<{ port: number; close: () => Promise<void> }> {
   const port = await getFreePort();
   const proc = Bun.spawn(['bun', 'src/api.ts'], {
@@ -246,6 +317,59 @@ describe('R1 active sessions API', () => {
       expect(Array.isArray(legacyJson.body.agents)).toBe(true);
       expect(typeof legacyJson.body.generated_at).toBe('string');
       expect(legacyJson.body.sessions).toBeUndefined();
+    });
+  });
+
+  test('cost by session returns usage, validation, unknown, and ambiguous envelopes', async () => {
+    seedCostFixtures();
+    await withApi(async base => {
+      const ok = await getJson(base, '/api/v1/cost/by-session?session_id=sess-mm-cto-working');
+      expect(ok.status).toBe(200);
+      expect(ok.body).toMatchObject({
+        session_id: 'sess-mm-cto-working',
+        participant: 'mm_cto',
+        vendor: 'claude',
+        tokens: { input: 1000, output: 200, cached: 100, reasoning: 50 },
+        cost_usd: 0.0113,
+      });
+      expect(ok.body.cost_breakdown.lines).toHaveLength(4);
+
+      const missingParam = await getJson(base, '/api/v1/cost/by-session');
+      expect(missingParam.status).toBe(400);
+      expect(missingParam.body.error.code).toBe('validation');
+
+      const unknown = await getJson(base, '/api/v1/cost/by-session?session_id=missing');
+      expect(unknown.status).toBe(404);
+      expect(unknown.body.error.code).toBe('not_found');
+
+      const ambiguous = await getJson(base, '/api/v1/cost/by-session?session_id=shared-cost-session');
+      expect(ambiguous.status).toBe(409);
+      expect(ambiguous.body.error.code).toBe('ambiguous');
+      expect(ambiguous.body.error.details.vendors).toEqual(['claude', 'codex']);
+
+      const disambiguated = await getJson(base, '/api/v1/cost/by-session?session_id=shared-cost-session&vendor=codex');
+      expect(disambiguated.status).toBe(200);
+      expect(disambiguated.body.vendor).toBe('codex');
+    });
+  });
+
+  test('cost by message returns linked usage and 404 without link or usage', async () => {
+    seedCostFixtures();
+    await withApi(async base => {
+      const ok = await getJson(base, '/api/v1/cost/by-message?chain_msg_id=xco-1');
+      expect(ok.status).toBe(200);
+      expect(ok.body.chain_msg_id).toBe('xco-1');
+      expect(ok.body.link_confidence).toBe('exact');
+      expect(ok.body.session_id).toBe('sess-mm-cto-working');
+      expect(ok.body.tokens.input).toBe(1000);
+
+      const missing = await getJson(base, '/api/v1/cost/by-message?chain_msg_id=xco-missing');
+      expect(missing.status).toBe(404);
+      expect(missing.body.error.code).toBe('not_found');
+
+      const missingParam = await getJson(base, '/api/v1/cost/by-message');
+      expect(missingParam.status).toBe(400);
+      expect(missingParam.body.error.code).toBe('validation');
     });
   });
 });

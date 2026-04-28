@@ -66,6 +66,58 @@ export type SessionMessageLink = ParsedMessageFooter & {
   source_path: string | null;
 };
 
+export type TokenUsage = {
+  input: number;
+  output: number;
+  cached: number;
+  reasoning: number;
+  cache_creation_5m?: number;
+  cache_creation_1h?: number;
+  cache_read?: number;
+};
+
+export type TokenType = 'input' | 'output' | 'cached' | 'reasoning';
+export type CostLineType = TokenType | 'cache_creation_5m' | 'cache_creation_1h' | 'cache_read';
+
+export type CostBreakdownLine = {
+  type: CostLineType;
+  tokens: number;
+  rate: number | null;
+  cost: number | null;
+};
+
+export type PricingSource = 'pricing.toml' | 'unknown' | 'stale';
+
+export type CostBreakdown = {
+  model: string | null;
+  source: PricingSource;
+  lines: CostBreakdownLine[];
+};
+
+export type PricedUsage = {
+  cost_usd: number | null;
+  cost_breakdown: CostBreakdown;
+};
+
+export type SessionUsageRow = {
+  vendor: Vendor;
+  session_id: string;
+  participant_id: string | null;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  reasoning_tokens: number;
+  cost_usd: number | null;
+  cost_breakdown: string;
+  pricing_source: PricingSource;
+  priced_at: string;
+};
+
+export type SessionUsage = Omit<SessionUsageRow, 'cost_breakdown'> & {
+  cost_breakdown: CostBreakdown;
+};
+
 export type ApiError = {
   error: {
     code: 'validation' | 'internal' | 'not_found' | 'ambiguous' | 'mm_unavailable';

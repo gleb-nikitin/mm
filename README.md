@@ -57,6 +57,9 @@ Responses are mostly **markdown**. **`GET /`** serves the **web UI** (`ui/index.
 - `GET /validate?q=...` — fact-check a specific claim
 - `GET /wiki/:slug` — read a wiki page
 - `GET /active` — active agents (markdown)
+- `GET /api/v1/sessions/active` — JSON session tracker view over `session_index`
+- `GET /api/v1/cost/by-session?session_id=...&vendor=...` — JSON token/cost attribution for a session
+- `GET /api/v1/cost/by-message?chain_msg_id=...` — JSON token/cost attribution through a prompt-footer message link
 - `POST /add` with `{ content, title, source_type?, project? }` — ingest a raw snippet
 
 ## MCP tools

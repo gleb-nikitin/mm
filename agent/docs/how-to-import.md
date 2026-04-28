@@ -11,7 +11,9 @@ Files live under `raw/<source_type>/<project>/<timestamp>.md`. Filters at query 
 
 ## Importing Claude Code, Codex, and Gemini sessions
 
-The current session importers — **`scripts/import-claude.ts`**, **`import-codex.ts`**, **`import-gemini.ts`** — read JSONL/JSON under the vendor’s app directories (`~/.claude/projects`, `~/.codex/sessions`, `~/.gemini/tmp`, …). They insert **one row per session** into **`raw_events`** and **`events_fts`**, update **`import_state`** for the Active Agents dashboard, and upsert **`session_index`** / **`session_message_links`** for R1 session observability. They **do not** write markdown under `raw/claude/...` by default.
+The current session importers — **`scripts/import-claude.ts`**, **`import-codex.ts`**, **`import-gemini.ts`** — read JSONL/JSON under the vendor’s app directories (`~/.claude/projects`, `~/.codex/sessions`, `~/.gemini/tmp`, …). They insert **one row per session** into **`raw_events`** and **`events_fts`**, update **`import_state`** for the Active Agents dashboard, and upsert **`session_index`** / **`session_message_links`** / **`session_usage`** for R1 session observability and cost attribution. They **do not** write markdown under `raw/claude/...` by default.
+
+Session cost attribution uses token counts extracted from the vendor transcript and rates from operator-editable **`pricing.toml`**. Re-running an importer recomputes the `session_usage` row from the current transcript rather than accumulating old totals.
 
 `raw_events.external_id` is vendor-prefixed (`claude:<session_id>`, `codex:<session_id>`, `gemini:<session_id>`) so global uniqueness survives cross-vendor session-id collisions. `import_state.external_id` intentionally remains the raw vendor session id because `/active` and ac `llm_sessions.id` matching depend on that raw id.
 

@@ -203,9 +203,7 @@ export function initDb() {
   db.run(`CREATE INDEX IF NOT EXISTS idx_chunks_virtual_project_processed ON chunks_virtual(project, processed)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_chunks_virtual_source_event      ON chunks_virtual(source_event_id)`);
 
-  // v12: R1 session-tracker linkage index. This phase stores session identity
-  // and prompt-footer links only; usage and event-stream tables land in later
-  // R1 phases.
+  // v12: R1 session-tracker linkage index.
   db.run(`CREATE TABLE IF NOT EXISTS session_index (
     vendor TEXT NOT NULL CHECK(vendor IN ('claude','codex','gemini')),
     session_id TEXT NOT NULL,
@@ -253,7 +251,28 @@ export function initDb() {
   db.run(`CREATE INDEX IF NOT EXISTS idx_session_message_links_chain ON session_message_links(chain, seq)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_session_message_links_participant ON session_message_links(participant_id)`);
 
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 12)');
+  // v13: R1 cost attribution by session.
+  db.run(`CREATE TABLE IF NOT EXISTS session_usage (
+    vendor TEXT NOT NULL CHECK(vendor IN ('claude','codex','gemini')),
+    session_id TEXT NOT NULL,
+    participant_id TEXT,
+    model TEXT,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL,
+    cost_breakdown TEXT NOT NULL,
+    pricing_source TEXT NOT NULL,
+    priced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(vendor, session_id),
+    FOREIGN KEY(vendor, session_id) REFERENCES session_index(vendor, session_id)
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_usage_participant ON session_usage(participant_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_usage_cost ON session_usage(cost_usd DESC)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_usage_session_id ON session_usage(session_id)`);
+
+  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 13)');
 }
 
 // --- Common Logic ---

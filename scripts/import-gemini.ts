@@ -21,7 +21,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { initDb, db, upsertRawEvent } from '../src/core.ts';
-import { findRawEventIdByExternalId, recordSessionObservation } from '../src/r1/session-index.ts';
+import { findRawEventIdByExternalId, recordSessionObservation, recordSessionUsage } from '../src/r1/session-index.ts';
+import { extractGeminiTokenUsage } from '../src/r1/token-usage.ts';
 
 type Flags = {
   days: number;
@@ -428,6 +429,7 @@ async function main() {
       last_log_line: lastUserSnippet,
       metadata,
     }, content);
+    recordSessionUsage('gemini', session.sessionId, extractGeminiTokenUsage(filePath), session.model);
     if (res === 'inserted') {
       imported++;
       console.log(`  OK ${title}  ->  raw_events`);

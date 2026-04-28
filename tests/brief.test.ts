@@ -105,7 +105,7 @@ describe('brief — sections, caps, and sort', () => {
     expect(md).toMatch(/^# mm project briefing — \d{4}-\d{2}-\d{2}T/);
     expect(md).toContain('_Latest raw event: 2026-04-20 18:00:00_');
     expect(md).toContain('## Health');
-    expect(md).toContain('- Schema: v12');
+    expect(md).toContain('- Schema: v13');
     expect(md).toContain('## Recent decisions (last 10)');
     expect(md).toContain('## Intents (10)');
     expect(md).toContain('## Open bugs (3)');

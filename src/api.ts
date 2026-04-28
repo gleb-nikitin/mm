@@ -7,7 +7,7 @@ import {
 } from './core.ts';
 import { getActiveAgentsLive } from './session-probe.ts';
 import { filterMechanical } from './narrative.ts';
-import { apiError, handleActiveSessions } from './r1/api.ts';
+import { apiError, handleActiveSessions, handleCostByMessage, handleCostBySession } from './r1/api.ts';
 
 // Ensure DB is ready on fresh roots
 initDb();
@@ -41,13 +41,15 @@ const NAV_HTML = (() => {
     `<script>(function(){var p=location.pathname;document.querySelectorAll('[data-mm-nav] a').forEach(function(a){var h=a.getAttribute('data-nav-href');if(h===p||(h.length>1&&p===h)){a.classList.add('active');}});})();</script>`;
 })();
 
-const HELP_MD = `# Brain API v0.9.0 (v12 schema)
+const HELP_MD = `# Brain API v0.9.0 (v13 schema)
 
 Endpoints:
 - \`/\`: Web UI (aurora theme).
 - \`/help\`: This markdown endpoint list.
 - \`/active?max_age_seconds=N\`: List currently-active agent sessions (Claude, Codex, Gemini).
 - \`/api/v1/sessions/active?project=&role=&state=&limit=\`: JSON session tracker view over session_index.
+- \`/api/v1/cost/by-session?session_id=&vendor=\`: JSON token and cost attribution for one session.
+- \`/api/v1/cost/by-message?chain_msg_id=\`: JSON token and cost attribution via message linkage.
 - \`/brief?project=<slug>\`: CTO session-start preamble — artifacts, active agents, health (markdown).
 - \`/query?q=<question>[&source=a,b&project=x,y]\`: Ask a synthesis question, optionally scoped.
 - \`/validate?q=<claim>\`: Fact-check a specific claim.
@@ -122,6 +124,12 @@ const server = Bun.serve({
 
     if (url.pathname === "/api/v1/sessions/active") {
       return handleActiveSessions(url);
+    }
+    if (url.pathname === "/api/v1/cost/by-session") {
+      return handleCostBySession(url);
+    }
+    if (url.pathname === "/api/v1/cost/by-message") {
+      return handleCostByMessage(url);
     }
 
     if (url.pathname.startsWith("/api/v1/")) {

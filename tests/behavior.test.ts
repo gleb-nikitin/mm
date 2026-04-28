@@ -116,15 +116,15 @@ async function getFreePort(): Promise<number> {
 // ---------- SCHEMA ----------
 
 describe.serial('schema migration', () => {
-  test.serial('fresh root bootstraps to v12', async () => {
+  test.serial('fresh root bootstraps to v13', async () => {
     await brain(['queue']);
     const db = openDb();
     const version = (db.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any).version;
-    expect(version).toBe(12);
+    expect(version).toBe(13);
     const tbls = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r: any) => r.name);
     for (const name of [
       'raw_entries', 'raw_events', 'wiki_pages', 'claims', 'claim_sources', 'claim_sources_event', 'import_state',
-      'artifacts', 'artifact_sources', 'chunks_virtual', 'session_index', 'session_message_links',
+      'artifacts', 'artifact_sources', 'chunks_virtual', 'session_index', 'session_message_links', 'session_usage',
     ]) {
       expect(tbls).toContain(name);
     }
@@ -143,6 +143,10 @@ describe.serial('schema migration', () => {
     const sessionCols = db.prepare("PRAGMA table_info(session_index)").all().map((c: any) => c.name);
     for (const name of ['vendor', 'session_id', 'participant_id', 'project_role', 'state']) {
       expect(sessionCols).toContain(name);
+    }
+    const usageCols = db.prepare("PRAGMA table_info(session_usage)").all().map((c: any) => c.name);
+    for (const name of ['vendor', 'session_id', 'participant_id', 'input_tokens', 'cost_breakdown', 'pricing_source']) {
+      expect(usageCols).toContain(name);
     }
     db.close();
   });
@@ -552,7 +556,7 @@ describe.serial('artifacts — batch + list + supersede + bump-correction', () =
 });
 
 describe.serial('brain backup — WAL checkpoint + VACUUM INTO', () => {
-  test.serial('produces a valid SQLite file readable at schema_version=12', async () => {
+  test.serial('produces a valid SQLite file readable at schema_version=13', async () => {
     await brain(['queue']);
     const target = path.join(tmpRoot, 'meta', 'snap.db');
     const res = await brain(['backup', '--target', target]);
@@ -560,7 +564,7 @@ describe.serial('brain backup — WAL checkpoint + VACUUM INTO', () => {
     expect(fs.existsSync(target)).toBe(true);
     const snap = new Database(target, { readonly: true });
     const v = (snap.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any).version;
-    expect(v).toBe(12);
+    expect(v).toBe(13);
     snap.close();
   });
 });

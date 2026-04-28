@@ -21,7 +21,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { initDb, db, upsertRawEvent } from '../src/core.ts';
-import { findRawEventIdByExternalId, recordSessionObservation } from '../src/r1/session-index.ts';
+import { findRawEventIdByExternalId, recordSessionObservation, recordSessionUsage } from '../src/r1/session-index.ts';
+import { extractCodexTokenUsage } from '../src/r1/token-usage.ts';
 
 type Flags = {
   days: number;
@@ -435,6 +436,7 @@ async function main() {
       last_log_line: lastUserSnippet,
       metadata,
     }, content);
+    recordSessionUsage('codex', session.sessionId, extractCodexTokenUsage(filePath), session.model);
     if (res === 'inserted') {
       imported++;
       console.log(`  OK ${title}  ->  raw_events`);
