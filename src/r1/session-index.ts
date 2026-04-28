@@ -24,6 +24,21 @@ export type ActiveSessionFilter = {
   limit?: number;
 };
 
+export type ParticipantUsageFilter = {
+  participant_id: string;
+  since?: string | null;
+  until?: string | null;
+  vendor?: Vendor | null;
+};
+
+export type ParticipantUsageAggregateRow = {
+  vendor: Vendor;
+  tokens: TokenUsage;
+  cost_usd: number | null;
+  unpriced_session_count: number;
+  session_count: number;
+};
+
 function runImmediateTransaction<T>(fn: () => T): T {
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -234,4 +249,61 @@ export function getSessionUsageForMessage(chainMsgId: string): { link: SessionMe
   const usage = getSessionUsage(link.vendor, link.session_id);
   if (!usage) return null;
   return { link, usage };
+}
+
+export function aggregateUsageByParticipant(filter: ParticipantUsageFilter): ParticipantUsageAggregateRow[] {
+  const clauses = ['si.participant_id = ?'];
+  const params: any[] = [filter.participant_id];
+  if (filter.since) {
+    clauses.push('julianday(si.last_activity_at) >= julianday(?)');
+    params.push(filter.since);
+  }
+  if (filter.until) {
+    clauses.push('julianday(si.last_activity_at) <= julianday(?)');
+    params.push(filter.until);
+  }
+  if (filter.vendor) {
+    clauses.push('su.vendor = ?');
+    params.push(filter.vendor);
+  }
+  const rows = db.prepare(
+    `SELECT
+       su.vendor AS vendor,
+       SUM(su.input_tokens) AS input_tokens,
+       SUM(su.output_tokens) AS output_tokens,
+       SUM(su.cached_tokens) AS cached_tokens,
+       SUM(su.reasoning_tokens) AS reasoning_tokens,
+       SUM(CASE WHEN su.cost_usd IS NOT NULL THEN su.cost_usd ELSE 0 END) AS priced_cost_usd,
+       SUM(CASE WHEN su.cost_usd IS NULL THEN 1 ELSE 0 END) AS unpriced_session_count,
+       COUNT(su.cost_usd) AS priced_session_count,
+       COUNT(*) AS session_count
+     FROM session_usage su
+     JOIN session_index si ON si.vendor = su.vendor AND si.session_id = su.session_id
+     WHERE ${clauses.join(' AND ')}
+     GROUP BY su.vendor
+     ORDER BY su.vendor`
+  ).all(...params) as Array<{
+    vendor: Vendor;
+    input_tokens: number;
+    output_tokens: number;
+    cached_tokens: number;
+    reasoning_tokens: number;
+    priced_cost_usd: number;
+    unpriced_session_count: number;
+    priced_session_count: number;
+    session_count: number;
+  }>;
+
+  return rows.map(row => ({
+    vendor: row.vendor,
+    tokens: {
+      input: row.input_tokens,
+      output: row.output_tokens,
+      cached: row.cached_tokens,
+      reasoning: row.reasoning_tokens,
+    },
+    cost_usd: row.priced_session_count > 0 ? row.priced_cost_usd : null,
+    unpriced_session_count: row.unpriced_session_count,
+    session_count: row.session_count,
+  }));
 }

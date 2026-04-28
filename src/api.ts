@@ -7,7 +7,7 @@ import {
 } from './core.ts';
 import { getActiveAgentsLive } from './session-probe.ts';
 import { filterMechanical } from './narrative.ts';
-import { apiError, handleActiveSessions, handleCostByMessage, handleCostBySession, handleSessionEvents } from './r1/api.ts';
+import { apiError, handleActiveSessions, handleCostByMessage, handleCostBySession, handleSessionEvents, handleTokensByParticipant } from './r1/api.ts';
 
 // Ensure DB is ready on fresh roots
 initDb();
@@ -52,6 +52,7 @@ Endpoints:
 - \`/api/v1/sessions/events?since_id=&project=&role=\`: SSE stream over session_events.
 - \`/api/v1/cost/by-session?session_id=&vendor=\`: JSON token and cost attribution for one session.
 - \`/api/v1/cost/by-message?chain_msg_id=\`: JSON token and cost attribution via message linkage.
+- \`/api/v1/tokens/by-participant?participant_id=&since=&until=&window=&vendor=\`: JSON token totals by participant.
 - \`/brief?project=<slug>\`: CTO session-start preamble — artifacts, active agents, health (markdown).
 - \`/query?q=<question>[&source=a,b&project=x,y]\`: Ask a synthesis question, optionally scoped.
 - \`/validate?q=<claim>\`: Fact-check a specific claim.
@@ -151,6 +152,9 @@ const server = Bun.serve({
     }
     if (url.pathname === "/api/v1/cost/by-message") {
       return handleCostByMessage(url);
+    }
+    if (url.pathname === "/api/v1/tokens/by-participant") {
+      return handleTokensByParticipant(url);
     }
 
     if (url.pathname.startsWith("/api/v1/")) {

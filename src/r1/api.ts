@@ -1,4 +1,5 @@
 import {
+  aggregateUsageByParticipant,
   getSessionUsage,
   getSessionUsageForMessage,
   listActiveSessions,
@@ -113,12 +114,68 @@ function parseVendor(value: string | null): Vendor | null {
   return vendor as Vendor;
 }
 
+function parseSingleVendor(value: string | null): Vendor | null {
+  const vendors = parseFilter(value, VENDORS) as Vendor[] | null;
+  if (!vendors) return null;
+  if (vendors.length > 1) {
+    throw new ValidationError('vendor must include only one value', {
+      value,
+      allowed: VENDORS,
+    });
+  }
+  return vendors[0];
+}
+
 function parseSinceId(value: string | null): number {
   if (value === null || value.trim() === '') return 0;
   if (!/^\d+$/.test(value)) {
     throw new ValidationError('since_id must be a non-negative integer', { value });
   }
   return Number(value);
+}
+
+const DURATION_UNITS: Record<string, number> = {
+  s: 1000,
+  m: 60 * 1000,
+  h: 60 * 60 * 1000,
+  d: 24 * 60 * 60 * 1000,
+};
+const DURATION_ALLOWED = [
+  '<positive integer>s',
+  '<positive integer>m',
+  '<positive integer>h',
+  '<positive integer>d',
+];
+
+function parseDuration(value: string | null): number | null {
+  if (value === null || value.trim() === '') return null;
+  const trimmed = value.trim();
+  const match = /^([1-9][0-9]*)([smhd])$/.exec(trimmed);
+  if (!match) {
+    throw new ValidationError('window must be a positive integer duration', {
+      value,
+      allowed: DURATION_ALLOWED,
+    });
+  }
+  const amount = Number(match[1]);
+  const durationMs = amount * DURATION_UNITS[match[2]];
+  if (!Number.isSafeInteger(amount) || !Number.isSafeInteger(durationMs)) {
+    throw new ValidationError('window must be a representable duration', {
+      value,
+      allowed: DURATION_ALLOWED,
+    });
+  }
+  return durationMs;
+}
+
+function parseIsoTimestamp(value: string | null, name: string): string | null {
+  if (value === null || value.trim() === '') return null;
+  const trimmed = value.trim();
+  const time = Date.parse(trimmed);
+  if (Number.isNaN(time)) {
+    throw new ValidationError(`${name} must be a valid ISO timestamp`, { param: name, value });
+  }
+  return new Date(time).toISOString();
 }
 
 function publicBreakdown(breakdown: CostBreakdown) {
@@ -143,6 +200,17 @@ function rowToCostResponse(usage: SessionUsage) {
     cost_usd: usage.cost_usd,
     cost_breakdown: publicBreakdown(usage.cost_breakdown),
   };
+}
+
+function zeroTokens() {
+  return { input: 0, output: 0, cached: 0, reasoning: 0 };
+}
+
+function foldTokenTotals(target: ReturnType<typeof zeroTokens>, source: ReturnType<typeof zeroTokens>) {
+  target.input += source.input;
+  target.output += source.output;
+  target.cached += source.cached;
+  target.reasoning += source.reasoning;
 }
 
 export function handleActiveSessions(url: URL): Response {
@@ -211,6 +279,84 @@ export function handleCostByMessage(url: URL): Response {
       ...rowToCostResponse(row.usage),
       chain_msg_id: chainMsgId,
       link_confidence: row.link.confidence,
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return apiError('validation', error.message, error.details ?? {}, 400);
+    }
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return apiError('internal', 'Internal server error', { message }, 500);
+  }
+}
+
+export function handleTokensByParticipant(url: URL): Response {
+  try {
+    const participantId = parseRequired(url.searchParams.get('participant_id'), 'participant_id');
+    if (url.searchParams.get('since') && url.searchParams.get('window')) {
+      throw new ValidationError('since and window are mutually exclusive', {
+        conflict: ['since', 'window'],
+      });
+    }
+
+    const windowMs = parseDuration(url.searchParams.get('window'));
+    // Use session_index.last_activity_at for time filters. The orchestrator
+    // needs usage by work time, not by importer/pricing cadence.
+    let since = parseIsoTimestamp(url.searchParams.get('since'), 'since');
+    if (windowMs !== null) {
+      const sinceMs = Date.now() - windowMs;
+      if (!Number.isFinite(sinceMs) || Number.isNaN(new Date(sinceMs).getTime())) {
+        throw new ValidationError('window must be a representable duration', {
+          value: url.searchParams.get('window'),
+          allowed: DURATION_ALLOWED,
+        });
+      }
+      since = new Date(sinceMs).toISOString();
+    }
+    const until = parseIsoTimestamp(url.searchParams.get('until'), 'until');
+    const vendor = parseSingleVendor(url.searchParams.get('vendor'));
+
+    const rows = aggregateUsageByParticipant({
+      participant_id: participantId,
+      since,
+      until,
+      vendor,
+    });
+    const tokens = zeroTokens();
+    const byVendor: Record<Vendor, {
+      tokens: ReturnType<typeof zeroTokens>;
+      cost_usd: number | null;
+      unpriced_session_count: number;
+      session_count: number;
+    }> = {} as any;
+    let pricedCost = 0;
+    let pricedVendorCount = 0;
+    let unpricedSessionCount = 0;
+    let sessionCount = 0;
+
+    for (const row of rows) {
+      foldTokenTotals(tokens, row.tokens);
+      if (row.cost_usd !== null) {
+        pricedCost += row.cost_usd;
+        pricedVendorCount++;
+      }
+      unpricedSessionCount += row.unpriced_session_count;
+      sessionCount += row.session_count;
+      byVendor[row.vendor] = {
+        tokens: row.tokens,
+        cost_usd: row.cost_usd,
+        unpriced_session_count: row.unpriced_session_count,
+        session_count: row.session_count,
+      };
+    }
+
+    return json({
+      participant_id: participantId,
+      tokens,
+      cost_usd: sessionCount > 0 && pricedVendorCount > 0 ? pricedCost : null,
+      unpriced_session_count: unpricedSessionCount,
+      session_count: sessionCount,
+      by_vendor: byVendor,
+      generated_at: new Date().toISOString(),
     });
   } catch (error) {
     if (error instanceof ValidationError) {

@@ -70,6 +70,23 @@ function costBreakdown(model: string) {
   });
 }
 
+function unpricedCostBreakdown(model: string) {
+  return JSON.stringify({
+    model,
+    source: 'unknown',
+    lines: [
+      { type: 'input', tokens: 100, rate: null, cost: null },
+      { type: 'output', tokens: 50, rate: null, cost: null },
+      { type: 'cached', tokens: 10, rate: null, cost: null },
+      { type: 'reasoning', tokens: 5, rate: null, cost: null },
+    ],
+  });
+}
+
+function isoHoursAgo(hours: number): string {
+  return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+}
+
 function seedCostFixtures(): void {
   const dbPath = path.join(tmpRoot, 'meta', 'brain.db');
   const db = new Database(dbPath);
@@ -122,6 +139,94 @@ function seedCostFixtures(): void {
     `).run(
       'xco-1', 'xco', 1, 'mm_cto', 'mm_devops', 'claude',
       'sess-mm-cto-working', 'mm_cto', '/tmp/a', 'exact',
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function seedParticipantUsageFixtures(): { since24h: string; until30m: string } {
+  const dbPath = path.join(tmpRoot, 'meta', 'brain.db');
+  const db = new Database(dbPath);
+  const recentClaude = isoHoursAgo(1);
+  const recentCodex = isoHoursAgo(2);
+  const oldGemini = isoHoursAgo(48);
+  const unpricedOnly = isoHoursAgo(3);
+  const since24h = isoHoursAgo(24);
+  const until30m = isoHoursAgo(0.5);
+  try {
+    const insertSession = db.prepare(`
+      INSERT INTO session_index
+        (vendor, session_id, source_path, participant_id, project, role,
+         project_role, cwd, model, started_at, last_activity_at, last_mtime,
+         last_log_line, state, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}')
+    `);
+    const sessions = [
+      ['claude', 'tokens-ac-cto-claude', '/tmp/tokens-a', 'ac_cto', 'ac', 'cto', 'ac/cto', '/repo/ac', 'claude-opus-4-6', recentClaude, recentClaude, 1, 'claude tokens', 'completed'],
+      ['codex', 'tokens-ac-cto-codex', '/tmp/tokens-b', 'ac_cto', 'ac', 'cto', 'ac/cto', '/repo/ac', 'gpt-5.4', recentCodex, recentCodex, 1, 'codex tokens', 'completed'],
+      ['gemini', 'tokens-ac-cto-gemini-old', '/tmp/tokens-c', 'ac_cto', 'ac', 'cto', 'ac/cto', '/repo/ac', 'gemini-unknown', oldGemini, oldGemini, 1, 'gemini tokens', 'completed'],
+      ['gemini', 'tokens-unpriced-gemini', '/tmp/tokens-d', 'ac_unpriced', 'ac', 'ops', 'ac/ops', '/repo/ac', 'gemini-unknown', unpricedOnly, unpricedOnly, 1, 'unpriced tokens', 'completed'],
+    ];
+    for (const row of sessions) insertSession.run(...row);
+
+    const insertUsage = db.prepare(`
+      INSERT INTO session_usage
+        (vendor, session_id, participant_id, model, input_tokens, output_tokens,
+         cached_tokens, reasoning_tokens, cost_usd, cost_breakdown, pricing_source, priced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertUsage.run(
+      'claude', 'tokens-ac-cto-claude', 'ac_cto', 'claude-opus-4-6',
+      1000, 100, 10, 5, 0.015, costBreakdown('claude-opus-4-6'),
+      'pricing.toml', recentClaude,
+    );
+    insertUsage.run(
+      'codex', 'tokens-ac-cto-codex', 'ac_cto', 'gpt-5.4',
+      500, 50, 5, 2, 0.004, costBreakdown('gpt-5.4'),
+      'pricing.toml', recentCodex,
+    );
+    insertUsage.run(
+      'gemini', 'tokens-ac-cto-gemini-old', 'ac_cto', 'gemini-unknown',
+      200, 25, 2, 1, null, unpricedCostBreakdown('gemini-unknown'),
+      'unknown', oldGemini,
+    );
+    insertUsage.run(
+      'gemini', 'tokens-unpriced-gemini', 'ac_unpriced', 'gemini-unknown',
+      100, 50, 10, 5, null, unpricedCostBreakdown('gemini-unknown'),
+      'unknown', unpricedOnly,
+    );
+    return { since24h, until30m };
+  } finally {
+    db.close();
+  }
+}
+
+function seedBoundaryUsageFixture(): void {
+  const dbPath = path.join(tmpRoot, 'meta', 'brain.db');
+  const db = new Database(dbPath);
+  try {
+    db.prepare(`
+      INSERT INTO session_index
+        (vendor, session_id, source_path, participant_id, project, role,
+         project_role, cwd, model, started_at, last_activity_at, last_mtime,
+         last_log_line, state, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}')
+    `).run(
+      'claude', 'tokens-boundary-claude', '/tmp/tokens-boundary', 'ac_boundary',
+      'ac', 'cto', 'ac/cto', '/repo/ac', 'claude-opus-4-6',
+      '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z', 1,
+      'boundary tokens', 'completed',
+    );
+    db.prepare(`
+      INSERT INTO session_usage
+        (vendor, session_id, participant_id, model, input_tokens, output_tokens,
+         cached_tokens, reasoning_tokens, cost_usd, cost_breakdown, pricing_source, priced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'claude', 'tokens-boundary-claude', 'ac_boundary', 'claude-opus-4-6',
+      42, 7, 3, 1, 0.001, costBreakdown('claude-opus-4-6'),
+      'pricing.toml', '2026-04-22T10:01:00Z',
     );
   } finally {
     db.close();
@@ -458,6 +563,157 @@ describe('R1 active sessions API', () => {
       const missingParam = await getJson(base, '/api/v1/cost/by-message');
       expect(missingParam.status).toBe(400);
       expect(missingParam.body.error.code).toBe('validation');
+    });
+  });
+
+  test('tokens by participant aggregates across vendors with unpriced visibility', async () => {
+    seedParticipantUsageFixtures();
+    await withApi(async base => {
+      const { status, body } = await getJson(base, '/api/v1/tokens/by-participant?participant_id=ac_cto');
+      expect(status).toBe(200);
+      expect(body.participant_id).toBe('ac_cto');
+      expect(body.tokens).toEqual({ input: 1700, output: 175, cached: 17, reasoning: 8 });
+      expect(body.cost_usd).toBeCloseTo(0.019);
+      expect(body.unpriced_session_count).toBe(1);
+      expect(body.session_count).toBe(3);
+      expect(Object.keys(body.by_vendor)).toEqual(['claude', 'codex', 'gemini']);
+      expect(body.by_vendor.claude).toEqual({
+        tokens: { input: 1000, output: 100, cached: 10, reasoning: 5 },
+        cost_usd: 0.015,
+        unpriced_session_count: 0,
+        session_count: 1,
+      });
+      expect(body.by_vendor.codex.cost_usd).toBe(0.004);
+      expect(body.by_vendor.gemini).toEqual({
+        tokens: { input: 200, output: 25, cached: 2, reasoning: 1 },
+        cost_usd: null,
+        unpriced_session_count: 1,
+        session_count: 1,
+      });
+      expect(body.generated_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+  });
+
+  test('tokens by participant filters by since, window, and vendor', async () => {
+    const { since24h } = seedParticipantUsageFixtures();
+    await withApi(async base => {
+      const since = await getJson(base, `/api/v1/tokens/by-participant?participant_id=ac_cto&since=${encodeURIComponent(since24h)}`);
+      expect(since.status).toBe(200);
+      expect(since.body.session_count).toBe(2);
+      expect(since.body.tokens).toEqual({ input: 1500, output: 150, cached: 15, reasoning: 7 });
+      expect(Object.keys(since.body.by_vendor)).toEqual(['claude', 'codex']);
+
+      const windowed = await getJson(base, '/api/v1/tokens/by-participant?participant_id=ac_cto&window=24h');
+      expect(windowed.status).toBe(200);
+      expect(windowed.body.session_count).toBe(2);
+      expect(windowed.body.tokens).toEqual(since.body.tokens);
+      expect(Object.keys(windowed.body.by_vendor)).toEqual(['claude', 'codex']);
+
+      const claude = await getJson(base, '/api/v1/tokens/by-participant?participant_id=ac_cto&vendor=claude');
+      expect(claude.status).toBe(200);
+      expect(claude.body.session_count).toBe(1);
+      expect(claude.body.tokens).toEqual({ input: 1000, output: 100, cached: 10, reasoning: 5 });
+      expect(Object.keys(claude.body.by_vendor)).toEqual(['claude']);
+    });
+  });
+
+  test('tokens by participant includes exact timestamp boundaries', async () => {
+    seedBoundaryUsageFixture();
+    await withApi(async base => {
+      const until = await getJson(base, '/api/v1/tokens/by-participant?participant_id=ac_boundary&until=2026-04-22T10%3A00%3A00Z');
+      expect(until.status).toBe(200);
+      expect(until.body.session_count).toBe(1);
+      expect(until.body.tokens).toEqual({ input: 42, output: 7, cached: 3, reasoning: 1 });
+
+      const since = await getJson(base, '/api/v1/tokens/by-participant?participant_id=ac_boundary&since=2026-04-22T10%3A00%3A00Z');
+      expect(since.status).toBe(200);
+      expect(since.body.session_count).toBe(1);
+      expect(since.body.tokens).toEqual({ input: 42, output: 7, cached: 3, reasoning: 1 });
+    });
+  });
+
+  test('tokens by participant returns zeros for unknown or empty windows', async () => {
+    seedParticipantUsageFixtures();
+    await withApi(async base => {
+      const unknown = await getJson(base, '/api/v1/tokens/by-participant?participant_id=does_not_exist');
+      expect(unknown.status).toBe(200);
+      expect(unknown.body).toMatchObject({
+        participant_id: 'does_not_exist',
+        tokens: { input: 0, output: 0, cached: 0, reasoning: 0 },
+        cost_usd: null,
+        unpriced_session_count: 0,
+        session_count: 0,
+        by_vendor: {},
+      });
+
+      const future = encodeURIComponent(new Date(Date.now() + 60 * 60 * 1000).toISOString());
+      const emptyWindow = await getJson(base, `/api/v1/tokens/by-participant?participant_id=ac_cto&since=${future}`);
+      expect(emptyWindow.status).toBe(200);
+      expect(emptyWindow.body.tokens).toEqual({ input: 0, output: 0, cached: 0, reasoning: 0 });
+      expect(emptyWindow.body.cost_usd).toBeNull();
+      expect(emptyWindow.body.session_count).toBe(0);
+      expect(emptyWindow.body.by_vendor).toEqual({});
+    });
+  });
+
+  test('tokens by participant all-unpriced sessions keep tokens and null cost', async () => {
+    seedParticipantUsageFixtures();
+    await withApi(async base => {
+      const { status, body } = await getJson(base, '/api/v1/tokens/by-participant?participant_id=ac_unpriced');
+      expect(status).toBe(200);
+      expect(body.tokens).toEqual({ input: 100, output: 50, cached: 10, reasoning: 5 });
+      expect(body.cost_usd).toBeNull();
+      expect(body.unpriced_session_count).toBe(1);
+      expect(body.session_count).toBe(1);
+      expect(body.by_vendor.gemini).toEqual({
+        tokens: { input: 100, output: 50, cached: 10, reasoning: 5 },
+        cost_usd: null,
+        unpriced_session_count: 1,
+        session_count: 1,
+      });
+    });
+  });
+
+  test('tokens by participant validates required and filter params', async () => {
+    await withApi(async base => {
+      const missing = await getJson(base, '/api/v1/tokens/by-participant');
+      expect(missing.status).toBe(400);
+      expect(missing.body.error.code).toBe('validation');
+
+      const conflict = await getJson(base, '/api/v1/tokens/by-participant?participant_id=ac_cto&since=2026-04-22T10%3A00%3A00Z&window=24h');
+      expect(conflict.status).toBe(400);
+      expect(conflict.body.error.details.conflict).toEqual(['since', 'window']);
+
+      const badSince = await getJson(base, '/api/v1/tokens/by-participant?participant_id=ac_cto&since=not-a-date');
+      expect(badSince.status).toBe(400);
+      expect(badSince.body.error.details.value).toBe('not-a-date');
+
+      const badUntil = await getJson(base, '/api/v1/tokens/by-participant?participant_id=ac_cto&until=not-a-date');
+      expect(badUntil.status).toBe(400);
+      expect(badUntil.body.error.details.param).toBe('until');
+
+      const badWindow = await getJson(base, '/api/v1/tokens/by-participant?participant_id=ac_cto&window=6mo');
+      expect(badWindow.status).toBe(400);
+      expect(badWindow.body.error.details.allowed).toEqual([
+        '<positive integer>s',
+        '<positive integer>m',
+        '<positive integer>h',
+        '<positive integer>d',
+      ]);
+
+      const hugeWindow = await getJson(base, '/api/v1/tokens/by-participant?participant_id=ac_cto&window=999999999999999999999999999999999999999d');
+      expect(hugeWindow.status).toBe(400);
+      expect(hugeWindow.body.error.code).toBe('validation');
+      expect(hugeWindow.body.error.details.allowed).toEqual([
+        '<positive integer>s',
+        '<positive integer>m',
+        '<positive integer>h',
+        '<positive integer>d',
+      ]);
+
+      const badVendor = await getJson(base, '/api/v1/tokens/by-participant?participant_id=ac_cto&vendor=unknown');
+      expect(badVendor.status).toBe(400);
+      expect(badVendor.body.error.details.allowed).toEqual(['claude', 'codex', 'gemini']);
     });
   });
 
