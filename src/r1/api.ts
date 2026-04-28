@@ -4,7 +4,14 @@ import {
   listActiveSessions,
   listSessionsBySessionId,
 } from './session-index.ts';
-import type { ApiError, CostBreakdown, SessionIndexRow, SessionState, SessionUsage, Vendor } from './types.ts';
+import {
+  formatSseEvent,
+  matchesSessionEventFilter,
+  replaySessionEvents,
+  SESSION_EVENT_CATCHUP_INTERVAL_MS,
+  subscribeSessionEvents,
+} from './session-events.ts';
+import type { ApiError, CostBreakdown, SessionEventRow, SessionIndexRow, SessionState, SessionUsage, Vendor } from './types.ts';
 
 const STATES: readonly SessionState[] = ['working', 'idle', 'wedged', 'completed', 'orphan'];
 const DEFAULT_ACTIVE_STATES: SessionState[] = ['working', 'idle', 'wedged'];
@@ -106,6 +113,14 @@ function parseVendor(value: string | null): Vendor | null {
   return vendor as Vendor;
 }
 
+function parseSinceId(value: string | null): number {
+  if (value === null || value.trim() === '') return 0;
+  if (!/^\d+$/.test(value)) {
+    throw new ValidationError('since_id must be a non-negative integer', { value });
+  }
+  return Number(value);
+}
+
 function publicBreakdown(breakdown: CostBreakdown) {
   return {
     model: breakdown.model,
@@ -204,4 +219,108 @@ export function handleCostByMessage(url: URL): Response {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return apiError('internal', 'Internal server error', { message }, 500);
   }
+}
+
+export function handleSessionEvents(req: Request, url: URL): Response {
+  let sinceId: number;
+  let projects: string[] | null;
+  let roles: string[] | null;
+  try {
+    sinceId = parseSinceId(url.searchParams.get('since_id'));
+    projects = parseFilter(url.searchParams.get('project'));
+    roles = parseFilter(url.searchParams.get('role'));
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return apiError('validation', error.message, error.details ?? {}, 400);
+    }
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return apiError('internal', 'Internal server error', { message }, 500);
+  }
+
+  const filter = { projects, roles };
+  const encoder = new TextEncoder();
+  let cleanupStream: (() => void) | null = null;
+  const stream = new ReadableStream({
+    start(controller) {
+      let closed = false;
+      let replayDone = false;
+      let lastSent = sinceId;
+      let buffered: SessionEventRow[] = [];
+      let timer: ReturnType<typeof setInterval> | null = null;
+      let unsubscribe: (() => void) | null = null;
+
+      const cleanup = () => {
+        if (closed) return;
+        closed = true;
+        if (timer) clearInterval(timer);
+        timer = null;
+        if (unsubscribe) unsubscribe();
+        unsubscribe = null;
+      };
+      cleanupStream = cleanup;
+
+      const emit = (row: SessionEventRow) => {
+        if (closed || row.id <= lastSent || !matchesSessionEventFilter(row, filter)) return;
+        try {
+          controller.enqueue(encoder.encode(formatSseEvent(row)));
+          lastSent = row.id;
+        } catch {
+          cleanup();
+        }
+      };
+
+      try {
+        controller.enqueue(encoder.encode(': connected\n\n'));
+      } catch {
+        cleanup();
+        return;
+      }
+
+      unsubscribe = subscribeSessionEvents(row => {
+        if (closed || row.id <= lastSent || !matchesSessionEventFilter(row, filter)) return;
+        if (!replayDone) {
+          buffered = [...buffered, row];
+          return;
+        }
+        emit(row);
+      });
+
+      try {
+        for (const row of replaySessionEvents(sinceId, filter)) emit(row);
+        replayDone = true;
+        for (const row of buffered.sort((a, b) => a.id - b.id)) emit(row);
+        buffered = [];
+      } catch {
+        cleanup();
+        try { controller.close(); } catch {}
+        return;
+      }
+
+      timer = setInterval(() => {
+        try {
+          for (const row of replaySessionEvents(lastSent, filter)) emit(row);
+        } catch {
+          cleanup();
+          try { controller.close(); } catch {}
+        }
+      }, SESSION_EVENT_CATCHUP_INTERVAL_MS);
+      (timer as any).unref?.();
+
+      req.signal.addEventListener('abort', () => {
+        cleanup();
+        try { controller.close(); } catch {}
+      }, { once: true });
+    },
+    cancel() {
+      cleanupStream?.();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
 }

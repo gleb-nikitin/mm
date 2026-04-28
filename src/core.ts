@@ -272,7 +272,25 @@ export function initDb() {
   db.run(`CREATE INDEX IF NOT EXISTS idx_session_usage_cost ON session_usage(cost_usd DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_session_usage_session_id ON session_usage(session_id)`);
 
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 13)');
+  // v14: R1 session lifecycle event stream for Watchdog/R4.
+  db.run(`CREATE TABLE IF NOT EXISTS session_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL CHECK(event_type IN ('session_started','session_active','session_idle','session_wedged','session_completed','session_orphaned')),
+    vendor TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    participant_id TEXT,
+    project_role TEXT,
+    timestamp TEXT NOT NULL,
+    last_log_line TEXT,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(vendor, session_id) REFERENCES session_index(vendor, session_id)
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(vendor, session_id, id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_events_id ON session_events(id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_session_events_project_role ON session_events(project_role, id)`);
+
+  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 14)');
 }
 
 // --- Common Logic ---

@@ -12,15 +12,16 @@ The agent should treat markdown as the source of truth. SQLite is an index and j
 
 ## SQLite Operational Tables
 
-`schema_version` is currently `13`.
+`schema_version` is currently `14`.
 
 Session transcript importers write one `raw_events` row per vendor session with a vendor-prefixed `external_id` such as `claude:<session_id>`, `codex:<session_id>`, or `gemini:<session_id>`. `import_state.external_id` keeps the raw vendor session id so the Active Agents surface and ac `llm_sessions.id` matching remain compatible.
 
-R1 session tracking adds three derived tables:
+R1 session tracking adds four derived tables:
 
 - `session_index`: one row per `(vendor, session_id)`, linked to `raw_events.id` when available and to ac participants when the ac DB can resolve the session. Missing linkage is represented as `state='orphan'` with an `orphan_reason`.
 - `session_message_links`: prompt-footer links from chain messages to imported sessions. Legacy footers without `chain_msg_id` or `chain + chain_seq` are parsed but not inserted because the table is keyed by `chain_msg_id`.
 - `session_usage`: one row per `(vendor, session_id)` with canonical input/output/cached/reasoning token totals, priced cost, pricing source, and a JSON `cost_breakdown`. Pricing rates come from operator-editable `pricing.toml`.
+- `session_events`: durable state-transition stream for session lifecycle events, replayable over `/api/v1/sessions/events` and filtered through `session_index` project/role linkage.
 
 Existing DBs can populate these tables and migrate old unprefixed `raw_events.external_id` values in place with `bun scripts/backfill-r1.ts`.
 

@@ -2,6 +2,8 @@ import { db } from '../core.ts';
 import { resolveSessionLinks } from './ac-link.ts';
 import { recordMessageLink } from './message-link.ts';
 import { priceUsage } from './pricing.ts';
+import { recordStateTransition, notifySessionEvent } from './session-events.ts';
+import { deriveSessionState } from './session-state.ts';
 import type {
   SessionIndexRow,
   SessionLink,
@@ -10,6 +12,7 @@ import type {
   SessionState,
   SessionUsage,
   SessionUsageRow,
+  SessionEventRow,
   TokenUsage,
   Vendor,
 } from './types.ts';
@@ -34,12 +37,13 @@ function runImmediateTransaction<T>(fn: () => T): T {
 }
 
 function stateForObservation(observation: SessionObservation, link: SessionLink | null, acDbAvailable: boolean) {
-  if (link) {
-    return {
-      state: observation.state ?? 'working',
-      orphan_reason: observation.state === 'orphan' ? observation.orphan_reason ?? 'orphan' : null,
-    };
-  }
+  const state = deriveSessionState({
+    linked: Boolean(link),
+    completed: observation.state === 'completed',
+    explicitState: observation.state ?? null,
+    last_activity_at: observation.last_activity_at,
+  });
+  if (state !== 'orphan') return { state, orphan_reason: null };
   return {
     state: 'orphan' as const,
     orphan_reason: observation.orphan_reason ?? (acDbAvailable ? 'participant_not_found' : 'ac_db_unavailable'),
@@ -51,8 +55,12 @@ export function findRawEventIdByExternalId(externalId: string): number | null {
   return row?.id ?? null;
 }
 
-export function upsertSessionObservation(observation: SessionObservation, link: SessionLink | null = null, acDbAvailable = true): void {
-  const state = stateForObservation(observation, link, acDbAvailable);
+export function upsertSessionObservation(
+  observation: SessionObservation,
+  link: SessionLink | null = null,
+  acDbAvailable = true,
+  derivedState = stateForObservation(observation, link, acDbAvailable),
+): void {
   db.prepare(
     `INSERT INTO session_index
        (vendor, session_id, source_path, raw_event_id, participant_id,
@@ -91,8 +99,8 @@ export function upsertSessionObservation(observation: SessionObservation, link: 
     observation.last_activity_at,
     observation.last_mtime,
     observation.last_log_line,
-    state.state,
-    state.orphan_reason,
+    derivedState.state,
+    derivedState.orphan_reason,
     observation.metadata ?? null,
   );
 }
@@ -104,8 +112,17 @@ export function linkSession(observation: SessionObservation, link: SessionLink):
 export function recordSessionObservation(observation: SessionObservation, messageText?: string): void {
   const { links, acDbAvailable } = resolveSessionLinks([observation.session_id]);
   const link = links.get(observation.session_id) ?? null;
-  runImmediateTransaction(() => {
-    upsertSessionObservation(observation, link, acDbAvailable);
+  const events = runImmediateTransaction(() => {
+    const previous = getSessionByVendorAndId(observation.vendor, observation.session_id);
+    const derivedState = stateForObservation(observation, link, acDbAvailable);
+    upsertSessionObservation(observation, link, acDbAvailable, derivedState);
+    const event = recordStateTransition({
+      previous,
+      observation,
+      link,
+      state: derivedState.state,
+      orphanReason: derivedState.orphan_reason,
+    });
     if (messageText) {
       recordMessageLink({
         vendor: observation.vendor,
@@ -115,7 +132,9 @@ export function recordSessionObservation(observation: SessionObservation, messag
         text: messageText,
       });
     }
+    return event ? [event] : [];
   });
+  for (const event of events as SessionEventRow[]) notifySessionEvent(event);
 }
 
 export function getSessionByVendorAndId(vendor: Vendor, sessionId: string): SessionIndexRow | null {

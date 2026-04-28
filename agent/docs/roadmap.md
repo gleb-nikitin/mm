@@ -61,7 +61,7 @@ Reading order lives in `agent/README.md`. Operator-facing architecture (file inv
 - Research ingested as canonical wiki pages: `[[LLM_Wiki]]`, `[[GBrain]]`, `[[Cross_Chat_Knowledge_Base]]`.
 - **Reframing landed:** mm is a project-management primitive, not a memory engine. Skills library is the product; code is infrastructure.
 - **Interactive librarian + narrative chunker** (2026-04-19): `scripts/chunk-events.ts` digests `raw_events` into turn-aligned ~12KB markdown chunks under `raw/events/<project>/`. `process-new.command` now runs import → chunk → index → one interactive Gemini session → embed. Empirical: 35 mm chunks cost ~8% of context, so **one session per project** is the operating assumption — the earlier many-small-sessions + `--batch N` + relaunch-loop orchestration is retired.
-- **R1 session tracker** (2026-04-28): schema v13 adds `session_index`, `session_message_links`, and `session_usage` so imported Claude/Codex/Gemini sessions can link to ac participants, expose active-session JSON, and report token/cost attribution. `/active` keeps its legacy active-only resolution. Importers vendor-prefix `raw_events.external_id`; `scripts/backfill-r1.ts` migrates existing DBs in place.
+- **R1 session tracker** (2026-04-28): schema v14 adds `session_index`, `session_message_links`, `session_usage`, and `session_events` so imported Claude/Codex/Gemini sessions can link to ac participants, expose active-session JSON, report token/cost attribution, and stream lifecycle events over SSE. `/active` keeps its legacy active-only resolution. Importers vendor-prefix `raw_events.external_id`; `scripts/backfill-r1.ts` migrates existing DBs in place.
 
 ## Near-term direction
 

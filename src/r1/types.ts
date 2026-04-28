@@ -2,6 +2,14 @@ export type Vendor = 'claude' | 'codex' | 'gemini';
 
 export type SessionState = 'working' | 'idle' | 'wedged' | 'completed' | 'orphan';
 
+export type SessionEventType =
+  | 'session_started'
+  | 'session_active'
+  | 'session_idle'
+  | 'session_wedged'
+  | 'session_completed'
+  | 'session_orphaned';
+
 export type LinkConfidence = 'exact' | 'footer' | 'none';
 
 export type SessionLink = {
@@ -116,6 +124,23 @@ export type SessionUsageRow = {
 
 export type SessionUsage = Omit<SessionUsageRow, 'cost_breakdown'> & {
   cost_breakdown: CostBreakdown;
+};
+
+export type SessionEventRow = {
+  id: number;
+  event_type: SessionEventType;
+  vendor: Vendor;
+  session_id: string;
+  participant_id: string | null;
+  project_role: string | null;
+  timestamp: string;
+  last_log_line: string | null;
+  payload: string;
+  created_at: string;
+};
+
+export type SessionEvent = Omit<SessionEventRow, 'payload'> & {
+  payload: Record<string, unknown>;
 };
 
 export type ApiError = {

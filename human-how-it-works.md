@@ -180,7 +180,7 @@ These files are **part of the product**: runtime code **reads** several of them 
 
 ### `src/api.ts`
 
-Bun **`Bun.serve`**: DB init; static **`ui/`** (`/`, `/active-ui`, `/ui/...`); markdown API: `/help`, `/active`, `/query`, `/validate`, `/stats`, `/wiki/:slug`, `/search`, `/add`; R1 JSON API: `/api/v1/sessions/active`, `/api/v1/cost/by-session`, `/api/v1/cost/by-message`.
+Bun **`Bun.serve`**: DB init; static **`ui/`** (`/`, `/active-ui`, `/ui/...`); markdown API: `/help`, `/active`, `/query`, `/validate`, `/stats`, `/wiki/:slug`, `/search`, `/add`; R1 JSON/SSE API: `/api/v1/sessions/active`, `/api/v1/sessions/events`, `/api/v1/cost/by-session`, `/api/v1/cost/by-message`.
 
 ### `src/brain.ts`
 

@@ -128,6 +128,62 @@ function seedCostFixtures(): void {
   }
 }
 
+function insertSessionEvent(event: {
+  event_type: string;
+  vendor: string;
+  session_id: string;
+  participant_id: string | null;
+  project_role: string | null;
+  timestamp: string;
+  last_log_line: string | null;
+  payload: Record<string, unknown>;
+}): number {
+  const db = new Database(path.join(tmpRoot, 'meta', 'brain.db'));
+  try {
+    const result = db.prepare(`
+      INSERT INTO session_events
+        (event_type, vendor, session_id, participant_id, project_role, timestamp, last_log_line, payload)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      event.event_type,
+      event.vendor,
+      event.session_id,
+      event.participant_id,
+      event.project_role,
+      event.timestamp,
+      event.last_log_line,
+      JSON.stringify(event.payload),
+    );
+    return Number(result.lastInsertRowid);
+  } finally {
+    db.close();
+  }
+}
+
+function seedEventFixtures(): { first: number; second: number; latest: number } {
+  const first = insertSessionEvent({
+    event_type: 'session_started',
+    vendor: 'claude',
+    session_id: 'sess-mm-cto-working',
+    participant_id: 'mm_cto',
+    project_role: 'mm/cto',
+    timestamp: '2026-04-22T10:05:00Z',
+    last_log_line: 'working log',
+    payload: { state: 'working' },
+  });
+  const second = insertSessionEvent({
+    event_type: 'session_wedged',
+    vendor: 'gemini',
+    session_id: 'sess-ac-cto-wedged',
+    participant_id: 'ac_cto',
+    project_role: 'ac/cto',
+    timestamp: '2026-04-22T10:03:00Z',
+    last_log_line: 'wedged log',
+    payload: { state: 'wedged' },
+  });
+  return { first, second, latest: second };
+}
+
 async function spawnApi(): Promise<{ port: number; close: () => Promise<void> }> {
   const port = await getFreePort();
   const proc = Bun.spawn(['bun', 'src/api.ts'], {
@@ -172,6 +228,38 @@ async function withApi<T>(fn: (base: string) => Promise<T>): Promise<T> {
 async function getJson(base: string, pathAndQuery: string): Promise<{ status: number; body: any }> {
   const response = await fetch(`${base}${pathAndQuery}`);
   return { status: response.status, body: await response.json() };
+}
+
+async function readSse(response: Response, count: number, timeoutMs = 3500): Promise<any[]> {
+  expect(response.status).toBe(200);
+  expect(response.headers.get('content-type')).toContain('text/event-stream');
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  const events: any[] = [];
+  const deadline = Date.now() + timeoutMs;
+  try {
+    while (Date.now() < deadline && events.length < count) {
+      const remaining = Math.max(1, deadline - Date.now());
+      const read = await Promise.race([
+        reader.read(),
+        new Promise<any>(resolve => setTimeout(() => resolve({ done: false, value: new Uint8Array() }), remaining)),
+      ]);
+      if (read.done) break;
+      if (read.value.length === 0) continue;
+      text += decoder.decode(read.value, { stream: true });
+      while (text.includes('\n\n') && events.length < count) {
+        const idx = text.indexOf('\n\n');
+        const raw = text.slice(0, idx);
+        text = text.slice(idx + 2);
+        const dataLine = raw.split('\n').find(line => line.startsWith('data: '));
+        if (dataLine) events[events.length] = JSON.parse(dataLine.slice('data: '.length));
+      }
+    }
+    return events;
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
 }
 
 function sessionIds(body: any): string[] {
@@ -372,4 +460,52 @@ describe('R1 active sessions API', () => {
       expect(missingParam.body.error.code).toBe('validation');
     });
   });
+
+  test('session events replay from since_id and support project/role filters', async () => {
+    const ids = seedEventFixtures();
+    await withApi(async base => {
+      const replay = await fetch(`${base}/api/v1/sessions/events?since_id=${ids.first - 1}`);
+      const replayEvents = await readSse(replay, 2);
+      expect(replayEvents.map(event => event.event_type)).toEqual(['session_started', 'session_wedged']);
+
+      const projectFiltered = await fetch(`${base}/api/v1/sessions/events?since_id=0&project=mm`);
+      const projectEvents = await readSse(projectFiltered, 1);
+      expect(projectEvents.map(event => event.project_role)).toEqual(['mm/cto']);
+
+      const roleFiltered = await fetch(`${base}/api/v1/sessions/events?since_id=0&role=cto`);
+      const roleEvents = await readSse(roleFiltered, 2);
+      expect(roleEvents.map(event => event.project_role)).toEqual(['mm/cto', 'ac/cto']);
+    });
+  });
+
+  test('session events reject invalid since_id before stream headers', async () => {
+    await withApi(async base => {
+      const bad = await getJson(base, '/api/v1/sessions/events?since_id=abc');
+      expect(bad.status).toBe(400);
+      expect(bad.body.error.code).toBe('validation');
+    });
+  });
+
+  test('session events live stream receives rows appended after connect', async () => {
+    const ids = seedEventFixtures();
+    await withApi(async base => {
+      const response = await fetch(`${base}/api/v1/sessions/events?since_id=${ids.latest}`);
+      const read = readSse(response, 1, 5000);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      insertSessionEvent({
+        event_type: 'session_idle',
+        vendor: 'codex',
+        session_id: 'sess-mm-devops-idle',
+        participant_id: 'mm_devops',
+        project_role: 'mm/devops',
+        timestamp: '2026-04-22T10:04:00Z',
+        last_log_line: 'idle log',
+        payload: { state: 'idle' },
+      });
+      const events = await read;
+      expect(events).toHaveLength(1);
+      expect(events[0].event_type).toBe('session_idle');
+      expect(events[0].project_role).toBe('mm/devops');
+    });
+  }, 8000);
 });
