@@ -40,7 +40,7 @@ function parseFlags(argv: string[]): Flags {
     days: 30,
     project: null,
     minTurns: 2,
-    minAgeSeconds: 300,
+    minAgeSeconds: 0,
     includeThinking: false,
     dryRun: false,
     force: false,
@@ -87,7 +87,7 @@ Flags:
   --days N                Only sessions with mtime >= today - N  (default: 30)
   --project <substr>      Filter by decoded cwd substring         (e.g. "work/code/mm")
   --min-turns N           Skip sessions with fewer user turns     (default: 2)
-  --min-age-seconds N     Skip files modified in the last N sec   (default: 300)
+  --min-age-seconds N     Skip files modified in the last N sec   (default: 0)
   --include-thinking      Include assistant thinking blocks       (default: off)
   --force                 Ignore settled/unchanged checks
   --projects-dir <path>   Override ~/.claude/projects              (testing)
@@ -287,6 +287,11 @@ async function main() {
     const state = selectImportState.get(filePath) as { last_mtime: number } | undefined;
     const isChanged = !state || state.last_mtime !== mtimeMs;
 
+    if (!flags.force && isSettled && !isChanged) {
+      skippedUnchanged++;
+      continue;
+    }
+
     let sessions: Session[];
     try { sessions = parseJsonlFile(filePath, flags.includeThinking); }
     catch (e: any) { errored++; console.error(`  ✗ parse error: ${filePath}: ${e.message}`); continue; }
@@ -324,10 +329,6 @@ async function main() {
         );
       }
 
-      if (!flags.force && isSettled && !isChanged) {
-        skippedUnchanged++;
-        continue;
-      }
       if (flags.project && !(session.cwd || '').includes(flags.project)) {
         skippedProject++;
         continue;

@@ -33,6 +33,7 @@ Flags (Claude script; Codex/Gemini have analogous flags — `--help` on each):
 - `--days N` — only files with mtime ≥ today − N (default: 30).
 - `--project <substr>` — substring match on cwd (Claude/Codex) or project path (Gemini).
 - `--min-turns N` — skip sessions with fewer user turns.
+- `--min-age-seconds N` — skip files modified in the last N seconds (default: 0).
 - `--include-thinking` — include assistant thinking blocks (default: off).
 - `--dry-run` — list what would import, write nothing.
 

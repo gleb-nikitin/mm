@@ -75,7 +75,7 @@ function parseFlags(argv: string[]): Flags {
     days: 30,
     project: null,
     minTurns: 3,
-    minAgeSeconds: 300,
+    minAgeSeconds: 0,
     includeThinking: false,
     dryRun: false,
     force: false,
@@ -122,7 +122,7 @@ Flags:
   --days N                Only sessions with mtime >= today - N  (default: 30)
   --project <substr>      Filter by project substring
   --min-turns N           Skip sessions with fewer user turns     (default: 3)
-  --min-age-seconds N     Skip files modified in the last N sec   (default: 300)
+  --min-age-seconds N     Skip files modified in the last N sec   (default: 0)
   --include-thinking      Include assistant thinking blocks       (default: off)
   --force                 Ignore settled/unchanged checks
   --sessions-dir <path>   Override ~/.gemini/tmp                 (testing)
@@ -326,6 +326,11 @@ async function main() {
     const state = selectImportState.get(filePath) as { last_mtime: number } | undefined;
     const isChanged = !state || state.last_mtime !== mtimeMs;
 
+    if (!flags.force && isSettled && !isChanged) {
+      skippedUnchanged++;
+      continue;
+    }
+
     let session: Session | null;
     try {
       session = parseSessionFile(filePath, flags.includeThinking);
@@ -364,11 +369,6 @@ async function main() {
         lastUserSnippet, 
         minTurnsOk
       );
-    }
-
-    if (!flags.force && isSettled && !isChanged) {
-      skippedUnchanged++;
-      continue;
     }
 
     if (flags.project && !session.project.includes(flags.project)) {

@@ -7,4 +7,5 @@
 - **2026-04-28**: docs: update roadmap and gaps for R1 monitor UI
 - **2026-04-28**: feat(r1): add participant token totals
 - **2026-04-29**: fix(r1): derive active session state at read-time
-- **2026-04-29**: fix(r1): derive active session state at read-time
+- **2026-04-29**: perf(importers): optimize skipping of unchanged settled sessions and default min-age-seconds to 0
+- **2026-04-29**: perf(importers): optimize skip logic for unchanged settled sessions and set min-age-seconds default to 0
