@@ -47,7 +47,7 @@
       border-radius: var(--r);
       box-shadow: 0 4px 32px rgba(0, 0, 0, 0.35);
     }
-    .controls { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)) auto auto; gap: var(--sp-2); padding: var(--sp-3); align-items: end; }
+    .controls { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)) auto auto auto; gap: var(--sp-2); padding: var(--sp-3); align-items: end; }
     label { display: flex; flex-direction: column; gap: var(--sp-1); color: var(--text-muted); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
     input {
       width: 100%;
@@ -102,6 +102,7 @@
         <label>role <input id="role" type="text" placeholder="devops" autocomplete="off" /></label>
         <label>state <input id="state" type="text" placeholder="working,idle,wedged" autocomplete="off" /></label>
         <label>limit <input id="limit" type="number" min="1" max="200" placeholder="50" /></label>
+        <label class="toggle"><input id="fullFields" type="checkbox" /> full fields</label>
         <label class="toggle"><input id="autoRefresh" type="checkbox" /> auto-refresh 5s</label>
         <button id="rawToggle" class="btn" type="button">View raw JSON</button>
       </div>
@@ -115,14 +116,17 @@
   </main>
 
   <script>
-    const fields = ['project_role', 'participant_id', 'session_id', 'vendor', 'model', 'started_at', 'last_activity_at', 'last_log_line', 'state'];
+    const compactFields = ['project_role', 'seconds_ago', 'last_log_line', 'state'];
+    const fullFields = ['project_role', 'participant_id', 'session_id', 'vendor', 'model', 'started_at', 'last_activity_at', 'last_log_line', 'state'];
     const inputs = ['project', 'role', 'state', 'limit'].map(id => document.getElementById(id));
     const resultEl = document.getElementById('result');
     const requestUrlEl = document.getElementById('requestUrl');
     const statusEl = document.getElementById('status');
     const rawToggle = document.getElementById('rawToggle');
+    const fullFieldsToggle = document.getElementById('fullFields');
     const autoRefresh = document.getElementById('autoRefresh');
     let lastBody = null;
+    let lastFields = 'compact';
     let rawMode = false;
     let autoTimer = null;
     let debounceTimer = null;
@@ -149,6 +153,7 @@
         const value = input.value.trim();
         if (value) url.searchParams.set(input.id, value);
       }
+      if (fullFieldsToggle.checked) url.searchParams.set('fields', 'full');
       return url;
     }
 
@@ -164,6 +169,7 @@
           </tbody></table></div>`;
       }
       const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
+      const fields = lastFields === 'full' ? fullFields : compactFields;
       const headers = fields.map(field => `<th>${field}</th>`).join('');
       const rows = sessions.map(row => `<tr>${fields.map(field => {
         const raw = row[field];
@@ -199,6 +205,7 @@
       try {
         const response = await fetch(url);
         lastBody = await response.json();
+        lastFields = url.searchParams.get('fields') === 'full' ? 'full' : 'compact';
         statusEl.textContent = `${response.status} ${response.statusText || 'OK'}`;
         if (!response.ok) statusEl.classList.add('error');
       } catch (error) {
@@ -220,6 +227,7 @@
     }
 
     inputs.forEach(input => input.addEventListener('input', scheduleFetch));
+    fullFieldsToggle.addEventListener('change', fetchSessions);
     autoRefresh.addEventListener('change', configureAutoRefresh);
     rawToggle.addEventListener('click', () => { rawMode = !rawMode; render(); });
     window.addEventListener('beforeunload', () => { if (autoTimer) clearInterval(autoTimer); });

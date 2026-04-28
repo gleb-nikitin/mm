@@ -94,12 +94,31 @@ function rowToActiveSession(row: SessionIndexRow) {
   };
 }
 
+function rowToCompactSession(row: SessionIndexRow, now: number) {
+  return {
+    project_role: row.project_role,
+    seconds_ago: Math.floor((now - Date.parse(row.last_activity_at)) / 1000),
+    last_log_line: row.last_log_line,
+    state: row.state,
+  };
+}
+
 function parseRequired(value: string | null, name: string): string {
   const trimmed = value?.trim() ?? '';
   if (!trimmed) {
     throw new ValidationError(`${name} is required`, { param: name });
   }
   return trimmed;
+}
+
+function parseActiveFields(value: string | null): 'compact' | 'full' {
+  const fields = value?.trim() ?? '';
+  if (fields === '' || fields === 'compact') return 'compact';
+  if (fields === 'full') return 'full';
+  throw new ValidationError('fields contains unsupported value', {
+    value,
+    allowed: ['compact', 'full'],
+  });
 }
 
 function parseVendor(value: string | null): Vendor | null {
@@ -215,15 +234,21 @@ function foldTokenTotals(target: ReturnType<typeof zeroTokens>, source: ReturnTy
 
 export function handleActiveSessions(url: URL): Response {
   try {
+    const generatedAt = new Date();
+    const now = generatedAt.getTime();
+    const fields = parseActiveFields(url.searchParams.get('fields'));
     const limit = parseLimit(url.searchParams.get('limit'), 50, 200);
     const projects = parseFilter(url.searchParams.get('project'));
     const roles = parseFilter(url.searchParams.get('role'));
     const stateFilter = parseFilter(url.searchParams.get('state'), STATES) as SessionState[] | null;
     const states = stateFilter ?? DEFAULT_ACTIVE_STATES;
-    const sessions = listActiveSessions({ projects, roles, states, limit }).map(rowToActiveSession);
+    const rows = listActiveSessions({ projects, roles, states, limit });
+    const sessions = fields === 'full'
+      ? rows.map(rowToActiveSession)
+      : rows.map(row => rowToCompactSession(row, now));
     return json({
       sessions,
-      generated_at: new Date().toISOString(),
+      generated_at: generatedAt.toISOString(),
     });
   } catch (error) {
     if (error instanceof ValidationError) {

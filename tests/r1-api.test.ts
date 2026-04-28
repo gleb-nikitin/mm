@@ -384,16 +384,35 @@ describe('R1 active sessions API', () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  test('default filters return active-state JSON envelope with ISO timestamp', async () => {
+  test('default filters return compact active-state JSON envelope with relative age', async () => {
     await withApi(async base => {
       const { status, body } = await getJson(base, '/api/v1/sessions/active');
+      expect(status).toBe(200);
+      expect(body.generated_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      const generatedAt = Date.parse(body.generated_at);
+      expect(body.sessions[0]).toEqual({
+        project_role: 'mm/cto',
+        seconds_ago: Math.floor((generatedAt - Date.parse('2026-04-22T10:05:00Z')) / 1000),
+        last_log_line: 'working log',
+        state: 'working',
+      });
+      expect(Object.keys(body.sessions[0])).toEqual(['project_role', 'seconds_ago', 'last_log_line', 'state']);
+    });
+  });
+
+  test('fields=compact keeps compact shape and fields=full preserves current shape', async () => {
+    await withApi(async base => {
+      const compact = await getJson(base, '/api/v1/sessions/active?fields=compact');
+      expect(compact.status).toBe(200);
+      expect(Object.keys(compact.body.sessions[0])).toEqual(['project_role', 'seconds_ago', 'last_log_line', 'state']);
+
+      const { status, body } = await getJson(base, '/api/v1/sessions/active?fields=full');
       expect(status).toBe(200);
       expect(sessionIds(body)).toEqual([
         'sess-mm-cto-working',
         'sess-mm-devops-idle',
         'sess-ac-cto-wedged',
       ]);
-      expect(body.generated_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
       expect(body.sessions[0]).toEqual({
         project_role: 'mm/cto',
         participant_id: 'mm_cto',
@@ -410,16 +429,16 @@ describe('R1 active sessions API', () => {
 
   test('project filters support single, comma-separated, and all', async () => {
     await withApi(async base => {
-      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?project=mm')).body)).toEqual([
+      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&project=mm')).body)).toEqual([
         'sess-mm-cto-working',
         'sess-mm-devops-idle',
       ]);
-      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?project=mm,ac')).body)).toEqual([
+      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&project=mm,ac')).body)).toEqual([
         'sess-mm-cto-working',
         'sess-mm-devops-idle',
         'sess-ac-cto-wedged',
       ]);
-      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?project=all')).body)).toEqual([
+      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&project=all')).body)).toEqual([
         'sess-mm-cto-working',
         'sess-mm-devops-idle',
         'sess-ac-cto-wedged',
@@ -429,16 +448,16 @@ describe('R1 active sessions API', () => {
 
   test('role filters support single, comma-separated, and all', async () => {
     await withApi(async base => {
-      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?role=cto')).body)).toEqual([
+      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&role=cto')).body)).toEqual([
         'sess-mm-cto-working',
         'sess-ac-cto-wedged',
       ]);
-      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?role=cto,devops')).body)).toEqual([
+      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&role=cto,devops')).body)).toEqual([
         'sess-mm-cto-working',
         'sess-mm-devops-idle',
         'sess-ac-cto-wedged',
       ]);
-      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?role=all')).body)).toEqual([
+      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&role=all')).body)).toEqual([
         'sess-mm-cto-working',
         'sess-mm-devops-idle',
         'sess-ac-cto-wedged',
@@ -448,10 +467,10 @@ describe('R1 active sessions API', () => {
 
   test('state filters support single state and exhaustive CSV', async () => {
     await withApi(async base => {
-      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?state=working')).body)).toEqual([
+      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&state=working')).body)).toEqual([
         'sess-mm-cto-working',
       ]);
-      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?state=working,idle,wedged,completed,orphan')).body)).toEqual([
+      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&state=working,idle,wedged,completed,orphan')).body)).toEqual([
         'sess-mm-cto-working',
         'sess-mm-devops-idle',
         'sess-ac-cto-wedged',
@@ -487,6 +506,11 @@ describe('R1 active sessions API', () => {
       expect(badState.status).toBe(400);
       expect(badState.body.error.code).toBe('validation');
       expect(badState.body.error.details.invalid).toEqual(['unknown']);
+
+      const badFields = await getJson(base, '/api/v1/sessions/active?fields=minimal');
+      expect(badFields.status).toBe(400);
+      expect(badFields.body.error.code).toBe('validation');
+      expect(badFields.body.error.details.allowed).toEqual(['compact', 'full']);
     });
   });
 
