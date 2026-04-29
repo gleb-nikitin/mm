@@ -90,8 +90,21 @@ describe('R1 token usage extraction', () => {
     expect(extractClaudeContextWindow(path.join(FIXTURES, 'claude', 'session.jsonl'), 'no-such-session')).toBe(0);
   });
 
-  test('Codex context-window stub returns null pending vendor implementation', () => {
-    expect(extractCodexContextWindow(path.join(FIXTURES, 'codex', 'repeated-token-count.jsonl'))).toBeNull();
+  test('Codex context window returns the latest non-zero last_token_usage.input_tokens', () => {
+    // 3 token_count events: last=100, last=30, last=0. The trailing
+    // zero-input event is skipped (Codex emits these post-turn). Expected
+    // value: 30 from the second event.
+    expect(extractCodexContextWindow(path.join(FIXTURES, 'codex', 'repeated-token-count.jsonl'))).toBe(30);
+  });
+
+  test('Codex context window picks the latest last_token_usage when only-last events are present', () => {
+    // Two events: last=10, last=20. Latest wins → 20.
+    expect(extractCodexContextWindow(path.join(FIXTURES, 'codex', 'last-only.jsonl'))).toBe(20);
+  });
+
+  test('Codex context window returns null when no last_token_usage is present', () => {
+    // Reuse a Claude fixture — wrong shape, no event_msg / token_count records.
+    expect(extractCodexContextWindow(path.join(FIXTURES, 'claude', 'session.jsonl'))).toBeNull();
   });
 
   test('Gemini context window returns the last message prompt-token total (JSON shape)', () => {

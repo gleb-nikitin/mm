@@ -72,11 +72,37 @@ export function extractClaudeContextWindow(filePath: string, sessionId: string):
 
 /**
  * Latest-turn context-window fill for a Codex session.
- * TODO: pending implementation by the Codex agent. Returns null so the
- * /tokens/active endpoint can surface "unknown context fill" cleanly.
+ *
+ * Per Codex API semantics (confirmed by the Codex agent):
+ *   - Each `event_msg` with `payload.type === 'token_count'` carries
+ *     `payload.info.last_token_usage`; its `input_tokens` is the
+ *     prompt-side context size for that turn (already includes
+ *     `cached_input_tokens` — cached is a subset, not additive).
+ *   - `total_token_usage` is cumulative across the session and MUST NOT
+ *     be used as a fallback — it would overstate context fill.
+ *   - If `last_token_usage` is missing on every event, return null.
+ *
+ * Picks the latest non-zero `last_token_usage.input_tokens`. Trailing
+ * zero-input events (Codex emits these post-turn as session signals)
+ * would otherwise clobber the real value via the >= tie-break that
+ * matches the cumulative extractor.
  */
-export function extractCodexContextWindow(_filePath: string): number | null {
-  return null;
+export function extractCodexContextWindow(filePath: string): number | null {
+  let latestInput: number | null = null;
+  let latestTimestamp = '';
+  for (const rec of readJsonl(filePath)) {
+    if (rec?.type !== 'event_msg' || rec?.payload?.type !== 'token_count') continue;
+    const info = rec.payload.info;
+    if (!info?.last_token_usage) continue;
+    const input = num(info.last_token_usage.input_tokens);
+    if (input <= 0) continue;
+    const timestamp = typeof rec.timestamp === 'string' ? rec.timestamp : '';
+    if (latestInput === null || timestamp >= latestTimestamp) {
+      latestInput = input;
+      latestTimestamp = timestamp;
+    }
+  }
+  return latestInput;
 }
 
 /**
