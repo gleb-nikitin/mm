@@ -50,7 +50,7 @@ Responses are mostly **markdown**. **`GET /`** serves the **web UI** (`ui/index.
 
 - `GET /help` — endpoint list (markdown)
 - `GET /` — web UI (Aurora-themed index)
-- `GET /active-ui` — Active Agents HTML view
+- `GET /monitor` — Active Agents + R1 Monitor HTML view
 - `GET /stats` — brain health and schema version
 - `GET /search?q=...` — hybrid search (FTS5 + vector + events); optional `source` / `project` filters
 - `GET /query?q=...` — synthesized answer with citations

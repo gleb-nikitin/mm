@@ -57,7 +57,7 @@ For a short README-style overview, see **[`README.md`](README.md)**. For behavio
 | Narrative chunker (events → raw) | `scripts/chunk-events.ts` |
 | Telegram one-off | `scripts/import-chats.ts` |
 | Tests | `tests/behavior.test.ts` |
-| macOS shortcuts | `run.command`, `kill.command`, `watch-agents.command`, `refresh-agents.command`, `process-new.command` |
+| macOS shortcuts | `run.command`, `watch-agents.command`, `process-new.command` |
 
 ### 2.3 Instruction markdown (what each file tells an LLM or operator)
 
@@ -132,7 +132,7 @@ These files are **part of the product**: runtime code **reads** several of them 
 ### Day-to-day rhythm
 
 - UI + API: **`run.command`** or **`bun run api`** (port **`MT_PORT`**, default **3000**).
-- Active Agents / recent sessions: **`watch-agents.command`** or **`refresh-agents.command`**.
+- Active Agents / recent sessions: **`watch-agents.command`**.
 - Drain queue + wiki updates: **`brain index rebuild`** as needed, then **`brain process`**; then **`brain embed`** after large changes.
 - **Librarian shift (`process-new.command`):** imports Claude (**`--project mm`**), runs **`chunk-events --project mm`**, **`index rebuild`**, then launches **interactive Gemini** (`gemini -i=… --yolo`) with a prompt built from **`agent/roles/lib/soul-interactive.md`** + **`handoff.md`** + **`brain queue`** — drain the markdown queue (including **`raw/events/`** chunks) with wiki updates; optional **`meta/RELAUNCH_NEEDED`** loop. **Not** the old non-interactive “process + embed only” script.
 
@@ -153,10 +153,8 @@ These files are **part of the product**: runtime code **reads** several of them 
 
 | File | Action |
 |------|--------|
-| **`run.command`** | `bun run api`; waits for `/stats`, opens browser; closing window stops server. |
-| **`kill.command`** | `pkill -f "bun src/api.ts"`. |
-| **`refresh-agents.command`** | All three importers once (`--days 1`). |
-| **`watch-agents.command`** | Same importers every **30s** (dashboard freshness). |
+| **`run.command`** | Idempotent `bun run api`; waits for `/monitor`, opens browser; auto-reload on edits. |
+| **`watch-agents.command`** | All three importers every **1s** (dashboard freshness). |
 | **`process-new.command`** | Import Claude (mm, 1d) → **`chunk-events`** → **`index rebuild`** → **Librarian** (interactive Gemini; see script). |
 
 ### External dependencies
@@ -180,7 +178,7 @@ These files are **part of the product**: runtime code **reads** several of them 
 
 ### `src/api.ts`
 
-Bun **`Bun.serve`**: DB init; static **`ui/`** (`/`, `/active-ui`, `/ui/...`); markdown API: `/help`, `/active`, `/query`, `/validate`, `/stats`, `/wiki/:slug`, `/search`, `/add`.
+Bun **`Bun.serve`**: DB init; static **`ui/`** (`/`, `/monitor`, `/ui/...`); markdown API: `/help`, `/active`, `/query`, `/validate`, `/stats`, `/wiki/:slug`, `/search`, `/add`; R1 JSON/SSE API: `/api/v1/sessions/active`, `/api/v1/sessions/events`, `/api/v1/cost/by-session`, `/api/v1/cost/by-message`.
 
 ### `src/brain.ts`
 

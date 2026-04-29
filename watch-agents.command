@@ -1,9 +1,9 @@
 #!/bin/zsh
 # Double-click to keep the Active Agents dashboard live while you work.
-# Runs all three importers every 30 seconds. Close this window to stop.
+# Runs all three importers every 1 second. Close this window to stop.
 #
 # Pair with run.command (starts the API) — dashboard lives at
-# http://localhost:3000/active-ui.
+# http://localhost:3000/monitor.
 
 set -u
 
@@ -18,11 +18,11 @@ if ! command -v bun >/dev/null 2>&1; then
   exit 1
 fi
 
-INTERVAL=30
+INTERVAL=1
 
 echo "🔁 Watching agent sessions every ${INTERVAL}s."
 echo "   Close this window to stop."
-echo "   Dashboard: http://localhost:3000/active-ui"
+echo "   Dashboard: http://localhost:3000/monitor"
 echo
 
 while true; do

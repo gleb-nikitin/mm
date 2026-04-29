@@ -170,7 +170,7 @@ function buildPrompt(tmpRoot: string): string {
 }
 
 function runLibrarian(tmpRoot: string, prompt: string) {
-  const res = spawnSync('gemini', [`-i=${prompt}`, '--yolo'], {
+  const res = spawnSync('gemini', [`-p=${prompt}`, '--yolo'], {
     cwd: REPO,
     env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
     stdio: ['ignore', 'inherit', 'inherit'],

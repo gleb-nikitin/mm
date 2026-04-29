@@ -88,7 +88,7 @@ Mnemonic51 is set up as a public-style project:
 - README at root
 - `agent/` strictly for agent material
 - runtime-generated reports out of version control
-- `run.command` / `kill.command` for one-click start/stop on macOS
+- `run.command` for one-click start/stop on macOS
 
 What's still an owner decision, not a devops one:
 
