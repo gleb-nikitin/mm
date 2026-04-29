@@ -11,3 +11,4 @@
 - **2026-04-29**: feat(r1): add Tokens by Participant monitor and API
 - **2026-04-29**: chore: simplify run/watch command hygiene and fix gemini flag
 - **2026-04-29**: chore: simplify run/watch command hygiene and fix gemini flag
+- **2026-04-29**: feat(r1): codex+gemini cached-subset pricing and JSONL ingest

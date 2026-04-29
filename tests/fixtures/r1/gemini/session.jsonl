@@ -1,0 +1,4 @@
+{"type": "user", "content": "hello", "timestamp": "2026-04-22T10:01:00Z"}
+{"type": "gemini", "content": "hi there", "timestamp": "2026-04-22T10:01:05Z", "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "cachedContentTokenCount": 0}}
+{"type": "user", "content": "how are you?", "timestamp": "2026-04-22T10:02:00Z"}
+{"type": "gemini", "content": "I am good", "timestamp": "2026-04-22T10:02:05Z", "usageMetadata": {"promptTokenCount": 20, "candidatesTokenCount": 10, "cachedContentTokenCount": 5, "thoughtsTokenCount": 2}}

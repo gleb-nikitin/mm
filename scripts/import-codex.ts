@@ -213,6 +213,12 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
       continue;
     }
 
+    if (recordType === 'turn_context') {
+      if (!cwd && typeof payload.cwd === 'string' && payload.cwd) cwd = payload.cwd;
+      if (!model && typeof payload.model === 'string' && payload.model) model = payload.model;
+      continue;
+    }
+
     if (recordType === 'event_msg' && payload.type === 'user_message') {
       const message = typeof payload.message === 'string' ? payload.message.trim() : '';
       if (message) {

@@ -6,6 +6,7 @@ import type { CostBreakdown, CostLineType, PricedUsage, PricingSource, TokenUsag
 type RateTable = Record<Vendor, Record<string, Partial<Record<CostLineType, number>>>>;
 
 const DEFAULT_LINE_TYPES: CostLineType[] = ['input', 'output', 'cached', 'reasoning'];
+const CODEX_LINE_TYPES: CostLineType[] = ['input', 'cached', 'output'];
 const CLAUDE_LINE_TYPES: CostLineType[] = ['input', 'output', 'cache_creation_5m', 'cache_creation_1h', 'cache_read', 'reasoning'];
 const RATE_TYPES: CostLineType[] = ['input', 'output', 'cached', 'reasoning', 'cache_creation_5m', 'cache_creation_1h', 'cache_read'];
 const DEFAULT_PRICING_PATH = path.resolve(new URL('../../pricing.toml', import.meta.url).pathname);
@@ -118,7 +119,8 @@ export function stopPricingWatcherForTests(): void {
   initialized = false;
 }
 
-function tokensForLine(usage: TokenUsage, type: CostLineType): number {
+function tokensForLine(vendor: Vendor, usage: TokenUsage, type: CostLineType): number {
+  if ((vendor === 'codex' || vendor === 'gemini') && type === 'input') return Math.max(0, usage.input - usage.cached);
   if (type === 'cache_creation_5m') return usage.cache_creation_5m ?? 0;
   if (type === 'cache_creation_1h') return usage.cache_creation_1h ?? 0;
   if (type === 'cache_read') return usage.cache_read ?? usage.cached;
@@ -126,6 +128,9 @@ function tokensForLine(usage: TokenUsage, type: CostLineType): number {
 }
 
 function lineTypesFor(vendor: Vendor, usage: TokenUsage): CostLineType[] {
+  if (vendor === 'codex') {
+    return CODEX_LINE_TYPES;
+  }
   if (vendor === 'claude') {
     return CLAUDE_LINE_TYPES;
   }
@@ -141,7 +146,7 @@ function unknownBreakdown(vendor: Vendor, model: string | null, usage: TokenUsag
       source: 'unknown',
       lines: lineTypes.map(type => ({
         type,
-        tokens: tokensForLine(usage, type),
+        tokens: tokensForLine(vendor, usage, type),
         rate: null,
         cost: null,
       })),
@@ -161,9 +166,9 @@ export function priceUsage(vendor: Vendor, model: string | null, usage: TokenUsa
   const lines = lineTypesFor(vendor, usage).map(type => {
     const rate = rates[type];
     if (typeof rate !== 'number') {
-      return { type, tokens: tokensForLine(usage, type), rate: null, cost: null };
+      return { type, tokens: tokensForLine(vendor, usage, type), rate: null, cost: null };
     }
-    const tokens = tokensForLine(usage, type);
+    const tokens = tokensForLine(vendor, usage, type);
     return { type, tokens, rate, cost: lineCost(tokens, rate) };
   });
   if (lines.some(line => line.rate === null || line.cost === null)) {

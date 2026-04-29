@@ -26,7 +26,7 @@ describe('R1 pricing', () => {
     stopPricingWatcherForTests();
   });
 
-  test('loads TOML and computes four-line token pricing', () => {
+  test('prices Codex cached input as a subset of input tokens', () => {
     const file = tmpPricingFile(`
 [codex."codex-test"]
 input = 10
@@ -41,13 +41,41 @@ reasoning = 20
       cached: 100_000,
       reasoning: 25_000,
     });
-    expect(priced.cost_usd).toBe(20.6);
+    expect(priced.cost_usd).toBe(19.1);
     expect(priced.cost_breakdown.source).toBe('pricing.toml');
     expect(priced.cost_breakdown.lines).toEqual([
-      { type: 'input', tokens: 1_000_000, rate: 10, cost: 10 },
-      { type: 'output', tokens: 500_000, rate: 20, cost: 10 },
+      { type: 'input', tokens: 900_000, rate: 10, cost: 9 },
       { type: 'cached', tokens: 100_000, rate: 1, cost: 0.1 },
-      { type: 'reasoning', tokens: 25_000, rate: 20, cost: 0.5 },
+      { type: 'output', tokens: 500_000, rate: 20, cost: 10 },
+    ]);
+  });
+
+  test('prices Gemini cached input as a subset of input tokens', () => {
+    const file = tmpPricingFile(`
+[gemini."gemini-test"]
+input = 0.5
+output = 3.0
+cached = 0.05
+reasoning = 3.0
+`);
+    configurePricingFile(file, { watch: false });
+    const priced = priceUsage('gemini', 'gemini-test', {
+      input: 1_000_000,
+      output: 500_000,
+      cached: 200_000,
+      reasoning: 50_000,
+    });
+    // input cost: (1,000,000 - 200,000) * 0.5 / 1,000,000 = 0.4
+    // cached cost: 200,000 * 0.05 / 1,000,000 = 0.01
+    // output cost: 500,000 * 3.0 / 1,000,000 = 1.5
+    // reasoning cost: 50,000 * 3.0 / 1,000,000 = 0.15
+    // total: 0.4 + 0.01 + 1.5 + 0.15 = 2.06
+    expect(priced.cost_usd).toBe(2.06);
+    expect(priced.cost_breakdown.lines).toEqual([
+      { type: 'input', tokens: 800_000, rate: 0.5, cost: 0.4 },
+      { type: 'output', tokens: 500_000, rate: 3.0, cost: 1.5 },
+      { type: 'cached', tokens: 200_000, rate: 0.05, cost: 0.01 },
+      { type: 'reasoning', tokens: 50_000, rate: 3.0, cost: 0.15 },
     ]);
   });
 
@@ -117,14 +145,13 @@ reasoning = 25
   test('unknown model keeps token counts visible with null cost', () => {
     const file = tmpPricingFile(`[codex."known"]\ninput = 1\noutput = 1\ncached = 1\nreasoning = 1\n`);
     configurePricingFile(file, { watch: false });
-    const priced = priceUsage('codex', 'missing', { input: 10, output: 20, cached: 30, reasoning: 40 });
+    const priced = priceUsage('codex', 'missing', { input: 100, output: 20, cached: 30, reasoning: 40 });
     expect(priced.cost_usd).toBeNull();
     expect(priced.cost_breakdown.source).toBe('unknown');
     expect(priced.cost_breakdown.lines).toEqual([
-      { type: 'input', tokens: 10, rate: null, cost: null },
-      { type: 'output', tokens: 20, rate: null, cost: null },
+      { type: 'input', tokens: 70, rate: null, cost: null },
       { type: 'cached', tokens: 30, rate: null, cost: null },
-      { type: 'reasoning', tokens: 40, rate: null, cost: null },
+      { type: 'output', tokens: 20, rate: null, cost: null },
     ]);
   });
 

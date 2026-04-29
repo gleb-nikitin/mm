@@ -380,6 +380,104 @@ describe('R1 session linkage index', () => {
     }
   });
 
+  test('Codex importer reads model from turn_context and prices cached tokens once', () => {
+    const importRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mm-r1-import-codex-'));
+    const importAcDbPath = path.join(importRoot, 'ac-msg.db');
+    const codexDir = path.join(importRoot, 'codex-sessions');
+    const dayDir = path.join(codexDir, '2026', '04', '22');
+    const sessionFile = path.join(dayDir, 'rollout-codex-modern.jsonl');
+    fs.mkdirSync(dayDir, { recursive: true });
+
+    try {
+      fs.writeFileSync(sessionFile, [
+        {
+          timestamp: '2026-04-22T10:00:00Z',
+          type: 'session_meta',
+          payload: { id: 'sess-codex-import', cwd: '/Users/test/work/mm' },
+        },
+        {
+          timestamp: '2026-04-22T10:00:01Z',
+          type: 'turn_context',
+          payload: { cwd: '/Users/test/work/mm', model: 'gpt-5.4' },
+        },
+        {
+          timestamp: '2026-04-22T10:00:02Z',
+          type: 'event_msg',
+          payload: { type: 'user_message', message: 'hello codex' },
+        },
+        {
+          timestamp: '2026-04-22T10:00:03Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'hello user' }],
+          },
+        },
+        {
+          timestamp: '2026-04-22T10:00:04Z',
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: {
+              total_token_usage: {
+                input_tokens: 1000,
+                cached_input_tokens: 200,
+                output_tokens: 50,
+                reasoning_output_tokens: 10,
+                total_tokens: 1050,
+              },
+            },
+          },
+        },
+      ].map(row => JSON.stringify(row)).join('\n') + '\n');
+      const aged = (Date.now() - 10 * 60 * 1000) / 1000;
+      fs.utimesSync(sessionFile, aged, aged);
+
+      const acDb = makeAcShapeDb(importAcDbPath);
+      acDb.exec(`INSERT INTO participants (id, project, role) VALUES ('mm_devops', 'mm', 'devops')`);
+      acDb.exec(`INSERT INTO llm_sessions (id, participant_id, is_active) VALUES ('sess-codex-import', 'mm_devops', 0)`);
+      acDb.close();
+
+      const imported = Bun.spawnSync({
+        cmd: ['bun', 'scripts/import-codex.ts', '--sessions-dir', codexDir, '--days', '365', '--force', '--min-turns', '1', '--min-age-seconds', '0'],
+        cwd: REPO,
+        env: { ...process.env, MT_BRAIN_ROOT: importRoot, MT_AC_DB_PATH: importAcDbPath },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      expect(imported.exitCode).toBe(0);
+
+      const db = new Database(path.join(importRoot, 'meta', 'brain.db'));
+      const session = db.prepare(`SELECT vendor, session_id, participant_id, model FROM session_index`).get() as any;
+      const usage = db.prepare(`SELECT input_tokens, output_tokens, cached_tokens, reasoning_tokens, cost_usd, pricing_source, cost_breakdown FROM session_usage`).get() as any;
+      expect(session).toEqual({
+        vendor: 'codex',
+        session_id: 'sess-codex-import',
+        participant_id: 'mm_devops',
+        model: 'gpt-5.4',
+      });
+      const breakdown = JSON.parse(usage.cost_breakdown);
+      delete usage.cost_breakdown;
+      expect(usage).toEqual({
+        input_tokens: 1000,
+        output_tokens: 50,
+        cached_tokens: 200,
+        reasoning_tokens: 10,
+        cost_usd: 0.0028,
+        pricing_source: 'pricing.toml',
+      });
+      expect(breakdown.lines).toEqual([
+        { type: 'input', tokens: 800, rate: 2.5, cost: 0.002 },
+        { type: 'cached', tokens: 200, rate: 0.25, cost: 0.00005 },
+        { type: 'output', tokens: 50, rate: 15, cost: 0.00075 },
+      ]);
+      db.close();
+    } finally {
+      fs.rmSync(importRoot, { recursive: true, force: true });
+    }
+  });
+
   test('backfill migrates old raw_events external_id before changed importer pass', () => {
     const claudeDir = path.join(tmpRoot, 'claude-projects');
     const projectDir = path.join(claudeDir, '-Users-test-mm');

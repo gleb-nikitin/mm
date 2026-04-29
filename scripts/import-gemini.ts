@@ -146,7 +146,7 @@ function collectSessionFiles(root: string): string[] {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         stack.push(fullPath);
-      } else if (entry.isFile() && /^session-.*\.json$/.test(entry.name)) {
+      } else if (entry.isFile() && /^session-.*\.(json|jsonl)$/.test(entry.name)) {
         out.push(fullPath);
       }
     }
@@ -188,64 +188,92 @@ function extractThinkingText(thoughts: GeminiMessage['thoughts']): string[] {
 
 function parseSessionFile(filePath: string, includeThinking: boolean): Session | null {
   const raw = fs.readFileSync(filePath, 'utf-8');
-  const parsed = JSON.parse(raw) as GeminiSessionFile;
-  if (!parsed.sessionId) return null;
+  let parsed: GeminiSessionFile;
+  let lines: any[] = [];
+  try {
+    parsed = JSON.parse(raw);
+    lines = [parsed];
+  } catch {
+    // Try JSONL
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        lines.push(JSON.parse(trimmed));
+      } catch {
+        continue;
+      }
+    }
+    if (lines.length === 0) return null;
+    // For JSONL, we pick the first record to find sessionId, or fallback to filename
+    parsed = lines[0];
+  }
 
+  const sessionId = parsed.sessionId || path.basename(filePath).replace(/^session-/, '').replace(/\.(json|jsonl)$/, '') || 'unknown';
   const project = projectFromFilePath(filePath);
   const turns: Turn[] = [];
   let model: string | null = null;
+  let startTime = typeof parsed.startTime === 'string' ? parsed.startTime : '';
+  let lastUpdated = typeof parsed.lastUpdated === 'string' ? parsed.lastUpdated : '';
 
-  for (const message of parsed.messages || []) {
-    const type = message?.type;
-    const timestamp =
-      typeof message?.timestamp === 'string' ? message.timestamp :
-      typeof parsed.lastUpdated === 'string' ? parsed.lastUpdated :
-      typeof parsed.startTime === 'string' ? parsed.startTime :
-      '';
+  for (const rec of lines) {
+    const messages = Array.isArray(rec.messages) ? rec.messages : [rec];
+    for (const message of messages) {
+      const type = message?.type;
+      const timestamp =
+        typeof message?.timestamp === 'string' ? message.timestamp :
+        typeof rec.timestamp === 'string' ? rec.timestamp :
+        typeof rec.lastUpdated === 'string' ? rec.lastUpdated :
+        typeof rec.startTime === 'string' ? rec.startTime :
+        '';
 
-    if (type === 'user') {
-      const text = extractUserText(message.content);
-      if (!text) continue;
-      turns.push({
-        role: 'user',
-        timestamp,
-        blocks: [{ kind: 'text', text }],
-      });
-      continue;
-    }
+      if (!startTime && typeof rec.startTime === 'string') startTime = rec.startTime;
+      if (typeof rec.lastUpdated === 'string') lastUpdated = rec.lastUpdated;
 
-    if (type === 'gemini') {
-      if (!model && typeof message.model === 'string' && message.model.trim()) {
-        model = message.model.trim();
+      if (type === 'user') {
+        const text = extractUserText(message.content);
+        if (!text) continue;
+        turns.push({
+          role: 'user',
+          timestamp,
+          blocks: [{ kind: 'text', text }],
+        });
+        continue;
       }
-      const blocks: Block[] = [];
-      if (includeThinking) {
-        for (const thought of extractThinkingText(message.thoughts)) {
-          blocks.push({ kind: 'thinking', text: thought });
+
+      if (type === 'gemini' || message?.usageMetadata) {
+        if (!model && typeof message.model === 'string' && message.model.trim()) {
+          model = message.model.trim();
         }
+        const blocks: Block[] = [];
+        if (includeThinking) {
+          for (const thought of extractThinkingText(message.thoughts)) {
+            blocks.push({ kind: 'thinking', text: thought });
+          }
+        }
+        const text = typeof message.content === 'string' ? message.content.trim() : '';
+        if (text) blocks.push({ kind: 'text', text });
+        if (blocks.length === 0 && !message?.usageMetadata) continue;
+        turns.push({
+          role: 'assistant',
+          timestamp,
+          blocks,
+        });
+        continue;
       }
-      const text = typeof message.content === 'string' ? message.content.trim() : '';
-      if (text) blocks.push({ kind: 'text', text });
-      if (blocks.length === 0) continue;
-      turns.push({
-        role: 'assistant',
-        timestamp,
-        blocks,
-      });
-      continue;
     }
-
-    if (type === 'info') continue;
   }
+
+  if (turns.length === 0) return null;
 
   turns.sort((a, b) => (a.timestamp > b.timestamp ? 1 : a.timestamp < b.timestamp ? -1 : 0));
   return {
-    sessionId: parsed.sessionId,
+    sessionId,
     project,
     model,
     turns,
-    startTime: typeof parsed.startTime === 'string' ? parsed.startTime : '',
-    lastUpdated: typeof parsed.lastUpdated === 'string' ? parsed.lastUpdated : '',
+    startTime,
+    lastUpdated,
   };
 }
 
