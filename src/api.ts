@@ -7,7 +7,7 @@ import {
 } from './core.ts';
 import { getActiveAgentsLive } from './session-probe.ts';
 import { filterMechanical } from './narrative.ts';
-import { apiError, handleActiveSessions, handleCostByMessage, handleCostBySession, handleSessionEvents, handleTokensByParticipant } from './r1/api.ts';
+import { apiError, handleActiveSessions, handleActiveTokens, handleCostByMessage, handleCostBySession, handleSessionEvents, handleTokensByParticipant } from './r1/api.ts';
 
 // Ensure DB is ready on fresh roots
 initDb();
@@ -53,6 +53,7 @@ Endpoints:
 - \`/api/v1/cost/by-session?session_id=&vendor=\`: JSON token and cost attribution for one session.
 - \`/api/v1/cost/by-message?chain_msg_id=\`: JSON token and cost attribution via message linkage.
 - \`/api/v1/tokens/by-participant?participant_id=&since=&until=&window=&vendor=\`: JSON token totals by participant; omit participant_id for all participants.
+- \`/api/v1/tokens/active?project=&role=&state=&vendor=\`: JSON list of active sessions with latest-turn context-window fill (ac-style) plus cumulative cost. Default state filter: working/idle/wedged. Drives relaunch decisions.
 - \`/brief?project=<slug>\`: CTO session-start preamble — artifacts, active agents, health (markdown).
 - \`/query?q=<question>[&source=a,b&project=x,y]\`: Ask a synthesis question, optionally scoped.
 - \`/validate?q=<claim>\`: Fact-check a specific claim.
@@ -158,6 +159,9 @@ const server = Bun.serve({
     }
     if (url.pathname === "/api/v1/tokens/by-participant") {
       return handleTokensByParticipant(url);
+    }
+    if (url.pathname === "/api/v1/tokens/active") {
+      return handleActiveTokens(url);
     }
 
     if (url.pathname.startsWith("/api/v1/")) {

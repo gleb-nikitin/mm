@@ -42,6 +42,52 @@ function readJsonl(filePath: string): any[] {
   return records;
 }
 
+/**
+ * Latest-turn context-window fill for a Claude session.
+ *
+ * Each assistant message's `usage` reports the cumulative context size for
+ * that turn — `input_tokens`, `cache_creation_input_tokens`, and
+ * `cache_read_input_tokens` are non-overlapping. The last assistant message
+ * with usage represents current context occupancy. Drives relaunch-decision
+ * signals; not for billing.
+ *
+ * Mirrors ac's session-tracker (battle-tested):
+ *   total = input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+ *
+ * Distinct from extractClaudeTokenUsage, which sums per response for cost.
+ */
+export function extractClaudeContextWindow(filePath: string, sessionId: string): number {
+  let total = 0;
+  for (const rec of readJsonl(filePath)) {
+    if (rec?.sessionId !== sessionId || rec?.type !== 'assistant') continue;
+    const usage = rec?.message?.usage;
+    if (!usage || typeof usage !== 'object') continue;
+    total =
+      num(usage.input_tokens) +
+      num(usage.cache_creation_input_tokens) +
+      num(usage.cache_read_input_tokens);
+  }
+  return total;
+}
+
+/**
+ * Latest-turn context-window fill for a Codex session.
+ * TODO: pending implementation by the Codex agent. Returns null so the
+ * /tokens/active endpoint can surface "unknown context fill" cleanly.
+ */
+export function extractCodexContextWindow(_filePath: string): number | null {
+  return null;
+}
+
+/**
+ * Latest-turn context-window fill for a Gemini session.
+ * TODO: pending implementation by the Gemini agent. Returns null so the
+ * /tokens/active endpoint can surface "unknown context fill" cleanly.
+ */
+export function extractGeminiContextWindow(_filePath: string): number | null {
+  return null;
+}
+
 export function extractClaudeTokenUsage(filePath: string, sessionId: string): TokenUsage {
   const usageByResponse = new Map<string, TokenUsage>();
   let anonymousIndex = 0;
@@ -148,11 +194,33 @@ function geminiUsageFromMessage(message: any): TokenUsage {
 }
 
 export function extractGeminiTokenUsage(filePath: string): TokenUsage {
-  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  const content = fs.readFileSync(filePath, 'utf-8');
+  let records: any[] = [];
+  try {
+    records = [JSON.parse(content)];
+  } catch {
+    // Fallback to JSONL: each line is either a session or a message
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        records.push(JSON.parse(trimmed));
+      } catch {
+        continue;
+      }
+    }
+  }
+
   let total = zeroUsage();
-  for (const message of parsed?.messages || []) {
-    if (message?.type !== 'gemini' && !message?.usageMetadata) continue;
-    total = add(total, geminiUsageFromMessage(message));
+  for (const rec of records) {
+    if (Array.isArray(rec?.messages)) {
+      for (const message of rec.messages) {
+        if (message?.type !== 'gemini' && !message?.usageMetadata) continue;
+        total = add(total, geminiUsageFromMessage(message));
+      }
+    } else if (rec?.type === 'gemini' || rec?.usageMetadata) {
+      total = add(total, geminiUsageFromMessage(rec));
+    }
   }
   return total;
 }

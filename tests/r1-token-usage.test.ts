@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import * as path from 'path';
-import { extractClaudeTokenUsage, extractCodexTokenUsage, extractGeminiTokenUsage } from '../src/r1/token-usage.ts';
+import {
+  extractClaudeContextWindow,
+  extractClaudeTokenUsage,
+  extractCodexContextWindow,
+  extractCodexTokenUsage,
+  extractGeminiContextWindow,
+  extractGeminiTokenUsage,
+} from '../src/r1/token-usage.ts';
 
 const FIXTURES = path.join(import.meta.dir, 'fixtures', 'r1');
 
@@ -54,5 +61,37 @@ describe('R1 token usage extraction', () => {
       cached: 12,
       reasoning: 7,
     });
+  });
+
+  test('Gemini sums tokens from JSONL records', () => {
+    expect(extractGeminiTokenUsage(path.join(FIXTURES, 'gemini', 'session.jsonl'))).toEqual({
+      input: 30,    // 10 + 20
+      output: 15,   // 5 + 10
+      cached: 5,    // 0 + 5
+      reasoning: 2, // 0 + 2
+    });
+  });
+
+  test('Claude context window returns the latest assistant message usage sum', () => {
+    // Single assistant with usage: 100 + 30 + 40 = 170. The follow-up
+    // record without usage must NOT reset to zero (mirrors ac's "if usage
+    // present, overwrite" semantics). Other-session records are ignored.
+    expect(extractClaudeContextWindow(path.join(FIXTURES, 'claude', 'session.jsonl'), 'claude-fixture')).toBe(170);
+  });
+
+  test('Claude context window picks the last response across streamed records', () => {
+    // msg_1 streamed twice (10+30+40=80), then msg_2 (5+0+11=16). Last
+    // wins → 16. Same dedup-tolerance as the cumulative extractor, but
+    // selecting last instead of summing all.
+    expect(extractClaudeContextWindow(path.join(FIXTURES, 'claude', 'duplicate-usage.jsonl'), 'claude-duplicate')).toBe(16);
+  });
+
+  test('Claude context window returns zero for sessions with no matching records', () => {
+    expect(extractClaudeContextWindow(path.join(FIXTURES, 'claude', 'session.jsonl'), 'no-such-session')).toBe(0);
+  });
+
+  test('Codex / Gemini context-window stubs return null pending vendor implementations', () => {
+    expect(extractCodexContextWindow(path.join(FIXTURES, 'codex', 'repeated-token-count.jsonl'))).toBeNull();
+    expect(extractGeminiContextWindow(path.join(FIXTURES, 'gemini', 'session.jsonl'))).toBeNull();
   });
 });

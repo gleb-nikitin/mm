@@ -6,6 +6,11 @@ import {
   listSessionsBySessionId,
 } from './session-index.ts';
 import {
+  extractClaudeContextWindow,
+  extractCodexContextWindow,
+  extractGeminiContextWindow,
+} from './token-usage.ts';
+import {
   formatSseEvent,
   matchesSessionEventFilter,
   replaySessionEvents,
@@ -352,6 +357,67 @@ export function handleCostByMessage(url: URL): Response {
       ...rowToCostResponse(row.usage),
       chain_msg_id: chainMsgId,
       link_confidence: row.link.confidence,
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return apiError('validation', error.message, error.details ?? {}, 400);
+    }
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return apiError('internal', 'Internal server error', { message }, 500);
+  }
+}
+
+function contextTokensFor(vendor: Vendor, sourcePath: string, sessionId: string): number | null {
+  try {
+    if (vendor === 'claude') return extractClaudeContextWindow(sourcePath, sessionId);
+    if (vendor === 'codex') return extractCodexContextWindow(sourcePath);
+    if (vendor === 'gemini') return extractGeminiContextWindow(sourcePath);
+    return null;
+  } catch {
+    // Source file may have rotated, been deleted, or be mid-write. Fall
+    // through to null — caller renders "unknown context fill".
+    return null;
+  }
+}
+
+/**
+ * Compact view for relaunch-decision signals: one row per linked active
+ * session with current context-window fill (latest-turn, ac-style) and
+ * cumulative cost. Only sessions with a participant_id and an active state
+ * (working / idle / wedged by default) are returned.
+ */
+export function handleActiveTokens(url: URL): Response {
+  try {
+    const generatedAt = new Date();
+    const projects = parseFilter(url.searchParams.get('project'));
+    const roles = parseFilter(url.searchParams.get('role'));
+    const stateFilter = parseFilter(url.searchParams.get('state'), STATES) as SessionState[] | null;
+    const states = stateFilter ?? DEFAULT_ACTIVE_STATES;
+    const vendor = parseSingleVendor(url.searchParams.get('vendor'));
+
+    const rows = listActiveSessions({ projects, roles, states });
+    const participants = rows
+      .filter(row => row.participant_id !== null)
+      .filter(row => !vendor || row.vendor === vendor)
+      .map(row => {
+        const tokens = contextTokensFor(row.vendor, row.source_path, row.session_id);
+        const usage = getSessionUsage(row.vendor, row.session_id);
+        return {
+          participant_id: row.participant_id,
+          project_role: row.project_role,
+          vendor: row.vendor,
+          model: row.model,
+          session_id: row.session_id,
+          tokens,
+          cost_usd: usage?.cost_usd ?? null,
+          state: row.state,
+          last_activity_at: row.last_activity_at,
+        };
+      });
+
+    return json({
+      participants,
+      generated_at: generatedAt.toISOString(),
     });
   } catch (error) {
     if (error instanceof ValidationError) {
