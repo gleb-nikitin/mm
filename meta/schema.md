@@ -14,7 +14,7 @@ The agent should treat markdown as the source of truth. SQLite is an index and j
 
 `schema_version` is currently `14`.
 
-Session transcript importers write one `raw_events` row per vendor session with a vendor-prefixed `external_id` such as `claude:<session_id>`, `codex:<session_id>`, or `gemini:<session_id>`. `import_state.external_id` keeps the raw vendor session id so the Active Agents surface and ac `llm_sessions.id` matching remain compatible.
+Session transcript importers write one `raw_events` row per vendor session with a vendor-prefixed `external_id` such as `claude:<session_id>`, `codex:<session_id>`, or `gemini:<session_id>`. `import_state.external_id` keeps the raw vendor session id so the Active Agents surface and ac `participants.active_session_id` matching remain compatible.
 
 R1 session tracking adds four derived tables:
 

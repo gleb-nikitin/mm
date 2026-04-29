@@ -39,13 +39,12 @@ export function resolveSessionLinks(sessionIds: string[]): SessionLinkResolution
     const placeholders = sessionIds.map(() => '?').join(',');
     const rows = acDb.prepare(
       `SELECT
-         s.id AS session_id,
-         s.participant_id AS participant_id,
+         p.active_session_id AS session_id,
+         p.id AS participant_id,
          p.project AS project,
          p.role AS role
-       FROM llm_sessions s
-       LEFT JOIN participants p ON p.id = s.participant_id
-       WHERE s.id IN (${placeholders})`
+       FROM participants p
+       WHERE p.active_session_id IN (${placeholders})`
     ).all(...sessionIds) as Array<{
       session_id: string;
       participant_id: string | null;

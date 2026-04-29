@@ -329,7 +329,9 @@ export function resolveParticipantIds(externalIds: string[]): Map<string, string
     acDb = new Database(acDbPath, { readonly: true });
     const placeholders = externalIds.map(() => '?').join(',');
     const rows = acDb.prepare(
-      `SELECT id, participant_id FROM llm_sessions WHERE is_active = 1 AND id IN (${placeholders})`
+      `SELECT active_session_id AS id, id AS participant_id
+       FROM participants
+       WHERE active_session_id IN (${placeholders})`
     ).all(...externalIds) as Array<{ id: string; participant_id: string }>;
     for (const row of rows) {
       if (row.participant_id) result.set(row.id, row.participant_id);

@@ -14,15 +14,8 @@ function makeAcShapeDb(dbPath: string): Database {
   db.exec(`CREATE TABLE participants (
     id TEXT PRIMARY KEY,
     project TEXT NOT NULL,
-    role TEXT NOT NULL
-  )`);
-  db.exec(`CREATE TABLE llm_sessions (
-    id TEXT PRIMARY KEY,
-    participant_id TEXT NOT NULL REFERENCES participants(id),
-    is_active INTEGER NOT NULL DEFAULT 0,
-    label TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    role TEXT NOT NULL,
+    active_session_id TEXT
   )`);
   return db;
 }
@@ -59,10 +52,9 @@ describe('R1 session linkage index', () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  test('resolveSessionLinks reads inactive ac llm_sessions rows', () => {
+  test('resolveSessionLinks ignores sessions that are not currently active in ac participants', () => {
     const acDb = makeAcShapeDb(acDbPath);
-    acDb.exec(`INSERT INTO participants (id, project, role) VALUES ('mm_cto', 'mm', 'cto')`);
-    acDb.exec(`INSERT INTO llm_sessions (id, participant_id, is_active) VALUES ('sess-inactive', 'mm_cto', 0)`);
+    acDb.exec(`INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_cto', 'mm', 'cto', null)`);
     acDb.close();
 
     const saved = process.env.MT_AC_DB_PATH;
@@ -70,12 +62,9 @@ describe('R1 session linkage index', () => {
     try {
       const out = resolveSessionLinks(['sess-inactive']);
       expect(out.acDbAvailable).toBe(true);
-      expect(out.links.get('sess-inactive')).toEqual({
-        participant_id: 'mm_cto',
-        project: 'mm',
-        role: 'cto',
-        project_role: 'mm/cto',
-      });
+      // ac no longer stores inactive session history in msg.db; mm can only
+      // resolve the participant whose active_session_id matches the import.
+      expect(out.links.has('sess-inactive')).toBe(false);
     } finally {
       if (saved === undefined) delete process.env.MT_AC_DB_PATH;
       else process.env.MT_AC_DB_PATH = saved;
@@ -323,8 +312,7 @@ describe('R1 session linkage index', () => {
       writeSession(200);
 
       const acDb = makeAcShapeDb(importAcDbPath);
-      acDb.exec(`INSERT INTO participants (id, project, role) VALUES ('mm_devops', 'mm', 'devops')`);
-      acDb.exec(`INSERT INTO llm_sessions (id, participant_id, is_active) VALUES ('sess-claude-import', 'mm_devops', 0)`);
+      acDb.exec(`INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_devops', 'mm', 'devops', 'sess-claude-import')`);
       acDb.close();
 
       const imported = Bun.spawnSync({
@@ -435,8 +423,7 @@ describe('R1 session linkage index', () => {
       fs.utimesSync(sessionFile, aged, aged);
 
       const acDb = makeAcShapeDb(importAcDbPath);
-      acDb.exec(`INSERT INTO participants (id, project, role) VALUES ('mm_devops', 'mm', 'devops')`);
-      acDb.exec(`INSERT INTO llm_sessions (id, participant_id, is_active) VALUES ('sess-codex-import', 'mm_devops', 0)`);
+      acDb.exec(`INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_devops', 'mm', 'devops', 'sess-codex-import')`);
       acDb.close();
 
       const imported = Bun.spawnSync({

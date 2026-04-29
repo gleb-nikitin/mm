@@ -15,7 +15,7 @@ The current session importers — **`scripts/import-claude.ts`**, **`import-code
 
 Session cost attribution uses token counts extracted from the vendor transcript and rates from operator-editable **`pricing.toml`**. Re-running an importer recomputes the `session_usage` row from the current transcript rather than accumulating old totals.
 
-`raw_events.external_id` is vendor-prefixed (`claude:<session_id>`, `codex:<session_id>`, `gemini:<session_id>`) so global uniqueness survives cross-vendor session-id collisions. `import_state.external_id` intentionally remains the raw vendor session id because `/active` and ac `llm_sessions.id` matching depend on that raw id.
+`raw_events.external_id` is vendor-prefixed (`claude:<session_id>`, `codex:<session_id>`, `gemini:<session_id>`) so global uniqueness survives cross-vendor session-id collisions. `import_state.external_id` intentionally remains the raw vendor session id because `/active` and ac `participants.active_session_id` matching depend on that raw id.
 
 ```sh
 # Default: last 30 days, min user turns, no thinking blocks, etc.

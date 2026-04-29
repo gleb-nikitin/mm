@@ -18,10 +18,8 @@ function makeRoot(): string {
 function makeAcDb(filePath: string, sessionId: string): void {
   const db = new Database(filePath);
   db.exec(`
-    CREATE TABLE participants (id TEXT PRIMARY KEY, project TEXT, role TEXT);
-    CREATE TABLE llm_sessions (id TEXT PRIMARY KEY, participant_id TEXT, is_active INTEGER);
-    INSERT INTO participants (id, project, role) VALUES ('mm_devops', 'mm', 'devops');
-    INSERT INTO llm_sessions (id, participant_id, is_active) VALUES ('${sessionId}', 'mm_devops', 0);
+    CREATE TABLE participants (id TEXT PRIMARY KEY, project TEXT, role TEXT, active_session_id TEXT);
+    INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_devops', 'mm', 'devops', '${sessionId}');
   `);
   db.close();
 }
@@ -94,7 +92,7 @@ describe('R1 session state derivation', () => {
       expect(res.exitCode).toBe(0);
 
       const ac = new Database(acDb);
-      ac.prepare(`DELETE FROM llm_sessions`).run();
+      ac.prepare(`UPDATE participants SET active_session_id = null WHERE id = 'mm_devops'`).run();
       ac.close();
 
       const orphan = runEval(root, acDb, `

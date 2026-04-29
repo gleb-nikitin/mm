@@ -14,15 +14,8 @@ function makeAcShapeDb(dbPath: string): Database {
   db.exec(`CREATE TABLE participants (
     id TEXT PRIMARY KEY,
     project TEXT NOT NULL,
-    role TEXT NOT NULL
-  )`);
-  db.exec(`CREATE TABLE llm_sessions (
-    id TEXT PRIMARY KEY,
-    participant_id TEXT NOT NULL REFERENCES participants(id),
-    is_active INTEGER NOT NULL DEFAULT 0,
-    label TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    role TEXT NOT NULL,
+    active_session_id TEXT
   )`);
   return db;
 }
@@ -42,8 +35,7 @@ describe('resolveParticipantIds', () => {
   test('resolves active session id to participant_id', () => {
     const acDbPath = path.join(tmpDir, 'msg.db');
     const acDb = makeAcShapeDb(acDbPath);
-    acDb.exec(`INSERT INTO participants (id, project, role) VALUES ('mm_cto', 'mm', 'cto')`);
-    acDb.exec(`INSERT INTO llm_sessions (id, participant_id, is_active) VALUES ('sess-active-1', 'mm_cto', 1)`);
+    acDb.exec(`INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_cto', 'mm', 'cto', 'sess-active-1')`);
     acDb.close();
 
     process.env.MT_AC_DB_PATH = acDbPath;
@@ -52,11 +44,10 @@ describe('resolveParticipantIds', () => {
     expect(out.size).toBe(1);
   });
 
-  test('ignores inactive sessions', () => {
+  test('ignores participants without active_session_id', () => {
     const acDbPath = path.join(tmpDir, 'msg.db');
     const acDb = makeAcShapeDb(acDbPath);
-    acDb.exec(`INSERT INTO participants (id, project, role) VALUES ('mm_cto', 'mm', 'cto')`);
-    acDb.exec(`INSERT INTO llm_sessions (id, participant_id, is_active) VALUES ('sess-old', 'mm_cto', 0)`);
+    acDb.exec(`INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_cto', 'mm', 'cto', null)`);
     acDb.close();
 
     process.env.MT_AC_DB_PATH = acDbPath;
@@ -78,8 +69,7 @@ describe('resolveParticipantIds', () => {
   test('partial resolution: unknown ids are simply absent', () => {
     const acDbPath = path.join(tmpDir, 'msg.db');
     const acDb = makeAcShapeDb(acDbPath);
-    acDb.exec(`INSERT INTO participants (id, project, role) VALUES ('mm_cto', 'mm', 'cto')`);
-    acDb.exec(`INSERT INTO llm_sessions (id, participant_id, is_active) VALUES ('sess-known', 'mm_cto', 1)`);
+    acDb.exec(`INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_cto', 'mm', 'cto', 'sess-known')`);
     acDb.close();
 
     process.env.MT_AC_DB_PATH = acDbPath;
@@ -145,8 +135,7 @@ describe('resolveAcDbPath', () => {
     const workspacePath = path.join(pathTmp, 'workspace.db');
     // Prod has the live data
     const prodDb = makeAcShapeDb(prodPath);
-    prodDb.exec(`INSERT INTO participants (id, project, role) VALUES ('mm_cto', 'mm', 'cto')`);
-    prodDb.exec(`INSERT INTO llm_sessions (id, participant_id, is_active) VALUES ('sess-prod', 'mm_cto', 1)`);
+    prodDb.exec(`INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_cto', 'mm', 'cto', 'sess-prod')`);
     prodDb.close();
     // Workspace is empty (realistic: workspace DB exists but has no active sessions)
     const wsDb = makeAcShapeDb(workspacePath);
@@ -398,8 +387,7 @@ describe('getActiveAgentsLive', () => {
 
     const acDbPath = path.join(probeTmp, 'ac-msg.db');
     const acDb = makeAcShapeDb(acDbPath);
-    acDb.exec(`INSERT INTO participants (id, project, role) VALUES ('mm_cto', 'mm', 'cto')`);
-    acDb.exec(`INSERT INTO llm_sessions (id, participant_id, is_active) VALUES ('sess-linked', 'mm_cto', 1)`);
+    acDb.exec(`INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_cto', 'mm', 'cto', 'sess-linked')`);
     acDb.close();
     process.env.MT_AC_DB_PATH = acDbPath;
 

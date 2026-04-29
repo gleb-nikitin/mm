@@ -6,7 +6,7 @@
  * a single clean transcript, and inserts one row per session. `raw_events`
  * stores `external_id` as `codex:<session_id>` to avoid cross-vendor
  * collisions; `import_state.external_id` intentionally keeps the raw session
- * id so `/active` and ac `llm_sessions.id` matching stay compatible.
+ * id so `/active` and ac `participants.active_session_id` matching stays compatible.
  *
  * Search-visible immediately via `events_fts`. Ingestion into wiki is a
  * separate, later, targeted pass — this importer's job is only to land all
