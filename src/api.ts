@@ -135,6 +135,9 @@ const server = Bun.serve({
     if (url.pathname === "/monitor/tokens/by-participant") {
       return serveUiFile("/monitor-tokens-by-participant.html");
     }
+    if (url.pathname === "/monitor/tokens/active") {
+      return serveUiFile("/monitor-tokens-active.html");
+    }
     if (url.pathname === "/monitor/sessions/events") {
       return serveUiFile("/monitor-sessions-events.html");
     }
