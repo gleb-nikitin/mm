@@ -90,8 +90,18 @@ describe('R1 token usage extraction', () => {
     expect(extractClaudeContextWindow(path.join(FIXTURES, 'claude', 'session.jsonl'), 'no-such-session')).toBe(0);
   });
 
-  test('Codex / Gemini context-window stubs return null pending vendor implementations', () => {
+  test('Codex context-window stub returns null pending vendor implementation', () => {
     expect(extractCodexContextWindow(path.join(FIXTURES, 'codex', 'repeated-token-count.jsonl'))).toBeNull();
-    expect(extractGeminiContextWindow(path.join(FIXTURES, 'gemini', 'session.jsonl'))).toBeNull();
+  });
+
+  test('Gemini context window returns the last message prompt-token total (JSON shape)', () => {
+    // Two model messages; last one uses usageMetadata.promptTokenCount = 70.
+    // The earlier tokens.input = 50 is overwritten — last wins, no summing.
+    expect(extractGeminiContextWindow(path.join(FIXTURES, 'gemini', 'session.json'))).toBe(70);
+  });
+
+  test('Gemini context window returns the last message prompt-token total (JSONL shape)', () => {
+    // Two gemini lines; last has promptTokenCount = 20.
+    expect(extractGeminiContextWindow(path.join(FIXTURES, 'gemini', 'session.jsonl'))).toBe(20);
   });
 });

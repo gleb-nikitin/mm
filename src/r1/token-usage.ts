@@ -81,11 +81,56 @@ export function extractCodexContextWindow(_filePath: string): number | null {
 
 /**
  * Latest-turn context-window fill for a Gemini session.
- * TODO: pending implementation by the Gemini agent. Returns null so the
- * /tokens/active endpoint can surface "unknown context fill" cleanly.
+ *
+ * Per Gemini API semantics (confirmed by the Gemini agent):
+ *   - `usageMetadata.promptTokenCount` on a model message is the *total*
+ *     input tokens for that turn (history + current prompt).
+ *   - `cachedContentTokenCount` is a *subset* breakdown of promptTokenCount,
+ *     not additive. Don't sum.
+ *   - Legacy `tokens.input` field is the equivalent of promptTokenCount.
+ *
+ * Walks both the single-JSON-with-messages[] and JSONL shapes (mirrors
+ * `extractGeminiTokenUsage`). Returns the *last* model message's
+ * prompt-side total. Returns null if no usage data is present.
  */
-export function extractGeminiContextWindow(_filePath: string): number | null {
-  return null;
+export function extractGeminiContextWindow(filePath: string): number | null {
+  const content = fs.readFileSync(filePath, 'utf-8');
+  let records: any[] = [];
+  try {
+    records = [JSON.parse(content)];
+  } catch {
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        records.push(JSON.parse(trimmed));
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  let latest: number | null = null;
+  const visit = (message: any) => {
+    if (message?.tokens && typeof message.tokens === 'object' && typeof message.tokens.input === 'number') {
+      latest = num(message.tokens.input);
+      return;
+    }
+    if (message?.usageMetadata && typeof message.usageMetadata.promptTokenCount === 'number') {
+      latest = num(message.usageMetadata.promptTokenCount);
+    }
+  };
+  for (const rec of records) {
+    if (Array.isArray(rec?.messages)) {
+      for (const message of rec.messages) {
+        if (message?.type !== 'gemini' && !message?.usageMetadata) continue;
+        visit(message);
+      }
+    } else if (rec?.type === 'gemini' || rec?.usageMetadata) {
+      visit(rec);
+    }
+  }
+  return latest;
 }
 
 export function extractClaudeTokenUsage(filePath: string, sessionId: string): TokenUsage {
