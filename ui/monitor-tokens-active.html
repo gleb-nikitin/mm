@@ -219,8 +219,11 @@
     function renderTable(body) {
       if (body?.error) return renderError(body);
       const rows = Array.isArray(body?.participants) ? body.participants : [];
-      // Sort by tokens descending (highest context fill first → relaunch candidates on top).
-      const sorted = [...rows].sort((a, b) => (b.tokens ?? -1) - (a.tokens ?? -1));
+      const statePriority = { working: 0, idle: 1, wedged: 2, orphan: 3, completed: 4 };
+      const sorted = [...rows].sort((a, b) =>
+        (statePriority[a.state] ?? 99) - (statePriority[b.state] ?? 99)
+        || (b.tokens ?? -1) - (a.tokens ?? -1)
+      );
       const headers = ['participant_id','project_role','vendor','tokens','cost_usd','state','age','model','session_id']
         .map(h => `<th>${h}</th>`).join('');
       const tableRows = sorted.map(row => `

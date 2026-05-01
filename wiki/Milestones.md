@@ -14,3 +14,4 @@
 - **2026-05-01**: feat(r1): extend ac session resolution to valhalla_sessions (historical resolution)
 - **2026-05-01**: feat(r1): add sessions browser surface and transcript viewer
 - **2026-05-01**: feat(r1): add sessions browser surface and transcript viewer
+- **2026-05-01**: style(ui): group active tokens by state priority then token count
