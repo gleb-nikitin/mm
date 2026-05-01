@@ -89,8 +89,27 @@ function isoHoursAgo(hours: number): string {
 
 function seedCostFixtures(): void {
   const dbPath = path.join(tmpRoot, 'meta', 'brain.db');
+  const claudeContextPath = path.join(tmpRoot, 'claude-context.jsonl');
+  fs.writeFileSync(claudeContextPath, JSON.stringify({
+    sessionId: 'sess-mm-cto-working',
+    type: 'assistant',
+    timestamp: '2026-04-22T10:05:00Z',
+    message: {
+      usage: {
+        input_tokens: 50000,
+        cache_creation_input_tokens: 100000,
+        cache_read_input_tokens: 80550,
+      },
+    },
+  }) + '\n');
   const db = new Database(dbPath);
   try {
+    db.prepare(`
+      UPDATE session_index
+      SET source_path = ?
+      WHERE vendor = 'claude' AND session_id = 'sess-mm-cto-working'
+    `).run(claudeContextPath);
+
     const insertSession = db.prepare(`
       INSERT INTO session_index
         (vendor, session_id, source_path, participant_id, project, role,
@@ -581,7 +600,7 @@ describe('R1 active sessions API', () => {
         project_role: 'mm/cto',
         model: 'claude-opus-4-6',
         state: 'completed',
-        tokens: 1350,
+        tokens: null,
         cost_usd: 0.0113,
       });
 
@@ -595,7 +614,18 @@ describe('R1 active sessions API', () => {
 
       const tokens = await getJson(base, '/api/v1/sessions?sort=tokens:desc&limit=1');
       expect(tokens.status).toBe(200);
-      expect(tokens.body.sessions[0].tokens).toBe(1350);
+      expect(tokens.body.sessions[0]).toMatchObject({
+        session_id: 'sess-mm-cto-working',
+        tokens: 230550,
+        cost_usd: 0.0113,
+      });
+
+      const activeTokens = await getJson(base, '/api/v1/tokens/active?project=mm&role=cto&vendor=claude');
+      expect(activeTokens.status).toBe(200);
+      expect(activeTokens.body.participants[0]).toMatchObject({
+        session_id: 'sess-mm-cto-working',
+        tokens: tokens.body.sessions[0].tokens,
+      });
 
       const filtered = await getJson(base, '/api/v1/sessions?participant_id=mm_devops&project=mm&vendor=codex');
       expect(filtered.status).toBe(200);

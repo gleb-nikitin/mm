@@ -1,5 +1,6 @@
 import {
   aggregateUsageByParticipant,
+  contextTokensFor,
   getRawSessionEvents,
   getSessionByVendorAndId,
   getSessionUsage,
@@ -8,11 +9,6 @@ import {
   listSessions,
   listSessionsBySessionId,
 } from './session-index.ts';
-import {
-  extractClaudeContextWindow,
-  extractCodexContextWindow,
-  extractGeminiContextWindow,
-} from './token-usage.ts';
 import {
   formatSseEvent,
   matchesSessionEventFilter,
@@ -574,19 +570,6 @@ export function handleCostByMessage(url: URL): Response {
     }
     const message = error instanceof Error ? error.message : 'Unknown error';
     return apiError('internal', 'Internal server error', { message }, 500);
-  }
-}
-
-function contextTokensFor(vendor: Vendor, sourcePath: string, sessionId: string): number | null {
-  try {
-    if (vendor === 'claude') return extractClaudeContextWindow(sourcePath, sessionId);
-    if (vendor === 'codex') return extractCodexContextWindow(sourcePath);
-    if (vendor === 'gemini') return extractGeminiContextWindow(sourcePath);
-    return null;
-  } catch {
-    // Source file may have rotated, been deleted, or be mid-write. Fall
-    // through to null — caller renders "unknown context fill".
-    return null;
   }
 }
 

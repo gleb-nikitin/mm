@@ -4,6 +4,11 @@ import { recordMessageLink } from './message-link.ts';
 import { priceUsage } from './pricing.ts';
 import { recordStateTransition, notifySessionEvent } from './session-events.ts';
 import { deriveSessionState } from './session-state.ts';
+import {
+  extractClaudeContextWindow,
+  extractCodexContextWindow,
+  extractGeminiContextWindow,
+} from './token-usage.ts';
 import type {
   SessionIndexRow,
   SessionLink,
@@ -246,6 +251,19 @@ export function listActiveSessions(filter: ActiveSessionFilter = {}): SessionInd
     .slice(0, filter.limit ?? 50);
 }
 
+export function contextTokensFor(vendor: Vendor, sourcePath: string, sessionId: string): number | null {
+  try {
+    if (vendor === 'claude') return extractClaudeContextWindow(sourcePath, sessionId);
+    if (vendor === 'codex') return extractCodexContextWindow(sourcePath);
+    if (vendor === 'gemini') return extractGeminiContextWindow(sourcePath);
+    return null;
+  } catch {
+    // Source file may have rotated, been deleted, or be mid-write. Fall
+    // through to null; callers keep the session row visible.
+    return null;
+  }
+}
+
 export function listSessions(filter: SessionBrowserFilter = {}): SessionBrowserPage {
   const clauses: string[] = [];
   const params: any[] = [];
@@ -286,17 +304,21 @@ export function listSessions(filter: SessionBrowserFilter = {}): SessionBrowserP
   let rows = db.prepare(
     `SELECT
        si.*,
-       CASE
-         WHEN su.vendor IS NULL THEN NULL
-         ELSE COALESCE(su.input_tokens, 0) + COALESCE(su.output_tokens, 0) + COALESCE(su.cached_tokens, 0) + COALESCE(su.reasoning_tokens, 0)
-       END AS tokens,
        su.cost_usd AS cost_usd
      FROM session_index si
      LEFT JOIN session_usage su ON su.vendor = si.vendor AND su.session_id = si.session_id
      ${where}`
   ).all(...params) as SessionBrowserRow[];
 
-  rows = rows.map(row => ({ ...row, state: deriveStateForIndexRow(row, nowMs) }));
+  // Keep /api/v1/sessions.tokens aligned with /api/v1/tokens/active:
+  // latest context-window fill, not cumulative billing tokens. At current
+  // browser scale this read-time resolver is sufficient; importer precompute
+  // can be added later if this page becomes hot.
+  rows = rows.map(row => ({
+    ...row,
+    state: deriveStateForIndexRow(row, nowMs),
+    tokens: contextTokensFor(row.vendor, row.source_path, row.session_id),
+  }));
   if (filter.state) rows = rows.filter(row => row.state === filter.state);
 
   const sort = filter.sort ?? 'last_activity_at:desc';

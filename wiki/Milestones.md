@@ -15,3 +15,4 @@
 - **2026-05-01**: feat(r1): add sessions browser surface and transcript viewer
 - **2026-05-01**: style(ui): group active tokens by state priority then token count
 - **2026-05-01**: docs: remove duplicate milestone entry
+- **2026-05-01**: feat(r1): unify token semantics for sessions browser and active monitor
