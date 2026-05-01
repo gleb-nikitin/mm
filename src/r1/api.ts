@@ -1,8 +1,11 @@
 import {
   aggregateUsageByParticipant,
+  getRawSessionEvents,
+  getSessionByVendorAndId,
   getSessionUsage,
   getSessionUsageForMessage,
   listActiveSessions,
+  listSessions,
   listSessionsBySessionId,
 } from './session-index.ts';
 import {
@@ -22,6 +25,7 @@ import type { ApiError, CostBreakdown, SessionEventRow, SessionIndexRow, Session
 const STATES: readonly SessionState[] = ['working', 'idle', 'wedged', 'completed', 'orphan'];
 const DEFAULT_ACTIVE_STATES: SessionState[] = ['working', 'idle', 'wedged'];
 const VENDORS: readonly Vendor[] = ['claude', 'codex', 'gemini'];
+const SESSION_SORTS = ['last_activity_at:asc', 'last_activity_at:desc', 'started_at:asc', 'started_at:desc', 'tokens:desc', 'cost_usd:desc'] as const;
 
 class ValidationError extends Error {
   details?: Record<string, unknown>;
@@ -62,6 +66,14 @@ export function parseLimit(value: string | null, defaultValue: number, max: numb
     throw new ValidationError(`limit must be <= ${max}`, { value: n, max });
   }
   return n;
+}
+
+function parseOffset(value: string | null): number {
+  if (value === null || value === '') return 0;
+  if (!/^\d+$/.test(value)) {
+    throw new ValidationError('offset must be a non-negative integer', { value });
+  }
+  return Number(value);
 }
 
 export function parseFilter(value: string | null, allowed?: readonly string[]): string[] | null {
@@ -150,6 +162,37 @@ function parseSingleVendor(value: string | null): Vendor | null {
   return vendors[0];
 }
 
+function parseSingleState(value: string | null): SessionState | null {
+  const states = parseFilter(value, STATES) as SessionState[] | null;
+  if (!states) return null;
+  if (states.length > 1) {
+    throw new ValidationError('state must include only one value', {
+      value,
+      allowed: STATES,
+    });
+  }
+  return states[0];
+}
+
+function parsePathVendor(value: string): Vendor {
+  const vendor = parseVendor(value);
+  if (!vendor) {
+    throw new ValidationError('vendor is required', { allowed: VENDORS });
+  }
+  return vendor;
+}
+
+function parseSessionSort(value: string | null): typeof SESSION_SORTS[number] {
+  const sort = value?.trim() || 'last_activity_at:desc';
+  if (!SESSION_SORTS.includes(sort as typeof SESSION_SORTS[number])) {
+    throw new ValidationError('sort contains unsupported value', {
+      value: sort,
+      allowed: SESSION_SORTS,
+    });
+  }
+  return sort as typeof SESSION_SORTS[number];
+}
+
 function parseSinceId(value: string | null): number {
   if (value === null || value.trim() === '') return 0;
   if (!/^\d+$/.test(value)) {
@@ -224,6 +267,67 @@ function rowToCostResponse(usage: SessionUsage) {
     cost_usd: usage.cost_usd,
     cost_breakdown: publicBreakdown(usage.cost_breakdown),
   };
+}
+
+function tokenTotal(usage: SessionUsage | null): number | null {
+  if (!usage) return null;
+  return usage.input_tokens + usage.output_tokens + usage.cached_tokens + usage.reasoning_tokens;
+}
+
+function rowToSessionBrowserResponse(row: ReturnType<typeof listSessions>['sessions'][number]) {
+  return {
+    vendor: row.vendor,
+    session_id: row.session_id,
+    participant_id: row.participant_id,
+    project_role: row.project_role,
+    model: row.model,
+    started_at: row.started_at,
+    last_activity_at: row.last_activity_at,
+    state: row.state,
+    tokens: row.tokens,
+    cost_usd: row.cost_usd,
+    last_log_line: row.last_log_line,
+  };
+}
+
+function parseJsonObject(value: string | null): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function extractToolUses(content: string): string[] {
+  const tools = new Set<string>();
+  for (const match of content.matchAll(/\[tool:\s*([^\]]+)\]/g)) {
+    const tool = match[1]?.trim();
+    if (tool) tools.add(tool);
+  }
+  return Array.from(tools);
+}
+
+function splitFlattenedTranscript(content: string): Array<{ role: string; content: string }> {
+  const turns: Array<{ role: string; content: string }> = [];
+  const re = /(?:^|\n\n)(User|Assistant): ([\s\S]*?)(?=\n\n(?:User|Assistant): |$)/g;
+  for (const match of content.matchAll(re)) {
+    const role = match[1] === 'User' ? 'user' : 'assistant';
+    const body = (match[2] ?? '').trim();
+    if (body) turns.push({ role, content: body });
+  }
+  if (turns.length > 0) return turns;
+  const trimmed = content.trim();
+  return trimmed ? [{ role: 'event', content: trimmed }] : [];
+}
+
+function turnCountFromMetadata(...metas: Array<Record<string, unknown>>): number | null {
+  for (const meta of metas) {
+    const count = meta.turn_count;
+    if (typeof count === 'number' && Number.isFinite(count)) return count;
+  }
+  return null;
 }
 
 type ParticipantUsageSummary = {
@@ -302,6 +406,112 @@ export function handleActiveSessions(url: URL): Response {
     return json({
       sessions,
       generated_at: generatedAt.toISOString(),
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return apiError('validation', error.message, error.details ?? {}, 400);
+    }
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return apiError('internal', 'Internal server error', { message }, 500);
+  }
+}
+
+export function handleSessions(url: URL): Response {
+  try {
+    const vendor = parseSingleVendor(url.searchParams.get('vendor'));
+    const state = parseSingleState(url.searchParams.get('state'));
+    const page = listSessions({
+      vendor,
+      participant_id: url.searchParams.get('participant_id')?.trim() || null,
+      project: url.searchParams.get('project')?.trim() || null,
+      state,
+      since: parseIsoTimestamp(url.searchParams.get('since'), 'since'),
+      until: parseIsoTimestamp(url.searchParams.get('until'), 'until'),
+      q: url.searchParams.get('q')?.trim() || null,
+      offset: parseOffset(url.searchParams.get('offset')),
+      limit: parseLimit(url.searchParams.get('limit'), 100, 500),
+      sort: parseSessionSort(url.searchParams.get('sort')),
+    });
+    return json({
+      sessions: page.sessions.map(rowToSessionBrowserResponse),
+      total: page.total,
+      offset: page.offset,
+      limit: page.limit,
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return apiError('validation', error.message, error.details ?? {}, 400);
+    }
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return apiError('internal', 'Internal server error', { message }, 500);
+  }
+}
+
+export function handleSessionContent(vendorParam: string, sessionIdParam: string, url: URL): Response {
+  try {
+    const vendor = parsePathVendor(vendorParam);
+    const sessionId = decodeURIComponent(sessionIdParam);
+    const session = getSessionByVendorAndId(vendor, sessionId);
+    if (!session) return apiError('not_found', 'Session not found', { vendor, session_id: sessionId }, 404);
+
+    const offset = parseOffset(url.searchParams.get('offset'));
+    const limit = parseLimit(url.searchParams.get('limit'), 100, 500);
+    const usage = getSessionUsage(vendor, sessionId);
+    const rawEvents = getRawSessionEvents(vendor, sessionId, session.raw_event_id);
+    const sessionMeta = parseJsonObject(session.metadata);
+    const rawTurns: Array<Record<string, unknown>> = [];
+
+    for (const event of rawEvents) {
+      const eventMeta = parseJsonObject(event.metadata);
+      const eventTurns = splitFlattenedTranscript(event.content);
+      for (const turn of eventTurns) {
+        const toolUses = extractToolUses(turn.content);
+        rawTurns.push({
+          role: turn.role,
+          timestamp: event.timestamp,
+          content: turn.content,
+          metadata: {
+            raw_event_id: event.id,
+            external_id: event.external_id,
+            title: event.title,
+            ...eventMeta,
+          },
+          ...(toolUses.length > 0 ? { tool_uses: toolUses } : {}),
+        });
+      }
+    }
+
+    const metadataTurnCount = turnCountFromMetadata(sessionMeta, ...rawEvents.map(event => parseJsonObject(event.metadata)));
+    const turnCount = metadataTurnCount ?? rawTurns.length;
+    const turns = rawTurns.slice(offset, offset + limit).map((turn, index) => ({
+      index: offset + index,
+      ...turn,
+      ...(turn.role === 'assistant' && usage ? {
+        usage: {
+          input: usage.input_tokens,
+          output: usage.output_tokens,
+          cached: usage.cached_tokens,
+          reasoning: usage.reasoning_tokens,
+        },
+      } : {}),
+    }));
+
+    return json({
+      vendor: session.vendor,
+      session_id: session.session_id,
+      participant_id: session.participant_id,
+      project_role: session.project_role,
+      started_at: session.started_at,
+      last_activity_at: session.last_activity_at,
+      model: session.model,
+      state: session.state,
+      tokens: tokenTotal(usage),
+      cost_usd: usage?.cost_usd ?? null,
+      turn_count: turnCount,
+      offset,
+      limit,
+      turns,
+      ...(rawEvents.length === 0 ? { warning: 'no content imported' } : {}),
     });
   } catch (error) {
     if (error instanceof ValidationError) {

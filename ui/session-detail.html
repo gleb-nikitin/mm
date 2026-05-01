@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mm - session detail</title>
+  <style>
+    :root {
+      --bg: #0a0e14;
+      --panel-bg: rgba(255, 255, 255, 0.035);
+      --panel-border: rgba(255, 255, 255, 0.08);
+      --text: #e6edf3;
+      --text-muted: rgba(230, 237, 243, 0.55);
+      --accent: #7ec8e3;
+      --accent-2: #b794f6;
+      --green: #5ee08a;
+      --yellow: #f6c85f;
+      --red: #f87171;
+      --gray: #94a3b8;
+      --accent-glow: rgba(126, 200, 227, 0.15);
+      --blur: 16px;
+      --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-6: 24px;
+      --r: 8px;
+      --f: 'Monaco', 'Menlo', 'Consolas', monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; min-height: 100vh; }
+    body {
+      background:
+        radial-gradient(ellipse 800px 600px at 15% 10%, rgba(126, 200, 227, 0.10) 0%, transparent 55%),
+        radial-gradient(ellipse 700px 500px at 85% 90%, rgba(183, 148, 246, 0.10) 0%, transparent 55%),
+        var(--bg);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: var(--f);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .app { max-width: 1120px; margin: 0 auto; padding: var(--sp-6) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-4); }
+    .title { font-size: 13px; font-weight: 700; letter-spacing: 0.28em; color: var(--accent); text-shadow: 0 0 12px var(--accent-glow); padding: 0 var(--sp-2); }
+    .endpoint { color: var(--text-muted); font-size: 12px; padding: 0 var(--sp-2); margin-top: calc(-1 * var(--sp-2)); overflow-wrap: anywhere; }
+    .panel {
+      background: var(--panel-bg);
+      backdrop-filter: blur(var(--blur));
+      -webkit-backdrop-filter: blur(var(--blur));
+      border: 1px solid var(--panel-border);
+      border-radius: var(--r);
+      box-shadow: 0 4px 32px rgba(0, 0, 0, 0.35);
+    }
+    .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-2); padding: var(--sp-3); }
+    .kv { min-width: 0; padding: var(--sp-2); border: 1px solid var(--panel-border); border-radius: 6px; background: rgba(255, 255, 255, 0.02); }
+    .k { color: var(--text-muted); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; }
+    .v { margin-top: var(--sp-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+    .controls { display: flex; justify-content: space-between; gap: var(--sp-3); padding: 0 var(--sp-3) var(--sp-3); color: var(--text-muted); font-size: 11px; flex-wrap: wrap; align-items: center; }
+    .pager { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
+    .btn {
+      padding: var(--sp-2) var(--sp-3);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--accent);
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .btn:disabled { opacity: 0.35; cursor: default; }
+    .btn:not(:disabled):hover { background: rgba(126, 200, 227, 0.1); }
+    .status.error { color: var(--red); }
+    .turns { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-3); }
+    .turn { border: 1px solid var(--panel-border); border-radius: var(--r); background: rgba(255, 255, 255, 0.025); overflow: hidden; }
+    .turn-head { display: flex; justify-content: space-between; gap: var(--sp-2); align-items: center; padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--panel-border); color: var(--text-muted); font-size: 11px; flex-wrap: wrap; }
+    .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+    .user { color: var(--green); border: 1px solid rgba(94, 224, 138, 0.45); }
+    .assistant { color: var(--accent); border: 1px solid rgba(126, 200, 227, 0.45); }
+    .event { color: var(--gray); border: 1px solid rgba(148, 163, 184, 0.45); }
+    pre { margin: 0; padding: var(--sp-3); overflow: auto; max-height: 58vh; color: var(--text); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+    .extras { display: flex; gap: var(--sp-2); padding: 0 var(--sp-3) var(--sp-3); color: var(--text-muted); font-size: 11px; flex-wrap: wrap; }
+    .pill { border: 1px solid var(--panel-border); border-radius: 999px; padding: 2px 8px; }
+    .empty { padding: var(--sp-4); color: var(--text-muted); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    @media (max-width: 820px) { .summary { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 520px) { .summary { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<!--NAV-->
+  <main class="app">
+    <div class="title">MNEMONIC · SESSION</div>
+    <div id="endpoint" class="endpoint"></div>
+
+    <section class="panel">
+      <div id="summary" class="summary"></div>
+      <div class="controls">
+        <a href="/sessions">Back to sessions</a>
+        <span id="status" class="status"></span>
+        <div class="pager">
+          <button id="copyJson" class="btn" type="button">Copy as JSON</button>
+          <button id="prev" class="btn" type="button">Prev</button>
+          <span id="pageInfo"></span>
+          <button id="next" class="btn" type="button">Next</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="turns" class="turns"></section>
+  </main>
+
+  <script>
+    const parts = location.pathname.split('/').filter(Boolean);
+    const vendor = decodeURIComponent(parts[1] || '');
+    const sessionId = decodeURIComponent(parts.slice(2).join('/') || '');
+    const endpointEl = document.getElementById('endpoint');
+    const summaryEl = document.getElementById('summary');
+    const turnsEl = document.getElementById('turns');
+    const statusEl = document.getElementById('status');
+    const pageInfoEl = document.getElementById('pageInfo');
+    const prevEl = document.getElementById('prev');
+    const nextEl = document.getElementById('next');
+    const copyJsonEl = document.getElementById('copyJson');
+    const limit = 100;
+    let offset = 0;
+    let lastBody = null;
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function fmt(value) {
+      if (value === null || value === undefined || value === '') return 'null';
+      if (typeof value === 'number') return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(4);
+      return String(value);
+    }
+
+    function apiUrl(extra = {}) {
+      const url = new URL(`/api/v1/sessions/${encodeURIComponent(vendor)}/${encodeURIComponent(sessionId)}/content`, location.origin);
+      url.searchParams.set('offset', String(extra.offset ?? offset));
+      url.searchParams.set('limit', String(extra.limit ?? limit));
+      return url;
+    }
+
+    function renderSummary(body) {
+      const items = [
+        ['project_role', body.project_role],
+        ['participant_id', body.participant_id],
+        ['model', body.model],
+        ['state', body.state],
+        ['tokens', body.tokens],
+        ['cost_usd', body.cost_usd],
+        ['started_at', body.started_at],
+        ['last_activity_at', body.last_activity_at],
+        ['turn_count', body.turn_count],
+        ['session_id', body.session_id],
+      ];
+      summaryEl.innerHTML = items.map(([k, v]) => `
+        <div class="kv" title="${escapeHtml(fmt(v))}">
+          <div class="k">${escapeHtml(k)}</div>
+          <div class="v">${escapeHtml(fmt(v))}</div>
+        </div>`).join('');
+    }
+
+    function renderTurn(turn) {
+      const role = escapeHtml(turn.role || 'event');
+      const toolUses = Array.isArray(turn.tool_uses) ? turn.tool_uses : [];
+      const usage = turn.usage ? [`input ${turn.usage.input}`, `output ${turn.usage.output}`, `cached ${turn.usage.cached}`, `reasoning ${turn.usage.reasoning}`] : [];
+      return `
+        <article class="turn">
+          <div class="turn-head">
+            <span><span class="badge ${role}">${role}</span> #${escapeHtml(turn.index)}</span>
+            <span>${escapeHtml(turn.timestamp || '')}</span>
+          </div>
+          <pre>${escapeHtml(turn.content || '')}</pre>
+          ${(toolUses.length || usage.length) ? `<div class="extras">${
+            toolUses.map(tool => `<span class="pill">tool: ${escapeHtml(tool)}</span>`).join('')
+          }${
+            usage.map(item => `<span class="pill">${escapeHtml(item)}</span>`).join('')
+          }</div>` : ''}
+        </article>`;
+    }
+
+    function render(body) {
+      if (body.error) {
+        summaryEl.innerHTML = '';
+        turnsEl.innerHTML = `<div class="panel empty">${escapeHtml(body.error.message)}</div>`;
+        return;
+      }
+      renderSummary(body);
+      turnsEl.innerHTML = body.warning
+        ? `<div class="panel empty">${escapeHtml(body.warning)}</div>`
+        : (body.turns || []).map(renderTurn).join('');
+      const total = Number(body.turn_count || 0);
+      const start = total === 0 ? 0 : Number(body.offset || 0) + 1;
+      const end = Math.min(Number(body.offset || 0) + Number(body.limit || limit), total);
+      pageInfoEl.textContent = `${start}-${end} / ${total}`;
+      prevEl.disabled = offset <= 0;
+      nextEl.disabled = offset + limit >= total;
+    }
+
+    async function fetchContent() {
+      const url = apiUrl();
+      endpointEl.textContent = url.pathname + url.search;
+      statusEl.className = 'status';
+      statusEl.textContent = 'loading';
+      try {
+        const response = await fetch(url);
+        lastBody = await response.json();
+        statusEl.textContent = `${response.status} ${response.statusText || 'OK'}`;
+        if (!response.ok) statusEl.classList.add('error');
+      } catch (error) {
+        lastBody = { error: { message: error.message }, turns: [], turn_count: 0, offset, limit };
+        statusEl.textContent = 'client error';
+        statusEl.classList.add('error');
+      }
+      render(lastBody);
+    }
+
+    prevEl.addEventListener('click', () => {
+      offset = Math.max(0, offset - limit);
+      fetchContent();
+    });
+    nextEl.addEventListener('click', () => {
+      offset += limit;
+      fetchContent();
+    });
+    copyJsonEl.addEventListener('click', async () => {
+      const response = await fetch(apiUrl({ offset: 0, limit: 500 }));
+      const body = await response.json();
+      await navigator.clipboard.writeText(JSON.stringify(body, null, 2));
+      statusEl.textContent = 'copied JSON';
+    });
+    fetchContent();
+  </script>
+</body>
+</html>

@@ -7,7 +7,7 @@ import {
 } from './core.ts';
 import { getActiveAgentsLive } from './session-probe.ts';
 import { filterMechanical } from './narrative.ts';
-import { apiError, handleActiveSessions, handleActiveTokens, handleCostByMessage, handleCostBySession, handleSessionEvents, handleTokensByParticipant } from './r1/api.ts';
+import { apiError, handleActiveSessions, handleActiveTokens, handleCostByMessage, handleCostBySession, handleSessionContent, handleSessionEvents, handleSessions, handleTokensByParticipant } from './r1/api.ts';
 
 // Ensure DB is ready on fresh roots
 initDb();
@@ -23,6 +23,7 @@ const NAV_LINKS: { label: string; href: string }[] = [
   { label: 'raw',       href: '/raw-ui' },
   { label: 'active',    href: '/active-ui' },
   { label: 'monitor',   href: '/monitor' },
+  { label: 'sessions',  href: '/sessions' },
   { label: 'stats',     href: '/stats' },
 ];
 
@@ -49,6 +50,8 @@ Endpoints:
 - \`/help\`: This markdown endpoint list.
 - \`/active?max_age_seconds=N\`: List currently-active agent sessions (Claude, Codex, Gemini).
 - \`/api/v1/sessions/active?project=&role=&state=&limit=\`: JSON session tracker view over session_index.
+- \`/api/v1/sessions?vendor=&participant_id=&project=&state=&since=&until=&offset=&limit=&sort=\`: JSON sessions browser over session_index joined with session_usage.
+- \`/api/v1/sessions/:vendor/:session_id/content?offset=&limit=\`: JSON session content browser over imported raw_events.
 - \`/api/v1/sessions/events?since_id=&project=&role=\`: SSE stream over session_events.
 - \`/api/v1/cost/by-session?session_id=&vendor=\`: JSON token and cost attribution for one session.
 - \`/api/v1/cost/by-message?chain_msg_id=\`: JSON token and cost attribution via message linkage.
@@ -70,6 +73,7 @@ Endpoints:
 - \`/chunks-ui\`: Chunks browser UI.
 - \`/raw-ui\`: Plain HTML dump of every table. No filters, no JS.
 - \`/monitor\`: R1 JSON/SSE monitor index.
+- \`/sessions\`: Browse all imported sessions and open session transcripts.
 
 Scoping params:
 - \`source\`: comma-separated source_types (claude, telegram, chains, docs, research, knowledge).
@@ -120,6 +124,12 @@ const server = Bun.serve({
     if (url.pathname === "/active-ui") {
       return serveUiFile("/active.html");
     }
+    if (url.pathname === "/sessions") {
+      return serveUiFile("/sessions.html");
+    }
+    if (/^\/sessions\/[^/]+\/.+/.test(url.pathname)) {
+      return serveUiFile("/session-detail.html");
+    }
     if (url.pathname === "/monitor") {
       return serveUiFile("/monitor-index.html");
     }
@@ -150,6 +160,13 @@ const server = Bun.serve({
 
     if (url.pathname === "/api/v1/sessions/active") {
       return handleActiveSessions(url);
+    }
+    if (url.pathname === "/api/v1/sessions") {
+      return handleSessions(url);
+    }
+    {
+      const match = /^\/api\/v1\/sessions\/([^/]+)\/(.+)\/content$/.exec(url.pathname);
+      if (match) return handleSessionContent(decodeURIComponent(match[1]), match[2], url);
     }
     if (url.pathname === "/api/v1/sessions/events") {
       return handleSessionEvents(req, url);

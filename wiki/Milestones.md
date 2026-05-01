@@ -11,5 +11,6 @@
 - **2026-04-29**: feat(r1): add Tokens by Participant monitor and API
 - **2026-04-29**: chore: simplify run/watch command hygiene and fix gemini flag
 - **2026-04-29**: feat(r1): rewire ac session linkage to participants.active_session_id
-- **2026-04-29**: feat(r1): rewire ac session linkage to participants.active_session_id
 - **2026-05-01**: feat(r1): extend ac session resolution to valhalla_sessions (historical resolution)
+- **2026-05-01**: feat(r1): add sessions browser surface and transcript viewer
+- **2026-05-01**: feat(r1): add sessions browser surface and transcript viewer

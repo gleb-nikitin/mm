@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mm - sessions</title>
+  <style>
+    :root {
+      --bg: #0a0e14;
+      --panel-bg: rgba(255, 255, 255, 0.035);
+      --panel-border: rgba(255, 255, 255, 0.08);
+      --text: #e6edf3;
+      --text-muted: rgba(230, 237, 243, 0.55);
+      --accent: #7ec8e3;
+      --accent-2: #b794f6;
+      --green: #5ee08a;
+      --yellow: #f6c85f;
+      --red: #f87171;
+      --gray: #94a3b8;
+      --accent-glow: rgba(126, 200, 227, 0.15);
+      --blur: 16px;
+      --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-6: 24px;
+      --r: 8px;
+      --f: 'Monaco', 'Menlo', 'Consolas', monospace;
+      --tr: 150ms ease-out;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; min-height: 100vh; }
+    body {
+      background:
+        radial-gradient(ellipse 800px 600px at 15% 10%, rgba(126, 200, 227, 0.10) 0%, transparent 55%),
+        radial-gradient(ellipse 700px 500px at 85% 90%, rgba(183, 148, 246, 0.10) 0%, transparent 55%),
+        var(--bg);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: var(--f);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .app { max-width: 1280px; margin: 0 auto; padding: var(--sp-6) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-4); }
+    .title { font-size: 13px; font-weight: 700; letter-spacing: 0.28em; color: var(--accent); text-shadow: 0 0 12px var(--accent-glow); padding: 0 var(--sp-2); }
+    .endpoint { color: var(--text-muted); font-size: 12px; padding: 0 var(--sp-2); margin-top: calc(-1 * var(--sp-2)); overflow-wrap: anywhere; }
+    .panel {
+      background: var(--panel-bg);
+      backdrop-filter: blur(var(--blur));
+      -webkit-backdrop-filter: blur(var(--blur));
+      border: 1px solid var(--panel-border);
+      border-radius: var(--r);
+      box-shadow: 0 4px 32px rgba(0, 0, 0, 0.35);
+    }
+    .controls { display: grid; grid-template-columns: 1.1fr 1fr 1fr 1fr 1.2fr 120px; gap: var(--sp-2); padding: var(--sp-3); align-items: end; }
+    label { display: flex; flex-direction: column; gap: var(--sp-1); color: var(--text-muted); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+    input, select {
+      width: 100%;
+      min-width: 0;
+      padding: var(--sp-2) var(--sp-3);
+      background: rgba(255, 255, 255, 0.025);
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+      outline: none;
+    }
+    input:focus, select:focus { border-color: rgba(126, 200, 227, 0.5); }
+    select option { background: #0a0e14; color: var(--text); }
+    .states { display: flex; gap: var(--sp-2); padding: 0 var(--sp-3) var(--sp-3); flex-wrap: wrap; }
+    .state-filter { flex-direction: row; align-items: center; text-transform: none; letter-spacing: 0; }
+    .state-filter input { width: auto; }
+    .actions { display: flex; justify-content: space-between; gap: var(--sp-3); padding: 0 var(--sp-3) var(--sp-3); color: var(--text-muted); font-size: 11px; flex-wrap: wrap; align-items: center; }
+    .pager { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
+    .btn {
+      padding: var(--sp-2) var(--sp-3);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--accent);
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .btn:disabled { opacity: 0.35; cursor: default; }
+    .btn:not(:disabled):hover { background: rgba(126, 200, 227, 0.1); }
+    .status.error { color: var(--red); }
+    .table-wrap { overflow-x: auto; padding: var(--sp-3); }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { border-bottom: 1px solid var(--panel-border); padding: var(--sp-2); text-align: left; vertical-align: top; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    th { color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    td { color: var(--text); font-size: 12px; }
+    th button { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
+    tr:hover td { background: rgba(255, 255, 255, 0.025); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .state { display: inline-flex; align-items: center; gap: 6px; }
+    .null { color: var(--accent-2); font-style: italic; }
+    .dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; background: var(--gray); }
+    .working .dot { background: var(--green); }
+    .idle .dot { background: var(--yellow); }
+    .wedged .dot { background: var(--red); }
+    .orphan .dot { background: var(--gray); }
+    .completed .dot { background: var(--accent-2); }
+    .empty { padding: var(--sp-4); color: var(--text-muted); }
+    .mono { font-variant-numeric: tabular-nums; }
+    @media (max-width: 980px) { .controls { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 640px) { .controls { grid-template-columns: 1fr; } table { min-width: 980px; } }
+  </style>
+</head>
+<body>
+<!--NAV-->
+  <main class="app">
+    <div class="title">MNEMONIC · SESSIONS</div>
+    <div class="endpoint">Browse: GET /api/v1/sessions</div>
+
+    <section class="panel">
+      <div class="controls">
+        <label>search <input id="q" type="text" placeholder="session, participant, model, log" autocomplete="off" /></label>
+        <label>vendor
+          <select id="vendor">
+            <option value="">all</option>
+            <option value="claude">claude</option>
+            <option value="codex">codex</option>
+            <option value="gemini">gemini</option>
+          </select>
+        </label>
+        <label>participant <input id="participant_id" type="text" placeholder="mm_cto" autocomplete="off" /></label>
+        <label>project <input id="project" type="text" placeholder="mm" autocomplete="off" /></label>
+        <label>since <input id="since" type="datetime-local" /></label>
+        <label>limit <input id="limit" type="number" min="1" max="500" value="100" /></label>
+      </div>
+      <div class="states" aria-label="state filters">
+        <label class="state-filter"><input type="checkbox" name="state" value="working" /> working</label>
+        <label class="state-filter"><input type="checkbox" name="state" value="idle" /> idle</label>
+        <label class="state-filter"><input type="checkbox" name="state" value="wedged" /> wedged</label>
+        <label class="state-filter"><input type="checkbox" name="state" value="orphan" /> orphan</label>
+        <label class="state-filter"><input type="checkbox" name="state" value="completed" /> completed</label>
+      </div>
+      <div class="actions">
+        <span id="requestUrl"></span>
+        <span id="status" class="status"></span>
+        <div class="pager">
+          <button id="prev" class="btn" type="button">Prev</button>
+          <span id="pageInfo"></span>
+          <button id="next" class="btn" type="button">Next</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div id="result" class="table-wrap"></div>
+    </section>
+  </main>
+
+  <script>
+    const fields = ['last_activity_at', 'vendor', 'project_role', 'model', 'state', 'tokens', 'cost_usd', 'session_id'];
+    const sortable = new Set(['last_activity_at', 'started_at', 'tokens', 'cost_usd']);
+    const inputs = ['q', 'vendor', 'participant_id', 'project', 'since', 'limit'].map(id => document.getElementById(id));
+    const stateInputs = Array.from(document.querySelectorAll('input[name="state"]'));
+    const resultEl = document.getElementById('result');
+    const requestUrlEl = document.getElementById('requestUrl');
+    const statusEl = document.getElementById('status');
+    const pageInfoEl = document.getElementById('pageInfo');
+    const prevEl = document.getElementById('prev');
+    const nextEl = document.getElementById('next');
+    let offset = 0;
+    let sort = 'last_activity_at:desc';
+    let debounceTimer = null;
+    let lastBody = { sessions: [], total: 0, offset: 0, limit: 100 };
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function fmt(value, field) {
+      if (value === null || value === undefined || value === '') return '<span class="null">null</span>';
+      if (field === 'tokens') return Number(value).toLocaleString();
+      if (field === 'cost_usd') return Number(value).toFixed(4);
+      return escapeHtml(value);
+    }
+
+    function selectedState() {
+      return stateInputs.find(input => input.checked)?.value || '';
+    }
+
+    function localIso(value) {
+      if (!value) return '';
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? value : d.toISOString();
+    }
+
+    function buildUrl() {
+      const url = new URL('/api/v1/sessions', location.origin);
+      for (const input of inputs) {
+        const value = input.value.trim();
+        if (!value) continue;
+        url.searchParams.set(input.id, input.id === 'since' ? localIso(value) : value);
+      }
+      const state = selectedState();
+      if (state) url.searchParams.set('state', state);
+      url.searchParams.set('offset', String(offset));
+      url.searchParams.set('sort', sort);
+      return url;
+    }
+
+    function detailHref(row) {
+      return `/sessions/${encodeURIComponent(row.vendor)}/${encodeURIComponent(row.session_id)}`;
+    }
+
+    function renderState(value) {
+      const state = escapeHtml(value || 'unknown');
+      return `<span class="state ${state}"><span class="dot"></span>${state}</span>`;
+    }
+
+    function renderTable(body) {
+      const sessions = Array.isArray(body.sessions) ? body.sessions : [];
+      if (body.error) {
+        resultEl.innerHTML = `<div class="empty">${escapeHtml(body.error.message)}</div>`;
+        return;
+      }
+      if (sessions.length === 0) {
+        resultEl.innerHTML = '<div class="empty">No sessions match the current filters.</div>';
+        return;
+      }
+      const header = fields.map(field => {
+        const label = field === 'last_activity_at'
+          ? 'last_activity_at'
+          : field;
+        if (!sortable.has(field)) return `<th>${label}</th>`;
+        return `<th><button type="button" data-sort="${field}">${label}</button></th>`;
+      }).join('');
+      const rows = sessions.map(row => `<tr>${fields.map(field => {
+        if (field === 'session_id') {
+          const shortId = String(row.session_id || '').slice(0, 18);
+          return `<td title="${escapeHtml(row.session_id)}"><a href="${detailHref(row)}">${escapeHtml(shortId)}</a></td>`;
+        }
+        if (field === 'state') return `<td>${renderState(row.state)}</td>`;
+        return `<td class="mono" title="${escapeHtml(row[field])}">${fmt(row[field], field)}</td>`;
+      }).join('')}</tr>`).join('');
+      resultEl.innerHTML = `<table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+      resultEl.querySelectorAll('[data-sort]').forEach(button => {
+        button.addEventListener('click', () => {
+          const field = button.getAttribute('data-sort');
+          const [currentField, currentDir] = sort.split(':');
+          const nextDir = currentField === field && currentDir === 'desc' ? 'asc' : 'desc';
+          if ((field === 'tokens' || field === 'cost_usd') && nextDir === 'asc') sort = `${field}:desc`;
+          else sort = `${field}:${nextDir}`;
+          offset = 0;
+          fetchSessions();
+        });
+      });
+    }
+
+    function renderPager(body) {
+      const total = Number(body.total || 0);
+      const limit = Number(body.limit || 100);
+      const start = total === 0 ? 0 : Number(body.offset || 0) + 1;
+      const end = Math.min(Number(body.offset || 0) + limit, total);
+      pageInfoEl.textContent = `${start}-${end} / ${total}`;
+      prevEl.disabled = offset <= 0;
+      nextEl.disabled = offset + limit >= total;
+    }
+
+    async function fetchSessions() {
+      const url = buildUrl();
+      requestUrlEl.textContent = url.pathname + url.search;
+      statusEl.className = 'status';
+      statusEl.textContent = 'loading';
+      try {
+        const response = await fetch(url);
+        lastBody = await response.json();
+        statusEl.textContent = `${response.status} ${response.statusText || 'OK'}`;
+        if (!response.ok) statusEl.classList.add('error');
+      } catch (error) {
+        lastBody = { error: { message: error.message }, sessions: [], total: 0, offset, limit: 100 };
+        statusEl.textContent = 'client error';
+        statusEl.classList.add('error');
+      }
+      renderTable(lastBody);
+      renderPager(lastBody);
+    }
+
+    function scheduleFetch() {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        offset = 0;
+        fetchSessions();
+      }, 250);
+    }
+
+    stateInputs.forEach(input => input.addEventListener('change', () => {
+      if (input.checked) stateInputs.forEach(other => { if (other !== input) other.checked = false; });
+      scheduleFetch();
+    }));
+    inputs.forEach(input => input.addEventListener('input', scheduleFetch));
+    prevEl.addEventListener('click', () => {
+      offset = Math.max(0, offset - Number(lastBody.limit || 100));
+      fetchSessions();
+    });
+    nextEl.addEventListener('click', () => {
+      offset += Number(lastBody.limit || 100);
+      fetchSessions();
+    });
+    fetchSessions();
+  </script>
+</body>
+</html>

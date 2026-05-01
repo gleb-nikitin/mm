@@ -145,6 +145,47 @@ function seedCostFixtures(): void {
   }
 }
 
+function seedSessionContentFixture(): void {
+  const dbPath = path.join(tmpRoot, 'meta', 'brain.db');
+  const db = new Database(dbPath);
+  try {
+    const metadata = JSON.stringify({
+      provider: 'claude',
+      session_id: 'sess-mm-cto-working',
+      turn_count: 2,
+    });
+    const result = db.prepare(`
+      INSERT INTO raw_events (source_type, project, external_id, timestamp, title, content, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'llm_chat',
+      'mm',
+      'claude:sess-mm-cto-working',
+      '2026-04-22T10:00:00Z',
+      'Claude Session - mm - sess-mm',
+      'User: read the current state\n\nAssistant: state reviewed\n\n[tool: sqlite]',
+      metadata,
+    );
+    db.prepare(`
+      UPDATE session_index
+      SET raw_event_id = ?
+      WHERE vendor = 'claude' AND session_id = 'sess-mm-cto-working'
+    `).run(Number(result.lastInsertRowid));
+    db.prepare(`
+      INSERT INTO session_usage
+        (vendor, session_id, participant_id, model, input_tokens, output_tokens,
+         cached_tokens, reasoning_tokens, cost_usd, cost_breakdown, pricing_source, priced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'claude', 'sess-mm-cto-working', 'mm_cto', 'claude-opus-4-6',
+      1000, 200, 100, 50, 0.0113, costBreakdown('claude-opus-4-6'),
+      'pricing.toml', '2026-04-22T12:00:00Z',
+    );
+  } finally {
+    db.close();
+  }
+}
+
 function seedParticipantUsageFixtures(): { since24h: string; until30m: string } {
   const dbPath = path.join(tmpRoot, 'meta', 'brain.db');
   const db = new Database(dbPath);
@@ -522,6 +563,123 @@ describe('R1 active sessions API', () => {
       const { status, body } = await getJson(base, '/api/v1/nope');
       expect(status).toBe(404);
       expect(body.error.code).toBe('not_found');
+    });
+  });
+
+  test('sessions browser API lists sessions with usage, filters, sorts, and paginates', async () => {
+    seedCostFixtures();
+    await withApi(async base => {
+      const first = await getJson(base, '/api/v1/sessions?limit=2');
+      expect(first.status).toBe(200);
+      expect(first.body.total).toBe(7);
+      expect(first.body.offset).toBe(0);
+      expect(first.body.limit).toBe(2);
+      expect(first.body.sessions[0]).toMatchObject({
+        vendor: 'claude',
+        session_id: 'shared-cost-session',
+        participant_id: 'mm_cto',
+        project_role: 'mm/cto',
+        model: 'claude-opus-4-6',
+        state: 'completed',
+        tokens: 1350,
+        cost_usd: 0.0113,
+      });
+
+      const second = await getJson(base, '/api/v1/sessions?limit=2&offset=2');
+      expect(second.status).toBe(200);
+      expect(second.body.sessions).toHaveLength(2);
+
+      const orphan = await getJson(base, '/api/v1/sessions?state=orphan');
+      expect(orphan.status).toBe(200);
+      expect(orphan.body.sessions.map((session: any) => session.session_id)).toEqual(['sess-infra-devops-orphan']);
+
+      const tokens = await getJson(base, '/api/v1/sessions?sort=tokens:desc&limit=1');
+      expect(tokens.status).toBe(200);
+      expect(tokens.body.sessions[0].tokens).toBe(1350);
+
+      const filtered = await getJson(base, '/api/v1/sessions?participant_id=mm_devops&project=mm&vendor=codex');
+      expect(filtered.status).toBe(200);
+      expect(filtered.body.sessions.map((session: any) => session.session_id)).toEqual([
+        'shared-cost-session',
+        'sess-mm-devops-idle',
+      ]);
+    });
+  });
+
+  test('sessions browser API validates params', async () => {
+    await withApi(async base => {
+      const badVendor = await getJson(base, '/api/v1/sessions?vendor=unknown');
+      expect(badVendor.status).toBe(400);
+      expect(badVendor.body.error.code).toBe('validation');
+
+      const badState = await getJson(base, '/api/v1/sessions?state=working,idle');
+      expect(badState.status).toBe(400);
+      expect(badState.body.error.details.allowed).toEqual(['working', 'idle', 'wedged', 'completed', 'orphan']);
+
+      const badSort = await getJson(base, '/api/v1/sessions?sort=session_id:asc');
+      expect(badSort.status).toBe(400);
+      expect(badSort.body.error.details.allowed).toContain('last_activity_at:desc');
+    });
+  });
+
+  test('session content API returns paginated turns and metadata', async () => {
+    seedSessionContentFixture();
+    await withApi(async base => {
+      const first = await getJson(base, '/api/v1/sessions/claude/sess-mm-cto-working/content?limit=1');
+      expect(first.status).toBe(200);
+      expect(first.body).toMatchObject({
+        vendor: 'claude',
+        session_id: 'sess-mm-cto-working',
+        participant_id: 'mm_cto',
+        project_role: 'mm/cto',
+        model: 'claude-opus',
+        tokens: 1350,
+        cost_usd: 0.0113,
+        turn_count: 2,
+        offset: 0,
+        limit: 1,
+      });
+      expect(first.body.turns).toHaveLength(1);
+      expect(first.body.turns[0]).toMatchObject({
+        index: 0,
+        role: 'user',
+        content: 'read the current state',
+      });
+
+      const second = await getJson(base, '/api/v1/sessions/claude/sess-mm-cto-working/content?offset=1&limit=1');
+      expect(second.status).toBe(200);
+      expect(second.body.turns[0]).toMatchObject({
+        index: 1,
+        role: 'assistant',
+        content: 'state reviewed\n\n[tool: sqlite]',
+        tool_uses: ['sqlite'],
+        usage: { input: 1000, output: 200, cached: 100, reasoning: 50 },
+      });
+    });
+  });
+
+  test('session content API returns 404 for unknown session and warning for missing content', async () => {
+    await withApi(async base => {
+      const missing = await getJson(base, '/api/v1/sessions/claude/missing/content');
+      expect(missing.status).toBe(404);
+      expect(missing.body.error.code).toBe('not_found');
+
+      const empty = await getJson(base, '/api/v1/sessions/codex/sess-mm-devops-idle/content');
+      expect(empty.status).toBe(200);
+      expect(empty.body.warning).toBe('no content imported');
+      expect(empty.body.turns).toEqual([]);
+    });
+  });
+
+  test('sessions UI routes serve HTML', async () => {
+    await withApi(async base => {
+      const list = await fetch(`${base}/sessions`);
+      expect(list.status).toBe(200);
+      expect(await list.text()).toContain('MNEMONIC · SESSIONS');
+
+      const detail = await fetch(`${base}/sessions/claude/sess-mm-cto-working`);
+      expect(detail.status).toBe(200);
+      expect(await detail.text()).toContain('MNEMONIC · SESSION');
     });
   });
 

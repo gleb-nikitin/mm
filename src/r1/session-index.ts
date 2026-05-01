@@ -40,6 +40,48 @@ export type ParticipantUsageAggregateRow = {
   session_count: number;
 };
 
+export type SessionBrowserSort =
+  | 'last_activity_at:asc'
+  | 'last_activity_at:desc'
+  | 'started_at:asc'
+  | 'started_at:desc'
+  | 'tokens:desc'
+  | 'cost_usd:desc';
+
+export type SessionBrowserFilter = {
+  vendor?: Vendor | null;
+  participant_id?: string | null;
+  project?: string | null;
+  state?: SessionState | null;
+  since?: string | null;
+  until?: string | null;
+  q?: string | null;
+  offset?: number;
+  limit?: number;
+  sort?: SessionBrowserSort;
+};
+
+export type SessionBrowserRow = SessionIndexRow & {
+  tokens: number | null;
+  cost_usd: number | null;
+};
+
+export type SessionBrowserPage = {
+  sessions: SessionBrowserRow[];
+  total: number;
+  offset: number;
+  limit: number;
+};
+
+export type RawSessionEventRow = {
+  id: number;
+  external_id: string;
+  timestamp: string;
+  title: string | null;
+  content: string;
+  metadata: string | null;
+};
+
 function runImmediateTransaction<T>(fn: () => T): T {
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -202,6 +244,95 @@ export function listActiveSessions(filter: ActiveSessionFilter = {}): SessionInd
     .map(row => ({ ...row, state: deriveStateForIndexRow(row, nowMs) }))
     .filter(row => allowed.has(row.state))
     .slice(0, filter.limit ?? 50);
+}
+
+export function listSessions(filter: SessionBrowserFilter = {}): SessionBrowserPage {
+  const clauses: string[] = [];
+  const params: any[] = [];
+  if (filter.vendor) {
+    clauses.push('si.vendor = ?');
+    params.push(filter.vendor);
+  }
+  if (filter.participant_id) {
+    clauses.push('si.participant_id = ?');
+    params.push(filter.participant_id);
+  }
+  if (filter.project) {
+    clauses.push('si.project = ?');
+    params.push(filter.project);
+  }
+  if (filter.since) {
+    clauses.push('julianday(si.last_activity_at) >= julianday(?)');
+    params.push(filter.since);
+  }
+  if (filter.until) {
+    clauses.push('julianday(si.last_activity_at) <= julianday(?)');
+    params.push(filter.until);
+  }
+  if (filter.q) {
+    clauses.push(`(
+      si.session_id LIKE ?
+      OR si.participant_id LIKE ?
+      OR si.project_role LIKE ?
+      OR si.model LIKE ?
+      OR si.last_log_line LIKE ?
+    )`);
+    const needle = `%${filter.q}%`;
+    params.push(needle, needle, needle, needle, needle);
+  }
+
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+  const nowMs = Date.now();
+  let rows = db.prepare(
+    `SELECT
+       si.*,
+       CASE
+         WHEN su.vendor IS NULL THEN NULL
+         ELSE COALESCE(su.input_tokens, 0) + COALESCE(su.output_tokens, 0) + COALESCE(su.cached_tokens, 0) + COALESCE(su.reasoning_tokens, 0)
+       END AS tokens,
+       su.cost_usd AS cost_usd
+     FROM session_index si
+     LEFT JOIN session_usage su ON su.vendor = si.vendor AND su.session_id = si.session_id
+     ${where}`
+  ).all(...params) as SessionBrowserRow[];
+
+  rows = rows.map(row => ({ ...row, state: deriveStateForIndexRow(row, nowMs) }));
+  if (filter.state) rows = rows.filter(row => row.state === filter.state);
+
+  const sort = filter.sort ?? 'last_activity_at:desc';
+  rows.sort((a, b) => {
+    if (sort === 'tokens:desc') return (b.tokens ?? -1) - (a.tokens ?? -1);
+    if (sort === 'cost_usd:desc') return (b.cost_usd ?? -1) - (a.cost_usd ?? -1);
+    const [field, dir] = sort.split(':') as ['last_activity_at' | 'started_at', 'asc' | 'desc'];
+    const av = field === 'started_at' ? a.started_at : a.last_activity_at;
+    const bv = field === 'started_at' ? b.started_at : b.last_activity_at;
+    const at = av ? Date.parse(av) : 0;
+    const bt = bv ? Date.parse(bv) : 0;
+    return dir === 'asc' ? at - bt : bt - at;
+  });
+
+  const total = rows.length;
+  const offset = filter.offset ?? 0;
+  const limit = filter.limit ?? 100;
+  return { sessions: rows.slice(offset, offset + limit), total, offset, limit };
+}
+
+export function getRawSessionEvents(vendor: Vendor, sessionId: string, rawEventId: number | null): RawSessionEventRow[] {
+  const namespacedExternalId = `${vendor}:${sessionId}`;
+  if (rawEventId !== null) {
+    return db.prepare(
+      `SELECT id, external_id, timestamp, title, content, metadata
+       FROM raw_events
+       WHERE id = ? OR external_id = ? OR external_id = ?
+       ORDER BY timestamp ASC, id ASC`
+    ).all(rawEventId, namespacedExternalId, sessionId) as RawSessionEventRow[];
+  }
+  return db.prepare(
+    `SELECT id, external_id, timestamp, title, content, metadata
+     FROM raw_events
+     WHERE external_id = ? OR external_id = ?
+     ORDER BY timestamp ASC, id ASC`
+  ).all(namespacedExternalId, sessionId) as RawSessionEventRow[];
 }
 
 function parseSessionUsage(row: SessionUsageRow | undefined): SessionUsage | null {
