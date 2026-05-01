@@ -19,6 +19,7 @@ function makeAcDb(filePath: string, sessionId: string): void {
   const db = new Database(filePath);
   db.exec(`
     CREATE TABLE participants (id TEXT PRIMARY KEY, project TEXT, role TEXT, active_session_id TEXT);
+    CREATE TABLE valhalla_sessions (participant_id TEXT NOT NULL, version_n INTEGER NOT NULL, old_session_id TEXT NOT NULL);
     INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_devops', 'mm', 'devops', '${sessionId}');
   `);
   db.close();

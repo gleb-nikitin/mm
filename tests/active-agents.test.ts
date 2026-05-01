@@ -16,7 +16,12 @@ function makeAcShapeDb(dbPath: string): Database {
     project TEXT NOT NULL,
     role TEXT NOT NULL,
     active_session_id TEXT
-  )`);
+  );
+  CREATE TABLE valhalla_sessions (
+    participant_id TEXT NOT NULL,
+    version_n INTEGER NOT NULL,
+    old_session_id TEXT NOT NULL
+  );`);
   return db;
 }
 
@@ -76,6 +81,21 @@ describe('resolveParticipantIds', () => {
     const out = resolveParticipantIds(['sess-known', 'sess-unknown']);
     expect(out.get('sess-known')).toBe('mm_cto');
     expect(out.has('sess-unknown')).toBe(false);
+  });
+
+  test('resolves old_session_id via valhalla_sessions', () => {
+    const acDbPath = path.join(tmpDir, 'msg.db');
+    const acDb = makeAcShapeDb(acDbPath);
+    acDb.exec(`
+      INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_cto', 'mm', 'cto', null);
+      INSERT INTO valhalla_sessions (participant_id, version_n, old_session_id) VALUES ('mm_cto', 1, 'sess-old');
+    `);
+    acDb.close();
+
+    process.env.MT_AC_DB_PATH = acDbPath;
+    const out = resolveParticipantIds(['sess-old']);
+    expect(out.get('sess-old')).toBe('mm_cto');
+    expect(out.size).toBe(1);
   });
 });
 

@@ -37,15 +37,27 @@ export function resolveSessionLinks(sessionIds: string[]): SessionLinkResolution
     acDb.exec('PRAGMA query_only = ON;');
     acDb.exec('PRAGMA busy_timeout = 5000;');
     const placeholders = sessionIds.map(() => '?').join(',');
+    const queryParams = [...sessionIds, ...sessionIds];
     const rows = acDb.prepare(
-      `SELECT
-         p.active_session_id AS session_id,
-         p.id AS participant_id,
-         p.project AS project,
-         p.role AS role
-       FROM participants p
-       WHERE p.active_session_id IN (${placeholders})`
-    ).all(...sessionIds) as Array<{
+      `SELECT session_id, participant_id, project, role FROM (
+         SELECT
+           p.active_session_id AS session_id,
+           p.id AS participant_id,
+           p.project,
+           p.role
+         FROM participants p
+         WHERE p.active_session_id IN (${placeholders})
+         UNION ALL
+         SELECT
+           v.old_session_id AS session_id,
+           v.participant_id,
+           p.project,
+           p.role
+         FROM valhalla_sessions v
+         JOIN participants p ON p.id = v.participant_id
+         WHERE v.old_session_id IN (${placeholders})
+       )`
+    ).all(...queryParams) as Array<{
       session_id: string;
       participant_id: string | null;
       project: string | null;

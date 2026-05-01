@@ -16,7 +16,12 @@ function makeAcShapeDb(dbPath: string): Database {
     project TEXT NOT NULL,
     role TEXT NOT NULL,
     active_session_id TEXT
-  )`);
+  );
+  CREATE TABLE valhalla_sessions (
+    participant_id TEXT NOT NULL,
+    version_n INTEGER NOT NULL,
+    old_session_id TEXT NOT NULL
+  );`);
   return db;
 }
 
@@ -52,7 +57,7 @@ describe('R1 session linkage index', () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  test('resolveSessionLinks ignores sessions that are not currently active in ac participants', () => {
+  test('resolveSessionLinks ignores sessions that are not active and not in valhalla', () => {
     const acDb = makeAcShapeDb(acDbPath);
     acDb.exec(`INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_cto', 'mm', 'cto', null)`);
     acDb.close();
@@ -65,6 +70,31 @@ describe('R1 session linkage index', () => {
       // ac no longer stores inactive session history in msg.db; mm can only
       // resolve the participant whose active_session_id matches the import.
       expect(out.links.has('sess-inactive')).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.MT_AC_DB_PATH;
+      else process.env.MT_AC_DB_PATH = saved;
+    }
+  });
+
+  test('resolveSessionLinks resolves historical session ids through valhalla_sessions', () => {
+    const acDb = makeAcShapeDb(acDbPath);
+    acDb.exec(`
+      INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_cto', 'mm', 'cto', null);
+      INSERT INTO valhalla_sessions (participant_id, version_n, old_session_id) VALUES ('mm_cto', 1, 'sess-old');
+    `);
+    acDb.close();
+
+    const saved = process.env.MT_AC_DB_PATH;
+    process.env.MT_AC_DB_PATH = acDbPath;
+    try {
+      const out = resolveSessionLinks(['sess-old']);
+      expect(out.acDbAvailable).toBe(true);
+      expect(out.links.get('sess-old')).toEqual({
+        participant_id: 'mm_cto',
+        project: 'mm',
+        role: 'cto',
+        project_role: 'mm/cto',
+      });
     } finally {
       if (saved === undefined) delete process.env.MT_AC_DB_PATH;
       else process.env.MT_AC_DB_PATH = saved;
