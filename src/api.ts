@@ -102,20 +102,34 @@ async function serveUiFile(relPath: string): Promise<Response> {
 }
 
 const PORT = parseInt(process.env.MT_PORT || '3000', 10);
+const PLUGIN_SOCKET = process.env.AURORA_PLUGIN_SOCKET?.trim() || null;
 // Default to localhost-only. /raw-ui, /chunk/:id, /artifact/:id, and /active
 // expose raw transcript data; exposing them on a public interface would leak
 // real conversations. Set MT_BIND=0.0.0.0 explicitly to override — you'll get
 // a startup warning so it's not accidental.
 const HOST = process.env.MT_BIND || '127.0.0.1';
-if (HOST !== '127.0.0.1' && HOST !== 'localhost') {
+if (!PLUGIN_SOCKET && HOST !== '127.0.0.1' && HOST !== 'localhost') {
   console.warn(`⚠️  MT_BIND=${HOST}: API is reachable beyond localhost. Raw transcripts are exposed without auth — only do this on a trusted network.`);
 }
 
-const server = Bun.serve({
-  port: PORT,
-  hostname: HOST,
+function preparePluginSocket(socketPath: string): void {
+  fs.mkdirSync(path.dirname(socketPath), { recursive: true });
+  try {
+    const existing = fs.lstatSync(socketPath);
+    if (!existing.isSocket()) {
+      throw new Error(`AURORA_PLUGIN_SOCKET path exists and is not a socket: ${socketPath}`);
+    }
+    fs.unlinkSync(socketPath);
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+}
+
+if (PLUGIN_SOCKET) preparePluginSocket(PLUGIN_SOCKET);
+
+const serveOptions = {
   idleTimeout: 180,
-  async fetch(req) {
+  async fetch(req: Request) {
     const url = new URL(req.url);
 
     if (url.pathname === "/") {
@@ -420,9 +434,15 @@ const server = Bun.serve({
 
     return new Response("Not found", { status: 404 });
   },
-});
+};
 
-console.log(`🚀 Brain API listening on http://${HOST}:${server.port}`);
+const server = Bun.serve(PLUGIN_SOCKET
+  ? { unix: PLUGIN_SOCKET, fetch: serveOptions.fetch }
+  : { ...serveOptions, port: PORT, hostname: HOST });
+
+console.log(PLUGIN_SOCKET
+  ? `🚀 Brain API listening on unix:${PLUGIN_SOCKET}`
+  : `🚀 Brain API listening on http://${HOST}:${server.port}`);
 
 // --- /raw-ui: dump every row of every table. No filters, no nav, no JS. ---
 

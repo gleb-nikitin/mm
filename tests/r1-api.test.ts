@@ -381,6 +381,55 @@ async function spawnApi(): Promise<{ port: number; close: () => Promise<void> }>
   };
 }
 
+async function spawnSocketApi(): Promise<{
+  socketPath: string;
+  port: number;
+  close: () => Promise<{ stdout: string; stderr: string }>;
+}> {
+  const port = await getFreePort();
+  const socketPath = path.join(tmpRoot, 'missing-parent', 'sockets', 'mm-test.sock');
+  const proc = Bun.spawn(['bun', 'src/api.ts'], {
+    cwd: REPO,
+    env: {
+      ...process.env,
+      MT_BRAIN_ROOT: tmpRoot,
+      MT_PORT: String(port),
+      AURORA_PLUGIN_SOCKET: socketPath,
+    },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const deadline = Date.now() + 5000;
+  let ready = false;
+  while (Date.now() < deadline) {
+    try {
+      const r = await fetch('http://localhost/help', { unix: socketPath });
+      if (r.ok) { ready = true; break; }
+    } catch {}
+    if (proc.exitCode !== null) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  if (!ready) {
+    proc.kill();
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(stderr || `API did not start on unix socket ${socketPath}`);
+  }
+  return {
+    socketPath,
+    port,
+    close: async () => {
+      proc.kill();
+      await proc.exited;
+      const [stdout, stderr] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      fs.rmSync(socketPath, { force: true });
+      return { stdout, stderr };
+    },
+  };
+}
+
 async function withApi<T>(fn: (base: string) => Promise<T>): Promise<T> {
   const api = await spawnApi();
   try {
@@ -583,6 +632,28 @@ describe('R1 active sessions API', () => {
       expect(status).toBe(404);
       expect(body.error.code).toBe('not_found');
     });
+  });
+
+  test('AURORA_PLUGIN_SOCKET binds a unix socket instead of the TCP port', async () => {
+    const api = await spawnSocketApi();
+    let output: { stdout: string; stderr: string } | null = null;
+    try {
+      const socketStats = await fetch('http://localhost/stats', { unix: api.socketPath });
+      expect(socketStats.status).toBe(200);
+
+      let portReachable = true;
+      try {
+        await fetch(`http://127.0.0.1:${api.port}/stats`);
+      } catch {
+        portReachable = false;
+      }
+      expect(portReachable).toBe(false);
+      expect(fs.existsSync(path.dirname(api.socketPath))).toBe(true);
+    } finally {
+      output = await api.close();
+    }
+    expect(output.stdout).toContain(`unix:${api.socketPath}`);
+    expect(output.stdout).not.toContain(`http://127.0.0.1:${api.port}`);
   });
 
   test('sessions browser API lists sessions with usage, filters, sorts, and paginates', async () => {
