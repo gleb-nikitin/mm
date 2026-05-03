@@ -290,8 +290,8 @@ describe('getActiveAgentsLive', () => {
 
   test('claude: returns row with provider, project, snippet, model', () => {
     const claudeDir = path.join(probeTmp, 'claude');
-    writeClaudeSession(claudeDir, '-Users-glebnikitin-work-code-mm', 'sess.jsonl',
-      'sess-claude-1', '/Users/glebnikitin/work/code/mm',
+    writeClaudeSession(claudeDir, '-test-cwd-mm', 'sess.jsonl',
+      'sess-claude-1', '/test-cwd/mm',
       { lastUserText: 'hello mm', model: 'claude-opus-4-6' });
 
     const rows = getActiveAgentsLive({
@@ -306,13 +306,13 @@ describe('getActiveAgentsLive', () => {
     expect(r.external_id).toBe('sess-claude-1');
     expect(r.last_user_snippet).toBeTruthy();
     expect(r.model).toBe('claude-opus-4-6');
-    expect(r.cwd).toBe('/Users/glebnikitin/work/code/mm');
+    expect(r.cwd).toBe('/test-cwd/mm');
   });
 
   test('codex: confirmation test — one row from session_meta record', () => {
     const codexDir = path.join(probeTmp, 'codex');
     writeCodexSession(codexDir, '2026-04-22', 'rollout-1.jsonl',
-      'sess-codex-1', '/Users/glebnikitin/work/code/mm',
+      'sess-codex-1', '/test-cwd/mm',
       { lastUserText: 'hello codex' });
 
     const rows = getActiveAgentsLive({
@@ -345,7 +345,7 @@ describe('getActiveAgentsLive', () => {
   test('stale file: session older than maxAgeSeconds is excluded', () => {
     const claudeDir = path.join(probeTmp, 'claude');
     writeClaudeSession(claudeDir, 'old-proj', 'old.jsonl',
-      'sess-stale', '/Users/glebnikitin/work/code/old-proj',
+      'sess-stale', '/test-cwd/old-proj',
       { lastUserText: 'old turn' });
     const filePath = path.join(claudeDir, 'old-proj', 'old.jsonl');
     // Age the file 20 min into the past.
@@ -364,9 +364,9 @@ describe('getActiveAgentsLive', () => {
   test('project filter: only matching project returned', () => {
     const claudeDir = path.join(probeTmp, 'claude');
     writeClaudeSession(claudeDir, 'proj-mm', 'mm.jsonl',
-      'sess-mm', '/Users/glebnikitin/work/code/mm', { lastUserText: 'mm' });
+      'sess-mm', '/test-cwd/mm', { lastUserText: 'mm' });
     writeClaudeSession(claudeDir, 'proj-ac', 'ac.jsonl',
-      'sess-ac', '/Users/glebnikitin/work/code/ac', { lastUserText: 'ac' });
+      'sess-ac', '/test-cwd/ac', { lastUserText: 'ac' });
 
     const rows = getActiveAgentsLive({
       project: 'mm',
@@ -387,7 +387,7 @@ describe('getActiveAgentsLive', () => {
       JSON.stringify({
         type: 'user',
         sessionId: 'sess-noise',
-        cwd: '/Users/glebnikitin/work/code/noise',
+        cwd: '/test-cwd/noise',
         timestamp: '2026-04-22T19:30:00Z',
         message: { content: [] },
       }) + '\n');
@@ -403,7 +403,7 @@ describe('getActiveAgentsLive', () => {
   test('participant resolution: populates participant_id when ac db has active row', () => {
     const claudeDir = path.join(probeTmp, 'claude');
     writeClaudeSession(claudeDir, 'proj-mm', 'mm.jsonl',
-      'sess-linked', '/Users/glebnikitin/work/code/mm', { lastUserText: 'hi' });
+      'sess-linked', '/test-cwd/mm', { lastUserText: 'hi' });
 
     const acDbPath = path.join(probeTmp, 'ac-msg.db');
     const acDb = makeAcShapeDb(acDbPath);

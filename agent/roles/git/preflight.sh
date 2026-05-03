@@ -3,7 +3,7 @@ set -euo pipefail
 
 # preflight.sh — read-only state dump for mm_git session start.
 
-REPO="${MM_GIT_REPO:-/Users/glebnikitin/work/code/mm}"
+REPO="${MM_GIT_REPO:-$HOME/work/code/mm}"
 
 die() { echo "error: $1" >&2; exit 1; }
 

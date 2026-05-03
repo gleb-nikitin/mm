@@ -3,7 +3,7 @@ set -euo pipefail
 
 # commit-sweep.sh — sweep-all commit for mm_git.
 
-REPO="${MM_GIT_REPO:-/Users/glebnikitin/work/code/mm}"
+REPO="${MM_GIT_REPO:-$HOME/work/code/mm}"
 TRAILER="Co-Authored-By: Claude Opus 3.5 (1M context) <noreply@anthropic.com>"
 
 die() { echo "error: $1" >&2; exit 1; }

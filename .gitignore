@@ -28,3 +28,14 @@ meta/dream-report.md
 meta/index.md
 meta/timeline.md
 meta/log.md
+
+# Imported session content — never tracked
+raw/claude/
+raw/codex/
+raw/gemini/
+raw/events/
+raw/knowledge/
+raw/research/
+
+# Per-machine participant cwd registry — local config
+agent/roles/clean/set.md

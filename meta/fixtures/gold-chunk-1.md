@@ -16,12 +16,12 @@ User: You are auditing a plan for Mnemonic51 (mm), a local-first tool whose prim
   agent, not a human.                                                                           
                                                                                                 
   Read in order:                                                                                
-  1. /Users/glebnikitin/work/code/mm/human-how-it-works.md — what mm is today (v10).            
-  2. /Users/glebnikitin/work/code/mm/agent/docs/2026-04-20-atomic-pivot.md — brainstorm (the    
+  1. <workspace>/mm/human-how-it-works.md — what mm is today (v10).
+  2. <workspace>/mm/agent/docs/2026-04-20-atomic-pivot.md — brainstorm (the
   "why").                                                                                       
-  3. /Users/glebnikitin/work/code/mm/agent/docs/2026-04-20-v11-plan.md — the plan under audit   
+  3. <workspace>/mm/agent/docs/2026-04-20-v11-plan.md — the plan under audit
   (the "what/how").                                                                             
-  4. /Users/glebnikitin/work/code/mm/agent/roles/devops/handoff.md — current operational
+  4. <workspace>/mm/agent/roles/devops/handoff.md — current operational
   gotchas.                                                                                      
                                                
   Global intent of the owner:                                                                   

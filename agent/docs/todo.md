@@ -357,7 +357,6 @@ Not devops calls. Listed so we don't forget.
 
 - Choose a license.
 - Decide whether to scrub the sample brain content in `raw/` and `wiki/` (currently personal data).
-- Parameterize or delete `scripts/import-chats.ts` — it has a hardcoded personal path.
 - Version-tag a public 0.1 of **Mnemonic Light** — the TS/Bun standalone + ac-plugin shipment. Release proves the methodology; Hardcore can come later.
 - Decide whether `meta/skills/*.md` stays in repo or ships as a user-extensible template (2j pushes toward "user-extensible").
 

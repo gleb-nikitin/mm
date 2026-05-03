@@ -53,7 +53,7 @@ The backfill populates `session_index`, records prompt-footer links when a real 
 
 ## Importing Telegram chats
 
-`scripts/import-chats.ts` is a **legacy** one-off: hard-coded path, writes flat `raw/*.md` and uses raw SQL. Prefer routing new work through **`addToBrain`** with `{ sourceType: 'telegram', project: '<chat-slug>' }` so files land under `raw/telegram/<project>/`. See **`meta/skills/import-chat.md`** for the intended slice-and-write pattern.
+Route Telegram chat imports through **`addToBrain`** with `{ sourceType: 'telegram', project: '<chat-slug>' }` so files land under `raw/telegram/<project>/`. See **`meta/skills/import-chat.md`** for the intended slice-and-write pattern.
 
 ## Adding single entries manually
 

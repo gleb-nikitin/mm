@@ -55,7 +55,6 @@ To enable semantic "meaning-based" search, the wiki content must be vectorized.
 ### Scripts (`scripts/`)
 - `import-claude.ts` / `import-codex.ts` / `import-gemini.ts`: Session importers → **`raw_events`** (not `raw/` markdown by default).
 - **`chunk-events.ts`**: **`raw_events`** → turn-aligned chunks under **`raw/events/<project>/`** for the normal **`raw_entries`** pipeline.
-- `import-chats.ts`: Legacy Telegram one-off → flat **`raw/`** + SQL.
 - `ingest-manual.ts`: Optional ingest of **`how-mm-works.md`** via `addToBrain`.
 
 ---

@@ -16,7 +16,7 @@ export function resolveAcDbPath(opts: AcDbPathOpts = {}): string {
   const prodPath = opts.prodPath
     ?? path.join(os.homedir(), 'Library/Application Support/com.aurora.core/data/msg.db');
   if (fs.existsSync(prodPath)) return prodPath;
-  return opts.workspacePath ?? '/Users/glebnikitin/work/code/ac/data/msg.db';
+  return opts.workspacePath ?? path.join(os.homedir(), 'work/code/ac/data/msg.db');
 }
 
 export type SessionLinkResolution = {

@@ -19,3 +19,4 @@
 - **2026-05-01**: feat(watch): add supervisor-aware watch loop script
 - **2026-05-03**: feat(api): support configurable base-path for UI and API
 - **2026-05-03**: feat(api/ui): support configurable base-path for plugin integration
+- **2026-05-03**: chore: scrub user-coupled paths and gitignore session content for public push

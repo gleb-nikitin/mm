@@ -55,7 +55,6 @@ For a short README-style overview, see **[`README.md`](README.md)**. For behavio
 | MCP tools | `src/mcp.ts` |
 | Claude / Codex / Gemini importers | `scripts/import-claude.ts`, `import-codex.ts`, `import-gemini.ts` |
 | Narrative chunker (events → raw) | `scripts/chunk-events.ts` |
-| Telegram one-off | `scripts/import-chats.ts` |
 | Tests | `tests/behavior.test.ts` |
 | macOS shortcuts | `run.command`, `watch-agents.command`, `process-new.command` |
 
@@ -192,10 +191,6 @@ Paths, **`initDb()`** (schema **v10**: `raw_events.chunked`, etc.), **`hybridSea
 
 MCP stdio server: `search_brain`, `query_brain`, `add_to_brain`, `validate_claim`, `brain_stats`, `list_projects`, `list_active_agents`, `embed_brain`.
 
-### `scripts/import-chats.ts`
-
-Telegram: hard-coded path to `messages.md`, sections → **`raw/`** + **`raw_entries`** (legacy layout).
-
 ### `scripts/import-claude.ts` · `import-codex.ts` · `import-gemini.ts`
 
 Walk vendor dirs; flatten sessions; insert **`raw_events`** + **`events_fts`** + **`import_state`**; dedup by **`external_id`**.
@@ -220,7 +215,6 @@ Integration tests: schema **v10**, **`chunk-events`** / **`chunked`**, process r
 | `src/brain.ts` | CLI |
 | `src/core.ts` | DB, search, LLM, embeddings |
 | `src/mcp.ts` | MCP tools |
-| `scripts/import-chats.ts` | Telegram → raw |
 | `scripts/import-claude.ts` | Claude → events |
 | `scripts/import-codex.ts` | Codex → events |
 | `scripts/import-gemini.ts` | Gemini → events |
