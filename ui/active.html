@@ -179,7 +179,7 @@
     </div>
   </div>
 
-  <script src="/ui/alpine/cdn.min.js" defer></script>
+  <script src="<!--BASE-->/ui/alpine/cdn.min.js" defer></script>
   <script>
     function app() {
       return {
@@ -204,7 +204,7 @@
 
         async fetchAgents() {
           try {
-            const r = await fetch('/active?max_age_seconds=300');
+            const r = await fetch((window.MM_BASE || '') + '/active?max_age_seconds=300');
             if (!r.ok) throw new Error('Fetch failed: ' + r.status);
             const md = await r.text();
             this.agentsMd = md;

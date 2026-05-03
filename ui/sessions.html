@@ -195,7 +195,7 @@
     }
 
     function buildUrl() {
-      const url = new URL('/api/v1/sessions', location.origin);
+      const url = new URL((window.MM_BASE || '') + '/api/v1/sessions', location.origin);
       for (const input of inputs) {
         const value = input.value.trim();
         if (!value) continue;
@@ -209,7 +209,7 @@
     }
 
     function detailHref(row) {
-      return `/sessions/${encodeURIComponent(row.vendor)}/${encodeURIComponent(row.session_id)}`;
+      return `${window.MM_BASE || ''}/sessions/${encodeURIComponent(row.vendor)}/${encodeURIComponent(row.session_id)}`;
     }
 
     function renderState(value) {

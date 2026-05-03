@@ -17,4 +17,5 @@
 - **2026-05-01**: docs: remove duplicate milestone entry
 - **2026-05-01**: feat(api): bind AURORA_PLUGIN_SOCKET when set
 - **2026-05-01**: feat(watch): add supervisor-aware watch loop script
-- **2026-05-02**: feat(watch): add supervisor-aware watch loop script
+- **2026-05-03**: feat(api): support configurable base-path for UI and API
+- **2026-05-03**: feat(api/ui): support configurable base-path for plugin integration

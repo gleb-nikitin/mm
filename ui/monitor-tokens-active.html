@@ -197,7 +197,7 @@
     }
 
     function buildUrl() {
-      const url = new URL('/api/v1/tokens/active', location.origin);
+      const url = new URL((window.MM_BASE || '') + '/api/v1/tokens/active', location.origin);
       for (const [key, el] of Object.entries(inputs)) {
         const v = el.value.trim();
         if (v) url.searchParams.set(key, v);

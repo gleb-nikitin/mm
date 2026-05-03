@@ -641,6 +641,20 @@ describe('R1 active sessions API', () => {
       const socketStats = await fetch('http://localhost/stats', { unix: api.socketPath });
       expect(socketStats.status).toBe(200);
 
+      const sessionsPage = await fetch('http://localhost/sessions', { unix: api.socketPath });
+      expect(sessionsPage.status).toBe(200);
+      const sessionsHtml = await sessionsPage.text();
+      expect(sessionsHtml).toContain('window.MM_BASE = "/plugin/mm";');
+      expect(sessionsHtml).toContain('href="/plugin/mm/sessions"');
+
+      const activeUiPage = await fetch('http://localhost/active-ui', { unix: api.socketPath });
+      expect(activeUiPage.status).toBe(200);
+      expect(await activeUiPage.text()).toContain('src="/plugin/mm/ui/alpine/cdn.min.js"');
+
+      const monitorPage = await fetch('http://localhost/monitor', { unix: api.socketPath });
+      expect(monitorPage.status).toBe(200);
+      expect(await monitorPage.text()).toContain('href="/plugin/mm/monitor/tokens/active"');
+
       let portReachable = true;
       try {
         await fetch(`http://127.0.0.1:${api.port}/stats`);
@@ -776,11 +790,20 @@ describe('R1 active sessions API', () => {
     await withApi(async base => {
       const list = await fetch(`${base}/sessions`);
       expect(list.status).toBe(200);
-      expect(await list.text()).toContain('MNEMONIC · SESSIONS');
+      const listHtml = await list.text();
+      expect(listHtml).toContain('MNEMONIC · SESSIONS');
+      expect(listHtml).toContain('window.MM_BASE = "";');
+      expect(listHtml).toContain('href="/sessions"');
+
+      const activeUi = await fetch(`${base}/active-ui`);
+      expect(activeUi.status).toBe(200);
+      expect(await activeUi.text()).toContain('src="/ui/alpine/cdn.min.js"');
 
       const detail = await fetch(`${base}/sessions/claude/sess-mm-cto-working`);
       expect(detail.status).toBe(200);
-      expect(await detail.text()).toContain('MNEMONIC · SESSION');
+      const detailHtml = await detail.text();
+      expect(detailHtml).toContain('MNEMONIC · SESSION');
+      expect(detailHtml).toContain('href="/sessions"');
     });
   });
 

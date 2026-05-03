@@ -148,7 +148,7 @@
     </div>
   </div>
 
-  <script src="/ui/alpine/cdn.min.js" defer></script>
+  <script src="<!--BASE-->/ui/alpine/cdn.min.js" defer></script>
   <script>
     function app() {
       return {
@@ -172,7 +172,7 @@
             if (this.filters.project) params.set('project', this.filters.project);
             params.set('processed', this.filters.processed);
             params.set('limit', '1000');
-            const r = await fetch('/chunks?' + params.toString());
+            const r = await fetch((window.MM_BASE || '') + '/chunks?' + params.toString());
             if (!r.ok) throw new Error('Fetch failed: ' + r.status);
             this.rows = await r.json();
             this.projects = Array.from(new Set(this.rows.map(x => x.project))).sort();
@@ -195,7 +195,7 @@
           if (this.open[id] && !this.bodies[id] && !this.loadingBody[id]) {
             this.loadingBody[id] = true;
             try {
-              const r = await fetch('/chunk/' + id);
+              const r = await fetch((window.MM_BASE || '') + '/chunk/' + id);
               if (!r.ok) throw new Error('Fetch failed: ' + r.status);
               this.bodies[id] = await r.json();
             } catch (e) {

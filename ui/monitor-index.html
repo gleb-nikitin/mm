@@ -108,32 +108,32 @@
     <div class="subtitle">One debug page per consumer-facing R1 endpoint.</div>
 
     <section class="grid" aria-label="R1 monitor routes">
-      <a class="panel" href="/monitor/sessions/active">
+      <a class="panel" href="<!--BASE-->/monitor/sessions/active">
         <div class="method">GET JSON</div>
         <div class="endpoint">/api/v1/sessions/active</div>
         <div class="purpose">Active session envelope with project, role, state, and limit filters.</div>
       </a>
-      <a class="panel" href="/monitor/cost/by-session">
+      <a class="panel" href="<!--BASE-->/monitor/cost/by-session">
         <div class="method">GET JSON</div>
         <div class="endpoint">/api/v1/cost/by-session</div>
         <div class="purpose">Token and cost attribution for one session, optionally vendor-scoped.</div>
       </a>
-      <a class="panel" href="/monitor/cost/by-message">
+      <a class="panel" href="<!--BASE-->/monitor/cost/by-message">
         <div class="method">GET JSON</div>
         <div class="endpoint">/api/v1/cost/by-message</div>
         <div class="purpose">Token and cost attribution resolved from one chain message link.</div>
       </a>
-      <a class="panel" href="/monitor/tokens/by-participant">
+      <a class="panel" href="<!--BASE-->/monitor/tokens/by-participant">
         <div class="method">GET JSON</div>
         <div class="endpoint">/api/v1/tokens/by-participant</div>
         <div class="purpose">Participant token totals for orchestrator verification and operator review.</div>
       </a>
-      <a class="panel" href="/monitor/tokens/active">
+      <a class="panel" href="<!--BASE-->/monitor/tokens/active">
         <div class="method">GET JSON</div>
         <div class="endpoint">/api/v1/tokens/active</div>
         <div class="purpose">Latest-turn context-window fill across active sessions; drives relaunch decisions.</div>
       </a>
-      <a class="panel sse" href="/monitor/sessions/events">
+      <a class="panel sse" href="<!--BASE-->/monitor/sessions/events">
         <div class="method">GET SSE</div>
         <div class="endpoint">/api/v1/sessions/events</div>
         <div class="purpose">Live session lifecycle stream with replay and project/role filters.</div>

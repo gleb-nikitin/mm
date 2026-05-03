@@ -144,7 +144,7 @@
     }
 
     function buildUrl() {
-      const url = new URL('/api/v1/tokens/by-participant', location.origin);
+      const url = new URL((window.MM_BASE || '') + '/api/v1/tokens/by-participant', location.origin);
       const participantId = participantInput.value.trim();
       if (participantId) url.searchParams.set('participant_id', participantId);
       return url;

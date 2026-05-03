@@ -189,7 +189,7 @@
     </div>
   </div>
 
-  <script src="/ui/alpine/cdn.min.js" defer></script>
+  <script src="<!--BASE-->/ui/alpine/cdn.min.js" defer></script>
   <script>
     function app() {
       return {
@@ -219,7 +219,7 @@
 
         async loadStats() {
           try {
-            const r = await fetch('/stats');
+            const r = await fetch((window.MM_BASE || '') + '/stats');
             const md = await r.text();
             const v = md.match(/Schema Version:\s*(\d+)/); if (v) this.stats.version = parseInt(v[1], 10);
             const a = md.match(/Artifacts \(active \/ total\):\s*(\d+)\s*\/\s*(\d+)/);
@@ -238,7 +238,7 @@
             if (this.filters.type)    params.set('type',    this.filters.type);
             params.set('status', this.filters.status);
             params.set('limit', '1000');
-            const r = await fetch('/artifacts?' + params.toString());
+            const r = await fetch((window.MM_BASE || '') + '/artifacts?' + params.toString());
             if (!r.ok) throw new Error('Fetch failed: ' + r.status);
             this.rows = await r.json();
             this.projects = Array.from(new Set(this.rows.map(x => x.project))).sort();
@@ -267,7 +267,7 @@
           if (this.open[id] && !this.detail[id] && !this.loadingDetail[id]) {
             this.loadingDetail[id] = true;
             try {
-              const r = await fetch('/artifact/' + id);
+              const r = await fetch((window.MM_BASE || '') + '/artifact/' + id);
               if (!r.ok) throw new Error('Fetch failed: ' + r.status);
               this.detail[id] = await r.json();
             } catch (e) {
@@ -306,7 +306,7 @@
           if (!this.detail[id] && !this.loadingDetail[id]) {
             this.loadingDetail[id] = true;
             try {
-              const r = await fetch('/artifact/' + id);
+              const r = await fetch((window.MM_BASE || '') + '/artifact/' + id);
               this.detail[id] = await r.json();
             } catch (e) { /* ignore */ }
             finally { this.loadingDetail[id] = false; }

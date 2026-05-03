@@ -13,18 +13,21 @@ import { apiError, handleActiveSessions, handleActiveTokens, handleCostByMessage
 initDb();
 
 const UI_DIR = path.resolve(new URL('../ui', import.meta.url).pathname);
+const PLUGIN_SOCKET = process.env.AURORA_PLUGIN_SOCKET?.trim() || null;
+const BASE_PATH = PLUGIN_SOCKET ? '/plugin/mm' : '';
+const uiHref = (href: string) => BASE_PATH + href;
 
 // --- Shared human-page nav (single source of truth). Pages opt in by
 // including the `<!--NAV-->` placeholder; serveUiFile substitutes it.
 const NAV_LINKS: { label: string; href: string }[] = [
-  { label: 'home',      href: '/' },
-  { label: 'artifacts', href: '/artifacts-ui' },
-  { label: 'chunks',    href: '/chunks-ui' },
-  { label: 'raw',       href: '/raw-ui' },
-  { label: 'active',    href: '/active-ui' },
-  { label: 'monitor',   href: '/monitor' },
-  { label: 'sessions',  href: '/sessions' },
-  { label: 'stats',     href: '/stats' },
+  { label: 'home',      href: uiHref('/') },
+  { label: 'artifacts', href: uiHref('/artifacts-ui') },
+  { label: 'chunks',    href: uiHref('/chunks-ui') },
+  { label: 'raw',       href: uiHref('/raw-ui') },
+  { label: 'active',    href: uiHref('/active-ui') },
+  { label: 'monitor',   href: uiHref('/monitor') },
+  { label: 'sessions',  href: uiHref('/sessions') },
+  { label: 'stats',     href: uiHref('/stats') },
 ];
 
 const NAV_HTML = (() => {
@@ -39,7 +42,7 @@ const NAV_HTML = (() => {
   .mm-nav a:hover { background: rgba(126,200,227,0.12); }
   .mm-nav a.active { color: #b794f6; }
   `;
-  return `<style>${css}</style><nav class="mm-nav" data-mm-nav>${links}</nav>` +
+  return `<style>${css}</style><script>window.MM_BASE = ${JSON.stringify(BASE_PATH)};</script><nav class="mm-nav" data-mm-nav>${links}</nav>` +
     `<script>(function(){var p=location.pathname;document.querySelectorAll('[data-mm-nav] a').forEach(function(a){var h=a.getAttribute('data-nav-href');if(h===p||(h.length>1&&p===h)){a.classList.add('active');}});})();</script>`;
 })();
 
@@ -97,12 +100,12 @@ async function serveUiFile(relPath: string): Promise<Response> {
   // Only HTML gets the nav injection; pass other assets through verbatim.
   if (!relPath.endsWith('.html')) return new Response(file);
   const text = await file.text();
-  const withNav = text.includes('<!--NAV-->') ? text.replace('<!--NAV-->', NAV_HTML) : text;
-  return new Response(withNav, { headers: { 'Content-Type': 'text/html' } });
+  let html = text.replaceAll('<!--BASE-->', BASE_PATH);
+  html = html.includes('<!--NAV-->') ? html.replace('<!--NAV-->', NAV_HTML) : html;
+  return new Response(html, { headers: { 'Content-Type': 'text/html' } });
 }
 
 const PORT = parseInt(process.env.MT_PORT || '3000', 10);
-const PLUGIN_SOCKET = process.env.AURORA_PLUGIN_SOCKET?.trim() || null;
 // Default to localhost-only. /raw-ui, /chunk/:id, /artifact/:id, and /active
 // expose raw transcript data; exposing them on a public interface would leak
 // real conversations. Set MT_BIND=0.0.0.0 explicitly to override — you'll get

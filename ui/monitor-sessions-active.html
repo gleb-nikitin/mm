@@ -148,7 +148,7 @@
     }
 
     function buildUrl() {
-      const url = new URL('/api/v1/sessions/active', location.origin);
+      const url = new URL((window.MM_BASE || '') + '/api/v1/sessions/active', location.origin);
       for (const input of inputs) {
         const value = input.value.trim();
         if (value) url.searchParams.set(input.id, value);

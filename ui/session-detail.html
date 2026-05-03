@@ -94,7 +94,7 @@
     <section class="panel">
       <div id="summary" class="summary"></div>
       <div class="controls">
-        <a href="/sessions">Back to sessions</a>
+        <a href="<!--BASE-->/sessions">Back to sessions</a>
         <span id="status" class="status"></span>
         <div class="pager">
           <button id="copyJson" class="btn" type="button">Copy as JSON</button>
@@ -109,7 +109,11 @@
   </main>
 
   <script>
-    const parts = location.pathname.split('/').filter(Boolean);
+    const basePath = window.MM_BASE || '';
+    const localPath = basePath && location.pathname.startsWith(basePath + '/')
+      ? location.pathname.slice(basePath.length)
+      : location.pathname;
+    const parts = localPath.split('/').filter(Boolean);
     const vendor = decodeURIComponent(parts[1] || '');
     const sessionId = decodeURIComponent(parts.slice(2).join('/') || '');
     const endpointEl = document.getElementById('endpoint');
@@ -140,7 +144,7 @@
     }
 
     function apiUrl(extra = {}) {
-      const url = new URL(`/api/v1/sessions/${encodeURIComponent(vendor)}/${encodeURIComponent(sessionId)}/content`, location.origin);
+      const url = new URL(`${window.MM_BASE || ''}/api/v1/sessions/${encodeURIComponent(vendor)}/${encodeURIComponent(sessionId)}/content`, location.origin);
       url.searchParams.set('offset', String(extra.offset ?? offset));
       url.searchParams.set('limit', String(extra.limit ?? limit));
       return url;

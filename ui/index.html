@@ -280,7 +280,7 @@
     </template>
   </div>
 
-  <script src="/ui/alpine/cdn.min.js" defer></script>
+  <script src="<!--BASE-->/ui/alpine/cdn.min.js" defer></script>
   <script>
     function app() {
       return {
@@ -322,7 +322,7 @@
           this.mode = 'search';
           const seq = ++this.liveSeq;
           try {
-            const r = await fetch('/search?q=' + encodeURIComponent(q));
+            const r = await fetch((window.MM_BASE || '') + '/search?q=' + encodeURIComponent(q));
             const md = await r.text();
             if (seq !== this.liveSeq) return;
             this.results = parseSearch(md);
@@ -342,7 +342,7 @@
           this.busy = true;
           this.answer = '';
           try {
-            const r = await fetch('/query?q=' + encodeURIComponent(q));
+            const r = await fetch((window.MM_BASE || '') + '/query?q=' + encodeURIComponent(q));
             this.answer = await r.text();
           } catch (e) {
             this.answer = '**Error:** ' + (e.message || e);
@@ -356,7 +356,7 @@
           this.pageSlug = slug;
           this.pageTitle = title || slug;
           try {
-            const r = await fetch('/wiki/' + encodeURIComponent(slug));
+            const r = await fetch((window.MM_BASE || '') + '/wiki/' + encodeURIComponent(slug));
             if (r.ok) {
               this.page = await r.text();
             } else {

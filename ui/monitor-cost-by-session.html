@@ -115,7 +115,7 @@
       return escapeHtml(value);
     }
     function buildUrl() {
-      const url = new URL('/api/v1/cost/by-session', location.origin);
+      const url = new URL((window.MM_BASE || '') + '/api/v1/cost/by-session', location.origin);
       url.searchParams.set('session_id', sessionInput.value.trim());
       if (vendorInput.value) url.searchParams.set('vendor', vendorInput.value);
       return url;
