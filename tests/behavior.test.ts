@@ -116,15 +116,16 @@ async function getFreePort(): Promise<number> {
 // ---------- SCHEMA ----------
 
 describe.serial('schema migration', () => {
-  test.serial('fresh root bootstraps to v14', async () => {
+  test.serial('fresh root bootstraps to v15', async () => {
     await brain(['queue']);
     const db = openDb();
     const version = (db.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any).version;
-    expect(version).toBe(14);
+    expect(version).toBe(15);
     const tbls = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r: any) => r.name);
     for (const name of [
       'raw_entries', 'raw_events', 'wiki_pages', 'claims', 'claim_sources', 'claim_sources_event', 'import_state',
       'artifacts', 'artifact_sources', 'chunks_virtual', 'session_index', 'session_message_links', 'session_usage', 'session_events',
+      'notes', 'note_title_hashes', 'notes_fts',
     ]) {
       expect(tbls).toContain(name);
     }
@@ -152,6 +153,16 @@ describe.serial('schema migration', () => {
     for (const name of ['id', 'event_type', 'vendor', 'session_id', 'participant_id', 'project_role', 'payload']) {
       expect(eventCols).toContain(name);
     }
+    const noteCols = db.prepare("PRAGMA table_info(notes)").all().map((c: any) => c.name);
+    for (const name of ['id', 'project', 'source_chunk_id', 'summary', 'artifacts', 'embedding']) {
+      expect(noteCols).toContain(name);
+    }
+    const noteHashCols = db.prepare("PRAGMA table_info(note_title_hashes)").all().map((c: any) => c.name);
+    for (const name of ['note_id', 'artifact_index', 'title_hash', 'project']) {
+      expect(noteHashCols).toContain(name);
+    }
+    const noteFks = db.prepare("PRAGMA foreign_key_list(notes)").all() as any[];
+    expect(noteFks.some(fk => fk.from === 'source_chunk_id')).toBe(false);
     db.close();
   });
 });
@@ -559,8 +570,185 @@ describe.serial('artifacts — batch + list + supersede + bump-correction', () =
   });
 });
 
+describe.serial('notes — add CLI + dedup', () => {
+  async function noteAdd(input: any): Promise<{ code: number; stdout: string; stderr: string }> {
+    const proc = Bun.spawn(['bun', BRAIN_TS, 'note', 'add'], {
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
+      stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
+    });
+    proc.stdin.write(JSON.stringify(input));
+    await proc.stdin.end();
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { code: code || 0, stdout, stderr };
+  }
+
+  function seedVirtualChunk(project = 'mm'): number {
+    const db = openDb();
+    try {
+      db.exec('PRAGMA foreign_keys = ON');
+      const suffix = `${Date.now()}-${Math.random()}`;
+      const eventId = Number(db.prepare(
+        `INSERT INTO raw_events (source_type, project, external_id, timestamp, content)
+         VALUES (?, ?, ?, ?, ?)`
+      ).run('llm_chat', project, `note-source-${suffix}`, '2026-04-20T00:00:00.000Z', 'chunk text for notes').lastInsertRowid);
+      return Number(db.prepare(
+        `INSERT INTO chunks_virtual
+         (project, source_event_id, chunk_index, chunk_total, segment_start, segment_end, filter_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(project, eventId, 0, 1, 0, 'chunk text for notes'.length, 2).lastInsertRowid);
+    } finally {
+      db.close();
+    }
+  }
+
+  test.serial('note add inserts surviving artifacts, title hashes, and FTS rows', async () => {
+    await brain(['queue']);
+    const chunkId = seedVirtualChunk('mm');
+    const read = await brain(['chunk', 'read', String(chunkId)]);
+    expect(read.code).toBe(0);
+    expect(read.stdout).toContain('chunk text for notes');
+
+    const res = await noteAdd({
+      source_chunk_id: chunkId,
+      summary: 'The librarian should extract durable project notes.',
+      artifacts: [
+        { title: 'Intent Driven Librarian', body: 'Use intent-driven note extraction.', tags: ['intent', 'librarian'] },
+        { title: 'Process Notes Later', body: 'Embeddings are written by the batch embed pipeline.' },
+      ],
+    });
+    expect(res.code).toBe(0);
+    const parsed = JSON.parse(res.stdout);
+    expect(parsed.inserted_artifact_count).toBe(2);
+    expect(parsed.skipped_count).toBe(0);
+    expect(typeof parsed.note_id).toBe('number');
+
+    const db = openDb();
+    try {
+      const note = db.prepare('SELECT * FROM notes WHERE id = ?').get(parsed.note_id) as any;
+      expect(note.project).toBe('mm');
+      expect(note.source_chunk_id).toBe(chunkId);
+      expect(JSON.parse(note.artifacts).length).toBe(2);
+      const hashes = (db.prepare('SELECT COUNT(*) as c FROM note_title_hashes WHERE note_id = ?').get(parsed.note_id) as any).c;
+      expect(hashes).toBe(2);
+      const fts = db.prepare("SELECT note_id FROM notes_fts WHERE notes_fts MATCH 'librarian'").all() as any[];
+      expect(fts.map(r => r.note_id)).toContain(parsed.note_id);
+    } finally {
+      db.close();
+    }
+  });
+
+  test.serial('note add rejects empty artifacts with structured error', async () => {
+    await brain(['queue']);
+    const chunkId = seedVirtualChunk('mm');
+    const res = await noteAdd({ source_chunk_id: chunkId, summary: 'No signal here.', artifacts: [] });
+    expect(res.code).toBe(1);
+    expect(JSON.parse(res.stderr).error).toBe('validation_no_artifacts');
+  });
+
+  test.serial('note add skips duplicate artifact titles and all-deduped notes', async () => {
+    await brain(['queue']);
+    const firstChunk = seedVirtualChunk('mm');
+    const secondChunk = seedVirtualChunk('mm');
+    const first = await noteAdd({
+      source_chunk_id: firstChunk,
+      summary: 'First note.',
+      artifacts: [{ title: 'Same Title!', body: 'First body.' }],
+    });
+    expect(first.code).toBe(0);
+
+    const second = await noteAdd({
+      source_chunk_id: secondChunk,
+      summary: 'Second note.',
+      artifacts: [{ title: 'same title', body: 'Second body.' }],
+    });
+    expect(second.code).toBe(0);
+    const parsed = JSON.parse(second.stdout);
+    expect(parsed).toEqual({
+      note_id: null,
+      inserted_artifact_count: 0,
+      skipped_count: 1,
+      reason: 'all_artifacts_deduped',
+    });
+  });
+
+  test.serial('note add reports duplicate source chunk', async () => {
+    await brain(['queue']);
+    const chunkId = seedVirtualChunk('mm');
+    const input = {
+      source_chunk_id: chunkId,
+      summary: 'Duplicate chunk note.',
+      artifacts: [{ title: 'Unique Title', body: 'Body.' }],
+    };
+    const first = await noteAdd(input);
+    expect(first.code).toBe(0);
+    const firstParsed = JSON.parse(first.stdout);
+    const second = await noteAdd({
+      source_chunk_id: chunkId,
+      summary: 'Duplicate chunk note again.',
+      artifacts: [{ title: 'Another Unique Title', body: 'Body.' }],
+    });
+    expect(second.code).toBe(1);
+    const err = JSON.parse(second.stderr);
+    expect(err.error).toBe('duplicate_chunk');
+    expect(err.existing_note_id).toBe(firstParsed.note_id);
+  });
+
+  test.serial('raw event update can clear stale virtual chunks after note add', async () => {
+    const proc = Bun.spawn(['bun', '-e', `
+      import { initDb, db, upsertRawEvent, insertChunkVirtual, addNote } from '${path.join(REPO, 'src', 'core.ts')}';
+      initDb();
+      upsertRawEvent({
+        source_type: 'llm_chat', project: 'mm',
+        external_id: 'note-rechunk', timestamp: '2026-04-18T10:00:00Z',
+        content: 'first content for distill',
+      });
+      const evt = db.prepare("SELECT id FROM raw_events WHERE external_id = 'note-rechunk'").get();
+      const chunkId = insertChunkVirtual({
+        project: 'mm',
+        source_event_id: evt.id,
+        chunk_index: 0,
+        chunk_total: 1,
+        segment_start: 0,
+        segment_end: 'first content for distill'.length,
+      });
+      const note = addNote({
+        source_chunk_id: chunkId,
+        summary: 'Distilled note summary.',
+        artifacts: [{ title: 'Durable Rechunk Note', body: 'This note must survive reimport.' }],
+      });
+      const update = upsertRawEvent({
+        source_type: 'llm_chat', project: 'mm',
+        external_id: 'note-rechunk', timestamp: '2026-04-18T10:05:00Z',
+        content: 'first content for distill plus later growth',
+      });
+      const chunks = db.prepare('SELECT COUNT(*) as c FROM chunks_virtual WHERE source_event_id = ?').get(evt.id);
+      const row = db.prepare('SELECT id, source_chunk_id FROM notes WHERE id = ?').get(note.note_id);
+      console.log(JSON.stringify({ update, chunks: chunks.c, note: row }));
+    `], {
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
+      stdout: 'pipe', stderr: 'pipe',
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect(code || 0).toBe(0);
+    expect(stderr).toBe('');
+    const parsed = JSON.parse(stdout.trim().split('\n').pop()!);
+    expect(parsed.update).toBe('updated');
+    expect(parsed.chunks).toBe(0);
+    expect(typeof parsed.note.id).toBe('number');
+    expect(parsed.note.source_chunk_id).toBeGreaterThan(0);
+  });
+});
+
 describe.serial('brain backup — WAL checkpoint + VACUUM INTO', () => {
-  test.serial('produces a valid SQLite file readable at schema_version=14', async () => {
+  test.serial('produces a valid SQLite file readable at schema_version=15', async () => {
     await brain(['queue']);
     const target = path.join(tmpRoot, 'meta', 'snap.db');
     const res = await brain(['backup', '--target', target]);
@@ -568,7 +756,7 @@ describe.serial('brain backup — WAL checkpoint + VACUUM INTO', () => {
     expect(fs.existsSync(target)).toBe(true);
     const snap = new Database(target, { readonly: true });
     const v = (snap.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any).version;
-    expect(v).toBe(14);
+    expect(v).toBe(15);
     snap.close();
   });
 });

@@ -20,3 +20,4 @@
 - **2026-05-03**: feat(api): support configurable base-path for UI and API
 - **2026-05-03**: feat(api/ui): support configurable base-path for plugin integration
 - **2026-05-03**: chore: scrub user-coupled paths and gitignore session content for public push
+- **2026-05-05**: feat(brain): add distilled notes surface

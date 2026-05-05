@@ -290,7 +290,47 @@ export function initDb() {
   db.run(`CREATE INDEX IF NOT EXISTS idx_session_events_id ON session_events(id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_session_events_project_role ON session_events(project_role, id)`);
 
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 14)');
+  // v15: distilled notes for intent-driven librarian extraction. Additive only:
+  // no existing tables are altered, and embeddings are populated later by
+  // `brain embed`. source_chunk_id records the chunks_virtual.id consumed by
+  // the librarian, but does not FK to that ephemeral queue row: re-importing
+  // a grown raw_event deletes stale chunks_virtual rows before rechunking.
+  db.run(`CREATE TABLE IF NOT EXISTS notes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    project         TEXT NOT NULL,
+    source_chunk_id INTEGER NOT NULL,
+    summary         TEXT NOT NULL,
+    artifacts       TEXT NOT NULL,
+    embedding       BLOB,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project, source_chunk_id)
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_notes_chunk ON notes(source_chunk_id)`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS note_title_hashes (
+    note_id        INTEGER NOT NULL,
+    artifact_index INTEGER NOT NULL,
+    title_hash     TEXT NOT NULL,
+    project        TEXT NOT NULL,
+    PRIMARY KEY (note_id, artifact_index),
+    UNIQUE (project, title_hash),
+    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_note_hashes_project ON note_title_hashes(project, title_hash)`);
+
+  try {
+    db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+      note_id        UNINDEXED,
+      project        UNINDEXED,
+      artifact_index UNINDEXED,
+      summary,
+      title,
+      body
+    )`);
+  } catch (e) {}
+
+  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 15)');
 }
 
 // --- Common Logic ---
@@ -871,6 +911,8 @@ export function getProjects(): string[] {
     SELECT DISTINCT project FROM raw_events  WHERE project IS NOT NULL
     UNION
     SELECT DISTINCT project FROM artifacts   WHERE project IS NOT NULL
+    UNION
+    SELECT DISTINCT project FROM notes       WHERE project IS NOT NULL
     ORDER BY project ASC
   `).all() as any[];
   return rows.map(r => r.project);
@@ -1004,6 +1046,15 @@ export async function embedBrain(slug?: string) {
           }
         }
       }
+    }
+  }
+  if (!slug) {
+    const notes = db.prepare('SELECT id, summary FROM notes WHERE embedding IS NULL').all() as Array<{ id: number; summary: string }>;
+    for (const note of notes) {
+      const vec = await embed(note.summary);
+      if (!vec) continue;
+      db.prepare('UPDATE notes SET embedding = ? WHERE id = ?').run(Buffer.from(vec.buffer), note.id);
+      count++;
     }
   }
   return { count };
@@ -1245,6 +1296,170 @@ export function bumpCorrection(id: number): ArtifactRow {
   ).run(JSON.stringify(data), id);
   syncArtifactFts(id, row.project, row.type, data);
   return rowToArtifact({ ...row, data: JSON.stringify(data) });
+}
+
+// --- v15: distilled notes ---
+
+export type NoteArtifactInput = {
+  title: string;
+  body: string;
+  tags?: string[];
+};
+
+export type NoteAddInput = {
+  source_chunk_id: number;
+  summary: string;
+  artifacts: NoteArtifactInput[];
+};
+
+export type NoteAddResult = {
+  note_id: number | null;
+  inserted_artifact_count: number;
+  skipped_count: number;
+  reason?: 'all_artifacts_deduped';
+};
+
+export class NoteValidationError extends Error {
+  payload: Record<string, unknown>;
+
+  constructor(payload: Record<string, unknown>) {
+    super(String(payload.error || 'note_validation_error'));
+    this.payload = payload;
+  }
+}
+
+function normalizeNoteTitle(title: string): string {
+  return title
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function noteTitleHash(title: string): string {
+  return getHash(normalizeNoteTitle(title));
+}
+
+function syncNoteFts(noteId: number, project: string, summary: string, artifacts: NoteArtifactInput[]) {
+  try {
+    db.prepare('DELETE FROM notes_fts WHERE note_id = ?').run(noteId);
+    const insert = db.prepare(
+      `INSERT INTO notes_fts (note_id, project, artifact_index, summary, title, body)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    artifacts.forEach((artifact, index) => {
+      insert.run(noteId, project, index, summary, artifact.title, artifact.body);
+    });
+  } catch (e) { /* FTS optional */ }
+}
+
+function resolveChunkProject(sourceChunkId: number): string {
+  const row = db.prepare(
+    `SELECT project
+     FROM chunks_virtual
+     WHERE id = ?`
+  ).get(sourceChunkId) as { project: string } | undefined;
+  if (!row) throw new NoteValidationError({ error: 'source_chunk_not_found', source_chunk_id: sourceChunkId });
+  return row.project || 'unknown';
+}
+
+function validateNoteInput(input: unknown): NoteAddInput {
+  if (!input || typeof input !== 'object') {
+    throw new NoteValidationError({ error: 'validation_invalid_input' });
+  }
+  const raw = input as any;
+  const sourceChunkId = Number(raw.source_chunk_id);
+  if (!Number.isInteger(sourceChunkId) || sourceChunkId <= 0) {
+    throw new NoteValidationError({ error: 'validation_invalid_source_chunk_id' });
+  }
+  const summary = typeof raw.summary === 'string' ? raw.summary.trim() : '';
+  if (!summary) throw new NoteValidationError({ error: 'validation_empty_summary' });
+  if (!Array.isArray(raw.artifacts)) {
+    throw new NoteValidationError({ error: 'validation_invalid_artifacts' });
+  }
+  if (raw.artifacts.length === 0) {
+    throw new NoteValidationError({ error: 'validation_no_artifacts' });
+  }
+
+  const artifacts = raw.artifacts.map((artifact: any, index: number): NoteArtifactInput => {
+    if (!artifact || typeof artifact !== 'object') {
+      throw new NoteValidationError({ error: 'validation_invalid_artifact', artifact_index: index });
+    }
+    const title = typeof artifact.title === 'string' ? artifact.title.trim() : '';
+    const body = typeof artifact.body === 'string' ? artifact.body.trim() : '';
+    if (!title) throw new NoteValidationError({ error: 'validation_empty_title', artifact_index: index });
+    if (!body) throw new NoteValidationError({ error: 'validation_empty_body', artifact_index: index });
+    if (artifact.tags !== undefined && (!Array.isArray(artifact.tags) || !artifact.tags.every((tag: unknown) => typeof tag === 'string'))) {
+      throw new NoteValidationError({ error: 'validation_invalid_tags', artifact_index: index });
+    }
+    const out: NoteArtifactInput = { title, body };
+    if (artifact.tags !== undefined) out.tags = artifact.tags;
+    return out;
+  });
+
+  return { source_chunk_id: sourceChunkId, summary, artifacts };
+}
+
+export function addNote(rawInput: unknown): NoteAddResult {
+  const input = validateNoteInput(rawInput);
+  const project = resolveChunkProject(input.source_chunk_id);
+  const existing = db.prepare('SELECT id FROM notes WHERE project = ? AND source_chunk_id = ?')
+    .get(project, input.source_chunk_id) as { id: number } | undefined;
+  if (existing) {
+    throw new NoteValidationError({ error: 'duplicate_chunk', existing_note_id: existing.id });
+  }
+
+  const candidates = input.artifacts.map((artifact, inputIndex) => ({
+    artifact,
+    inputIndex,
+    title_hash: noteTitleHash(artifact.title),
+  }));
+  const seenInRequest = new Set<string>();
+  const surviving: Array<{ artifact: NoteArtifactInput; inputIndex: number; title_hash: string }> = [];
+  let skipped = 0;
+  for (const candidate of candidates) {
+    if (seenInRequest.has(candidate.title_hash)) {
+      skipped++;
+      continue;
+    }
+    seenInRequest.add(candidate.title_hash);
+    const duplicate = db.prepare('SELECT 1 FROM note_title_hashes WHERE project = ? AND title_hash = ?')
+      .get(project, candidate.title_hash);
+    if (duplicate) {
+      skipped++;
+      continue;
+    }
+    surviving.push(candidate);
+  }
+
+  if (surviving.length === 0) {
+    return {
+      note_id: null,
+      inserted_artifact_count: 0,
+      skipped_count: input.artifacts.length,
+      reason: 'all_artifacts_deduped',
+    };
+  }
+
+  return db.transaction(() => {
+    const noteRes = db.prepare(
+      'INSERT INTO notes (project, source_chunk_id, summary, artifacts) VALUES (?, ?, ?, ?)'
+    ).run(project, input.source_chunk_id, input.summary, JSON.stringify(surviving.map(s => s.artifact)));
+    const noteId = Number(noteRes.lastInsertRowid);
+    const hashInsert = db.prepare(
+      'INSERT INTO note_title_hashes (note_id, artifact_index, title_hash, project) VALUES (?, ?, ?, ?)'
+    );
+    surviving.forEach((survivor, index) => {
+      hashInsert.run(noteId, index, survivor.title_hash, project);
+    });
+    syncNoteFts(noteId, project, input.summary, surviving.map(s => s.artifact));
+    return {
+      note_id: noteId,
+      inserted_artifact_count: surviving.length,
+      skipped_count: skipped,
+    };
+  })();
 }
 
 // --- v12: briefing surface (session-start preamble) ---

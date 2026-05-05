@@ -46,7 +46,7 @@ const NAV_HTML = (() => {
     `<script>(function(){var p=location.pathname;document.querySelectorAll('[data-mm-nav] a').forEach(function(a){var h=a.getAttribute('data-nav-href');if(h===p||(h.length>1&&p===h)){a.classList.add('active');}});})();</script>`;
 })();
 
-const HELP_MD = `# Brain API v0.9.0 (v14 schema)
+const HELP_MD = `# Brain API v0.9.0 (v15 schema)
 
 Endpoints:
 - \`/\`: Web UI (aurora theme).
