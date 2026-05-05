@@ -329,6 +329,8 @@ export function initDb() {
       body
     )`);
   } catch (e) {}
+  healStaleNotesSourceChunkFk();
+  rebuildNotesFtsFromNotes();
 
   db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 15)');
 }
@@ -1234,18 +1236,20 @@ export type ArtifactSearchOpts = {
 
 export type ArtifactSearchResult = ArtifactRow & { snippet: string; rank: number };
 
+function buildSimpleFtsQuery(query: string): string | null {
+  const tokens = (query || '').trim().split(/\s+/)
+    .map(t => t.replace(/[^\w\u00C0-\uFFFF-]/g, ''))
+    .filter(Boolean)
+    .map(t => '"' + t.replace(/"/g, '""') + '"');
+  return tokens.length > 0 ? tokens.join(' ') : null;
+}
+
 // FTS over artifacts_fts. Tokenizes the query (so "virtual chunks" matches both
 // words anywhere, not just as a phrase) and quote-escapes each token so fts5
 // treats punctuation like ':' and '-' literally rather than as operators.
 export function searchArtifacts(query: string, opts: ArtifactSearchOpts = {}): ArtifactSearchResult[] {
-  const raw = (query || '').trim();
-  if (!raw) return [];
-  const tokens = raw.split(/\s+/)
-    .map(t => t.replace(/[^\w\u00C0-\uFFFF-]/g, ''))
-    .filter(Boolean)
-    .map(t => '"' + t.replace(/"/g, '""') + '"');
-  if (tokens.length === 0) return [];
-  const safe = tokens.join(' '); // fts5 default operator is AND between tokens
+  const safe = buildSimpleFtsQuery(query);
+  if (!safe) return [];
 
   const clauses: string[] = [`artifacts_fts MATCH ?`];
   const params: any[] = [safe];
@@ -1319,6 +1323,36 @@ export type NoteAddResult = {
   reason?: 'all_artifacts_deduped';
 };
 
+export type NoteListOpts = {
+  project?: string | null;
+  source_chunk_id?: number | null;
+  limit?: number;
+  offset?: number;
+};
+
+export type NoteListRow = {
+  id: number;
+  project: string;
+  source_chunk_id: number;
+  summary: string;
+  artifact_count: number;
+  created_at: string;
+};
+
+export type NoteDetailRow = NoteListRow & {
+  artifacts: NoteArtifactInput[];
+};
+
+export type NoteSearchOpts = {
+  project?: string | null;
+  limit?: number;
+  offset?: number;
+};
+
+export type NoteSearchResult = NoteListRow & {
+  rank: number;
+};
+
 export class NoteValidationError extends Error {
   payload: Record<string, unknown>;
 
@@ -1352,6 +1386,128 @@ function syncNoteFts(noteId: number, project: string, summary: string, artifacts
       insert.run(noteId, project, index, summary, artifact.title, artifact.body);
     });
   } catch (e) { /* FTS optional */ }
+}
+
+function parseNoteArtifacts(raw: string | null | undefined): NoteArtifactInput[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function noteListRow(row: any): NoteListRow {
+  const artifacts = parseNoteArtifacts(row.artifacts);
+  return {
+    id: row.id,
+    project: row.project,
+    source_chunk_id: row.source_chunk_id,
+    summary: row.summary,
+    artifact_count: artifacts.length,
+    created_at: row.created_at,
+  };
+}
+
+function noteDetailRow(row: any): NoteDetailRow {
+  const artifacts = parseNoteArtifacts(row.artifacts);
+  return {
+    ...noteListRow(row),
+    artifact_count: artifacts.length,
+    artifacts,
+  };
+}
+
+function boundedLimit(limit: number | undefined, fallback = 50, max = 200): number {
+  if (!Number.isFinite(limit || NaN) || !limit || limit <= 0) return fallback;
+  return Math.min(Math.floor(limit), max);
+}
+
+function boundedOffset(offset: number | undefined): number {
+  if (!Number.isFinite(offset || NaN) || !offset || offset <= 0) return 0;
+  return Math.floor(offset);
+}
+
+function rebuildNotesFtsFromNotes() {
+  try {
+    db.prepare('DELETE FROM notes_fts').run();
+    const rows = db.prepare('SELECT id, project, summary, artifacts FROM notes ORDER BY id ASC').all() as any[];
+    for (const row of rows) {
+      syncNoteFts(row.id, row.project, row.summary, parseNoteArtifacts(row.artifacts));
+    }
+  } catch (e) { /* FTS optional */ }
+}
+
+function healStaleNotesSourceChunkFk() {
+  let stale = false;
+  try {
+    const fks = db.prepare('PRAGMA foreign_key_list(notes)').all() as any[];
+    stale = fks.some(fk => fk.from === 'source_chunk_id');
+  } catch (e) {
+    return;
+  }
+  if (!stale) return;
+
+  const previousForeignKeys = (db.prepare('PRAGMA foreign_keys').get() as any)?.foreign_keys === 1;
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec(`
+      DROP TABLE IF EXISTS notes_fts;
+      DROP TABLE IF EXISTS note_title_hashes_new;
+
+      ALTER TABLE notes RENAME TO notes_stale_source_fk;
+
+      CREATE TABLE notes (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        project         TEXT NOT NULL,
+        source_chunk_id INTEGER NOT NULL,
+        summary         TEXT NOT NULL,
+        artifacts       TEXT NOT NULL,
+        embedding       BLOB,
+        created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(project, source_chunk_id)
+      );
+
+      INSERT INTO notes (id, project, source_chunk_id, summary, artifacts, embedding, created_at)
+      SELECT id, project, source_chunk_id, summary, artifacts, embedding, created_at
+      FROM notes_stale_source_fk;
+
+      CREATE TABLE note_title_hashes_new (
+        note_id        INTEGER NOT NULL,
+        artifact_index INTEGER NOT NULL,
+        title_hash     TEXT NOT NULL,
+        project        TEXT NOT NULL,
+        PRIMARY KEY (note_id, artifact_index),
+        UNIQUE (project, title_hash),
+        FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+      );
+
+      INSERT INTO note_title_hashes_new (note_id, artifact_index, title_hash, project)
+      SELECT h.note_id, h.artifact_index, h.title_hash, h.project
+      FROM note_title_hashes h
+      JOIN notes n ON n.id = h.note_id;
+
+      DROP TABLE note_title_hashes;
+      ALTER TABLE note_title_hashes_new RENAME TO note_title_hashes;
+      DROP TABLE notes_stale_source_fk;
+
+      CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project);
+      CREATE INDEX IF NOT EXISTS idx_notes_chunk ON notes(source_chunk_id);
+      CREATE INDEX IF NOT EXISTS idx_note_hashes_project ON note_title_hashes(project, title_hash);
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+        note_id        UNINDEXED,
+        project        UNINDEXED,
+        artifact_index UNINDEXED,
+        summary,
+        title,
+        body
+      );
+    `);
+  } finally {
+    db.exec(`PRAGMA foreign_keys = ${previousForeignKeys ? 'ON' : 'OFF'}`);
+  }
 }
 
 function resolveChunkProject(sourceChunkId: number): string {
@@ -1460,6 +1616,77 @@ export function addNote(rawInput: unknown): NoteAddResult {
       skipped_count: skipped,
     };
   })();
+}
+
+export function listNotes(opts: NoteListOpts = {}): NoteListRow[] {
+  const clauses: string[] = [];
+  const params: any[] = [];
+  if (opts.project) { clauses.push('project = ?'); params.push(opts.project); }
+  if (opts.source_chunk_id) { clauses.push('source_chunk_id = ?'); params.push(opts.source_chunk_id); }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const limit = boundedLimit(opts.limit);
+  const offset = boundedOffset(opts.offset);
+  const rows = db.prepare(
+    `SELECT id, project, source_chunk_id, summary, artifacts, created_at
+     FROM notes
+     ${where}
+     ORDER BY id DESC
+     LIMIT ? OFFSET ?`
+  ).all(...params, limit, offset) as any[];
+  return rows.map(noteListRow);
+}
+
+export function getNote(id: number): NoteDetailRow | null {
+  const row = db.prepare(
+    `SELECT id, project, source_chunk_id, summary, artifacts, created_at
+     FROM notes
+     WHERE id = ?`
+  ).get(id) as any;
+  return row ? noteDetailRow(row) : null;
+}
+
+export function searchNotes(query: string, opts: NoteSearchOpts = {}): NoteSearchResult[] {
+  const safe = buildSimpleFtsQuery(query);
+  if (!safe) return [];
+
+  const clauses: string[] = ['notes_fts MATCH ?'];
+  const params: any[] = [safe];
+  if (opts.project) { clauses.push('notes_fts.project = ?'); params.push(opts.project); }
+  const limit = boundedLimit(opts.limit);
+  const offset = boundedOffset(opts.offset);
+  const scanLimit = Math.max(limit + offset, limit);
+
+  const sql = `
+    SELECT note_id, bm25(notes_fts) as rank
+    FROM notes_fts
+    WHERE ${clauses.join(' AND ')}
+    ORDER BY rank
+    LIMIT ?
+  `;
+  try {
+    const matches = db.prepare(sql).all(...params, Math.min(scanLimit * 4, 5000)) as any[];
+    const selected: Array<{ note_id: number; rank: number }> = [];
+    const seen = new Set<number>();
+    for (const match of matches) {
+      if (seen.has(match.note_id)) continue;
+      seen.add(match.note_id);
+      if (seen.size <= offset) continue;
+      selected.push({ note_id: match.note_id, rank: match.rank });
+      if (selected.length >= limit) break;
+    }
+    if (selected.length === 0) return [];
+    const get = db.prepare(
+      `SELECT id, project, source_chunk_id, summary, artifacts, created_at
+       FROM notes
+       WHERE id = ?`
+    );
+    return selected.flatMap(match => {
+      const row = get.get(match.note_id) as any;
+      return row ? [{ ...noteListRow(row), rank: match.rank }] : [];
+    });
+  } catch (e) {
+    return [];
+  }
 }
 
 // --- v12: briefing surface (session-start preamble) ---

@@ -113,6 +113,56 @@ async function getFreePort(): Promise<number> {
   });
 }
 
+async function startApi(): Promise<{ base: string; stop: () => Promise<void> }> {
+  const testPort = await getFreePort();
+  const api = Bun.spawn(['bun', API_TS], {
+    env: { ...process.env, MT_BRAIN_ROOT: tmpRoot, MT_PORT: String(testPort) },
+    stdout: 'pipe', stderr: 'pipe',
+  });
+  const base = `http://localhost:${testPort}`;
+  let ready = false;
+  for (let i = 0; i < 40; i++) {
+    try {
+      const r = await fetch(`${base}/stats`);
+      if (r.ok) { ready = true; break; }
+    } catch {}
+    if (api.exitCode !== null) break;
+    await new Promise(r => setTimeout(r, 100));
+  }
+  if (!ready) {
+    api.kill();
+    const stderr = await new Response(api.stderr).text();
+    throw new Error(stderr || `API did not start on ${base}`);
+  }
+  return {
+    base,
+    stop: async () => {
+      api.kill();
+      await api.exited;
+    },
+  };
+}
+
+function seedNote(project: string, sourceChunkId: number, summary: string, artifacts: any[]): number {
+  const db = openDb();
+  try {
+    const noteId = Number(db.prepare(
+      `INSERT INTO notes (project, source_chunk_id, summary, artifacts)
+       VALUES (?, ?, ?, ?)`
+    ).run(project, sourceChunkId, summary, JSON.stringify(artifacts)).lastInsertRowid);
+    const fts = db.prepare(
+      `INSERT INTO notes_fts (note_id, project, artifact_index, summary, title, body)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    artifacts.forEach((artifact, index) => {
+      fts.run(noteId, project, index, summary, artifact.title || '', artifact.body || '');
+    });
+    return noteId;
+  } finally {
+    db.close();
+  }
+}
+
 // ---------- SCHEMA ----------
 
 describe.serial('schema migration', () => {
@@ -164,6 +214,60 @@ describe.serial('schema migration', () => {
     const noteFks = db.prepare("PRAGMA foreign_key_list(notes)").all() as any[];
     expect(noteFks.some(fk => fk.from === 'source_chunk_id')).toBe(false);
     db.close();
+  });
+
+  test.serial('self-heals stale v15 notes source_chunk_id foreign key without losing data', async () => {
+    const db = openDb();
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      CREATE TABLE schema_version (id INTEGER PRIMARY KEY CHECK(id = 1), version INTEGER NOT NULL);
+      INSERT INTO schema_version (id, version) VALUES (1, 15);
+      CREATE TABLE notes (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        project         TEXT NOT NULL,
+        source_chunk_id INTEGER NOT NULL,
+        summary         TEXT NOT NULL,
+        artifacts       TEXT NOT NULL,
+        embedding       BLOB,
+        created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (source_chunk_id) REFERENCES chunks_virtual(id),
+        UNIQUE(project, source_chunk_id)
+      );
+      CREATE TABLE note_title_hashes (
+        note_id        INTEGER NOT NULL,
+        artifact_index INTEGER NOT NULL,
+        title_hash     TEXT NOT NULL,
+        project        TEXT NOT NULL,
+        PRIMARY KEY (note_id, artifact_index),
+        UNIQUE (project, title_hash),
+        FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+      );
+      INSERT INTO notes (id, project, source_chunk_id, summary, artifacts, created_at)
+      VALUES (7, 'mm', 42, 'Stale note summary', '[{"title":"Stale FK Note","body":"Survives migration."}]', '2026-05-06T00:00:00Z');
+      INSERT INTO note_title_hashes (note_id, artifact_index, title_hash, project)
+      VALUES (7, 0, 'hash-stale', 'mm');
+    `);
+    db.close();
+
+    const res = await brain(['queue']);
+    expect(res.code).toBe(0);
+
+    const healed = openDb();
+    try {
+      const fks = healed.prepare('PRAGMA foreign_key_list(notes)').all() as any[];
+      expect(fks.some(fk => fk.from === 'source_chunk_id')).toBe(false);
+      const note = healed.prepare('SELECT id, project, source_chunk_id, summary, artifacts FROM notes WHERE id = 7').get() as any;
+      expect(note.project).toBe('mm');
+      expect(note.source_chunk_id).toBe(42);
+      expect(note.summary).toBe('Stale note summary');
+      expect(JSON.parse(note.artifacts)[0].title).toBe('Stale FK Note');
+      const hash = healed.prepare('SELECT title_hash FROM note_title_hashes WHERE note_id = 7').get() as any;
+      expect(hash.title_hash).toBe('hash-stale');
+      const fts = healed.prepare("SELECT note_id FROM notes_fts WHERE notes_fts MATCH 'survives'").all() as any[];
+      expect(fts.map(r => r.note_id)).toContain(7);
+    } finally {
+      healed.close();
+    }
   });
 });
 
@@ -744,6 +848,110 @@ describe.serial('notes — add CLI + dedup', () => {
     expect(parsed.chunks).toBe(0);
     expect(typeof parsed.note.id).toBe('number');
     expect(parsed.note.source_chunk_id).toBeGreaterThan(0);
+  });
+});
+
+describe.serial('notes API', () => {
+  test.serial('/notes returns an empty list on a fresh root', async () => {
+    await brain(['queue']);
+    const api = await startApi();
+    try {
+      const r = await fetch(`${api.base}/notes`);
+      expect(r.ok).toBe(true);
+      expect(await r.json()).toEqual([]);
+    } finally {
+      await api.stop();
+    }
+  });
+
+  test.serial('/notes lists notes with filtering and pagination', async () => {
+    await brain(['queue']);
+    const first = seedNote('mm', 101, 'First durable note summary.', [
+      { title: 'First Note', body: 'First body.' },
+    ]);
+    const second = seedNote('mm', 202, 'Second durable note summary.', [
+      { title: 'Second Note', body: 'Second body.' },
+      { title: 'Second Extra', body: 'Extra body.' },
+    ]);
+    seedNote('ac', 303, 'Different project note summary.', [
+      { title: 'Other Project', body: 'Other body.' },
+    ]);
+
+    const api = await startApi();
+    try {
+      const all = await fetch(`${api.base}/notes?project=mm&limit=10`);
+      expect(all.ok).toBe(true);
+      const rows = await all.json() as any[];
+      expect(rows.map(r => r.id)).toEqual([second, first]);
+      expect(rows[0]).toMatchObject({
+        project: 'mm',
+        source_chunk_id: 202,
+        artifact_count: 2,
+      });
+      expect(rows[0].artifacts).toBeUndefined();
+
+      const filtered = await fetch(`${api.base}/notes?source_chunk_id=101`);
+      expect(filtered.ok).toBe(true);
+      const filteredRows = await filtered.json() as any[];
+      expect(filteredRows.map(r => r.id)).toEqual([first]);
+
+      const paged = await fetch(`${api.base}/notes?project=mm&limit=1&offset=1`);
+      expect(paged.ok).toBe(true);
+      const pagedRows = await paged.json() as any[];
+      expect(pagedRows.map(r => r.id)).toEqual([first]);
+    } finally {
+      await api.stop();
+    }
+  });
+
+  test.serial('/note/:id returns detail and 404 for missing notes', async () => {
+    await brain(['queue']);
+    const id = seedNote('mm', 404, 'Detail note summary.', [
+      { title: 'Detail Note', body: 'Body with **markdown**.', tags: ['detail', 'notes'] },
+    ]);
+
+    const api = await startApi();
+    try {
+      const r = await fetch(`${api.base}/note/${id}`);
+      expect(r.ok).toBe(true);
+      const note = await r.json() as any;
+      expect(note.id).toBe(id);
+      expect(note.artifact_count).toBe(1);
+      expect(note.artifacts).toEqual([
+        { title: 'Detail Note', body: 'Body with **markdown**.', tags: ['detail', 'notes'] },
+      ]);
+
+      const missing = await fetch(`${api.base}/note/999999`);
+      expect(missing.status).toBe(404);
+    } finally {
+      await api.stop();
+    }
+  });
+
+  test.serial('/notes-search returns matches and no-match empty arrays', async () => {
+    await brain(['queue']);
+    const id = seedNote('mm', 505, 'Searchable librarian summary.', [
+      { title: 'Reverse Proxy Lesson', body: 'Plugin base paths must prefix scripts.' },
+    ]);
+    seedNote('ac', 606, 'Unrelated note summary.', [
+      { title: 'Other Lesson', body: 'Separate project body.' },
+    ]);
+
+    const api = await startApi();
+    try {
+      const match = await fetch(`${api.base}/notes-search?q=proxy&project=mm`);
+      expect(match.ok).toBe(true);
+      const rows = await match.json() as any[];
+      expect(rows.map(r => r.id)).toEqual([id]);
+      expect(rows[0].artifact_count).toBe(1);
+      expect(typeof rows[0].rank).toBe('number');
+
+      const none = await fetch(`${api.base}/notes-search?q=definitelymissing&project=mm`);
+      expect(none.ok).toBe(true);
+      expect(await none.json()).toEqual([]);
+    } finally {
+      await api.stop();
+    }
   });
 });
 

@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mnemonic · Notes</title>
+  <style>
+    :root {
+      --bg: #0a0e14;
+      --panel-bg: rgba(255, 255, 255, 0.035);
+      --panel-border: rgba(255, 255, 255, 0.08);
+      --text: #e6edf3;
+      --text-muted: rgba(230, 237, 243, 0.5);
+      --accent: #7ec8e3;
+      --accent-2: #b794f6;
+      --accent-glow: rgba(126, 200, 227, 0.15);
+      --blur: 16px;
+      --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-6: 24px;
+      --r: 8px;
+      --f: 'Monaco', 'Menlo', 'Consolas', monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; min-height: 100vh; }
+    body {
+      background:
+        radial-gradient(ellipse 760px 560px at 12% 10%, rgba(126, 200, 227, 0.10) 0%, transparent 55%),
+        radial-gradient(ellipse 720px 520px at 88% 92%, rgba(183, 148, 246, 0.10) 0%, transparent 55%),
+        var(--bg);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: var(--f);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .app { display: flex; flex-direction: column; max-width: 1100px; margin: 0 auto; padding: var(--sp-6) var(--sp-4); gap: var(--sp-4); }
+    .title { font-size: 13px; font-weight: 700; letter-spacing: 0.28em; color: var(--accent); text-shadow: 0 0 12px var(--accent-glow); padding: 0 var(--sp-2); }
+    .status-line { font-size: 11px; color: var(--text-muted); padding: 0 var(--sp-2); margin-top: calc(-1 * var(--sp-2)); }
+    .panel { background: var(--panel-bg); backdrop-filter: blur(var(--blur)); -webkit-backdrop-filter: blur(var(--blur)); border: 1px solid var(--panel-border); border-radius: var(--r); box-shadow: 0 4px 32px rgba(0,0,0,0.35); }
+    .filters { display: flex; gap: var(--sp-2); padding: var(--sp-3); flex-wrap: wrap; align-items: center; }
+    .filters label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; margin-right: 2px; }
+    .filters select, .filters input {
+      background: rgba(255,255,255,0.02); color: var(--text); border: 1px solid var(--panel-border);
+      border-radius: 4px; padding: 4px 8px; font-family: var(--f); font-size: 13px; min-width: 110px;
+    }
+    .filters input[type=text] { min-width: 220px; }
+    .filters input[type=number] { width: 120px; }
+    .filters button {
+      background: transparent; color: var(--accent); border: 1px solid var(--accent);
+      border-radius: 4px; padding: 4px 10px; cursor: pointer; font-family: var(--f); font-size: 12px;
+    }
+    .filters button:hover { background: var(--accent-glow); }
+    .filters button:disabled { opacity: 0.35; cursor: default; }
+    .counts { margin-left: auto; font-size: 11px; color: var(--text-muted); }
+    .list { display: flex; flex-direction: column; }
+    .note { border-top: 1px solid var(--panel-border); padding: var(--sp-3) var(--sp-4); cursor: pointer; }
+    .note:first-child { border-top: none; }
+    .note:hover { background: rgba(255,255,255,0.02); }
+    .head { display: flex; gap: var(--sp-2); align-items: baseline; flex-wrap: wrap; }
+    .type-badge {
+      display: inline-block; font-size: 10px; font-weight: 700; color: var(--accent);
+      border: 1px solid var(--accent); border-radius: 3px; padding: 1px 6px;
+      text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    .project, .chunk, .id { color: var(--text-muted); font-size: 11px; }
+    .id { margin-left: auto; }
+    .snippet { margin-top: 4px; color: var(--text); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .details { margin-top: var(--sp-2); padding: var(--sp-3); background: rgba(0,0,0,0.25); border-radius: 4px; font-size: 12px; color: var(--text); cursor: default; }
+    .summary { color: var(--text); white-space: pre-wrap; word-break: break-word; }
+    .artifact { margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--panel-border); }
+    .artifact-title { color: var(--accent-2); font-weight: 700; font-size: 12px; }
+    .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+    .tag { display: inline-block; color: var(--accent); border: 1px solid rgba(126,200,227,0.45); border-radius: 3px; padding: 1px 6px; font-size: 10px; }
+    .markdown { margin-top: var(--sp-2); color: var(--text); word-break: break-word; }
+    .markdown p { margin: 0 0 8px; }
+    .markdown ul { margin: 0 0 8px 18px; padding: 0; }
+    .markdown li { margin: 3px 0; }
+    .markdown pre { margin: 8px 0; padding: 8px; overflow: auto; background: rgba(0,0,0,0.38); border: 1px solid var(--panel-border); border-radius: 4px; }
+    .markdown code { color: #f8d66d; background: rgba(0,0,0,0.28); border-radius: 3px; padding: 1px 4px; }
+    .markdown pre code { color: var(--text); background: transparent; padding: 0; }
+    .markdown strong { color: var(--text); }
+    .markdown em { color: rgba(230, 237, 243, 0.78); }
+    .markdown a { color: var(--accent); }
+    .empty-state, .error-state { padding: var(--sp-6); color: var(--text-muted); text-align: center; font-style: italic; }
+    .error-state { color: #f87171; }
+  </style>
+</head>
+<body x-data="app()" x-init="init()">
+<!--NAV-->
+  <div class="app">
+    <div class="title">MNEMONIC · NOTES</div>
+    <div class="status-line">
+      Last loaded: <span x-text="lastLoadedStr"></span>
+      <span x-show="mode"> · <span x-text="mode"></span></span>
+    </div>
+
+    <div class="panel">
+      <div class="filters">
+        <label>project</label>
+        <select x-model="filters.project" @change="resetAndLoad()">
+          <option value="">any</option>
+          <template x-for="p in projects" :key="p"><option :value="p" x-text="p"></option></template>
+        </select>
+
+        <label>chunk</label>
+        <input type="number" min="1" x-model="filters.source_chunk_id" @change="resetAndLoad()" />
+
+        <label>search</label>
+        <input type="text" x-model="filters.q" placeholder="notes FTS..." @keydown.enter="resetAndLoad()" />
+
+        <button @click="resetAndLoad()">Refresh</button>
+        <button @click="prevPage()" :disabled="offset === 0">Prev</button>
+        <button @click="nextPage()" :disabled="rows.length < limit">Next</button>
+        <span class="counts"><span x-text="rows.length"></span> shown · offset <span x-text="offset"></span></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div x-show="error" class="error-state" x-text="error"></div>
+      <div x-show="!error && rows.length === 0 && !loading" class="empty-state">No notes match these filters.</div>
+      <div x-show="loading" class="empty-state">Loading...</div>
+      <div class="list" x-show="!error">
+        <template x-for="n in rows" :key="n.id">
+          <div class="note" :id="'note-' + n.id" @click="toggle(n.id)">
+            <div class="head">
+              <span class="type-badge">NOTE</span>
+              <span class="project" x-text="n.project"></span>
+              <span class="chunk">chunk #<span x-text="n.source_chunk_id"></span></span>
+              <span class="chunk"><span x-text="n.artifact_count"></span> artifacts</span>
+              <span class="id">#<span x-text="n.id"></span> · <span x-text="n.created_at"></span></span>
+            </div>
+            <div class="snippet" x-text="n.summary"></div>
+            <template x-if="open[n.id]">
+              <div class="details" @click.stop>
+                <div x-show="loadingDetail[n.id]" class="summary">Loading...</div>
+                <template x-if="detail[n.id]">
+                  <div>
+                    <div class="summary" x-text="detail[n.id].summary"></div>
+                    <template x-for="(a, idx) in detail[n.id].artifacts" :key="idx">
+                      <div class="artifact">
+                        <div class="artifact-title" x-text="a.title"></div>
+                        <div class="markdown" x-html="renderMarkdown(a.body)"></div>
+                        <div class="tags" x-show="Array.isArray(a.tags) && a.tags.length > 0">
+                          <template x-for="tag in a.tags" :key="tag"><span class="tag" x-text="tag"></span></template>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <script src="<!--BASE-->/ui/alpine/cdn.min.js" defer></script>
+  <script>
+    function app() {
+      return {
+        rows: [],
+        projects: [],
+        open: {},
+        detail: {},
+        loadingDetail: {},
+        filters: { project: '', source_chunk_id: '', q: '' },
+        error: null,
+        loading: false,
+        lastLoaded: null,
+        lastLoadedStr: 'never',
+        limit: 50,
+        offset: 0,
+        mode: 'list',
+
+        async init() {
+          const params = new URLSearchParams(location.search);
+          if (params.get('project')) this.filters.project = params.get('project');
+          if (params.get('source_chunk_id')) this.filters.source_chunk_id = params.get('source_chunk_id');
+          if (params.get('q')) this.filters.q = params.get('q');
+          await this.load();
+        },
+
+        resetAndLoad() {
+          this.offset = 0;
+          this.load();
+        },
+
+        prevPage() {
+          this.offset = Math.max(0, this.offset - this.limit);
+          this.load();
+        },
+
+        nextPage() {
+          if (this.rows.length < this.limit) return;
+          this.offset += this.limit;
+          this.load();
+        },
+
+        async load() {
+          this.loading = true;
+          this.error = null;
+          try {
+            const params = new URLSearchParams();
+            if (this.filters.project) params.set('project', this.filters.project);
+            if (this.filters.source_chunk_id) params.set('source_chunk_id', this.filters.source_chunk_id);
+            params.set('limit', String(this.limit));
+            params.set('offset', String(this.offset));
+            const q = (this.filters.q || '').trim();
+            const endpoint = q ? '/notes-search' : '/notes';
+            if (q) params.set('q', q);
+            const r = await fetch((window.MM_BASE || '') + endpoint + '?' + params.toString());
+            if (!r.ok) throw new Error('Fetch failed: ' + r.status);
+            this.rows = await r.json();
+            this.mode = q ? 'search' : 'list';
+            const seen = new Set(this.projects);
+            this.rows.forEach(n => { if (n.project) seen.add(n.project); });
+            this.projects = Array.from(seen).sort();
+            this.lastLoaded = Date.now();
+            this.lastLoadedStr = new Date(this.lastLoaded).toLocaleTimeString();
+          } catch (e) {
+            this.error = e.message;
+          } finally {
+            this.loading = false;
+          }
+        },
+
+        async toggle(id) {
+          this.open[id] = !this.open[id];
+          if (this.open[id] && !this.detail[id] && !this.loadingDetail[id]) {
+            this.loadingDetail[id] = true;
+            try {
+              const r = await fetch((window.MM_BASE || '') + '/note/' + id);
+              if (!r.ok) throw new Error('Fetch failed: ' + r.status);
+              this.detail[id] = await r.json();
+            } catch (e) {
+              this.error = e.message;
+            } finally {
+              this.loadingDetail[id] = false;
+            }
+          }
+        },
+
+        renderMarkdown(markdown) {
+          const escapeHtml = value => String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+          const safeHref = value => {
+            const raw = String(value || '').trim();
+            return /^(https?:\/\/|mailto:|\/|#)/i.test(raw) ? escapeHtml(raw) : '#';
+          };
+          const inline = value => escapeHtml(value)
+            .replace(/`([^`]+)`/g, '<code>$1</code>')
+            .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+            .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+|\/[^)\s]+|#[^)\s]+)\)/g, (_m, text, href) => {
+              return '<a href="' + safeHref(href) + '" rel="noopener noreferrer">' + text + '</a>';
+            });
+
+          const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+          const out = [];
+          let paragraph = [];
+          let inList = false;
+          let inCode = false;
+          let code = [];
+          const flushParagraph = () => {
+            if (paragraph.length) {
+              out.push('<p>' + inline(paragraph.join(' ')) + '</p>');
+              paragraph = [];
+            }
+          };
+          const closeList = () => {
+            if (inList) { out.push('</ul>'); inList = false; }
+          };
+          for (const line of lines) {
+            if (line.trim().startsWith('```')) {
+              if (inCode) {
+                out.push('<pre><code>' + escapeHtml(code.join('\n')) + '</code></pre>');
+                code = [];
+                inCode = false;
+              } else {
+                flushParagraph();
+                closeList();
+                inCode = true;
+              }
+              continue;
+            }
+            if (inCode) { code.push(line); continue; }
+            if (!line.trim()) {
+              flushParagraph();
+              closeList();
+              continue;
+            }
+            const item = line.match(/^\s*[-*]\s+(.+)$/);
+            if (item) {
+              flushParagraph();
+              if (!inList) { out.push('<ul>'); inList = true; }
+              out.push('<li>' + inline(item[1]) + '</li>');
+              continue;
+            }
+            closeList();
+            paragraph.push(line.trim());
+          }
+          if (inCode) out.push('<pre><code>' + escapeHtml(code.join('\n')) + '</code></pre>');
+          flushParagraph();
+          closeList();
+          return out.join('');
+        },
+      };
+    }
+  </script>
+</body>
+</html>
