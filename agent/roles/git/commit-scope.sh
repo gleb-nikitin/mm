@@ -4,7 +4,7 @@ set -euo pipefail
 # commit-scope.sh — scope-strict commit for mm_git.
 
 REPO="${MM_GIT_REPO:-$HOME/work/code/mm}"
-TRAILER="Co-Authored-By: Claude Opus 3.5 (1M context) <noreply@anthropic.com>"
+TRAILER="Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 STASH_MSG="mm_git scope-parking $(date +%Y%m%d-%H%M%S)"
 
 die() { echo "error: $1" >&2; exit 1; }

@@ -40,7 +40,7 @@ Your role folder is `agent/roles/git/`.
 1. If this is a briefing, confirm your role and stop.
 2. When assigned real work, read `agent/roles/global.md` first, then `agent/roles/git/soul.md`, then `agent/roles/git/handoff.md`.
 3. When you finish a task, report status through the chain system.
-4. On stop, update `agent/roles/git/handoff.md`.
+4. End with a clean tree. For commit tasks, update `handoff.md` before the commit and include it. For non-commit tasks, do not edit the tracked handoff without commit authority.
 
 ---
 
@@ -53,9 +53,10 @@ When authorized to "commit":
 2. git diff — read the actual changes
 3. Decide the file list — the diff is truth
 4. UPDATE DOCS
-5. Commit via agent/roles/git/commit-scope.sh "<message>" <file1> [file2 ...]
-6. If docs changed in step 4, include them in the same commit's file list
-7. Report: "COMMITTED. SHA: <hash>. Docs: <updated|no changes needed>."
+5. Rewrite `agent/roles/git/handoff.md` with the final durable state; refer to the resulting commit as HEAD, not by an unknown SHA
+6. Commit via agent/roles/git/commit-scope.sh "<message>" <file1> [file2 ...], including docs and `handoff.md`
+7. Verify HEAD, empty stash, and clean tree; do not edit tracked files afterward
+8. Report: "COMMITTED. SHA: <hash>. Docs: <updated|no changes needed>."
 ```
 
 `commit-scope.sh` stashes everything outside the listed files, commits atomically, pops the stash. Use `commit-sweep.sh` only when explicitly told to "commit everything".
@@ -66,7 +67,7 @@ If anything fails — stop and report with the error.
 
 ## Knowledge Base Maintenance
 
-You own the code-docs corpus. After every commit, check if these docs need updating.
+You own the code-docs corpus. Before every commit, check if these docs need updating.
 
 ### Canonical Docs (Oracle KB)
 - `wiki/` — project knowledge and personal notes.

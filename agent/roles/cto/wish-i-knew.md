@@ -70,6 +70,15 @@ I made the inverse error the same day: reported `yhk` as "still out with devops"
 while the full implementation was already on disk. Devops going quiet is not
 evidence of nothing landing. Check the tree before reporting dispatch state.
 
+## mm_git's commit helper stamps a wrong co-author
+
+`2d0a336` carries `Co-Authored-By: Claude Opus 3.5 (1M context)`. Wrong model —
+the session was Opus 5. It comes from the helper's template, so it recurs on
+every commit until the template is fixed, and "record what you did" is one of
+the three rules. Not worth amending a landed SHA; **fold the correction into the
+next dispatch to `mm_git`** rather than sending a reply (their `COMMITTED`
+report takes no reply).
+
 ## Reconciliation must not manufacture transitions it has no evidence for
 
 `yhk`'s refresh lane rebuilt an observation from stored row facts and passed
