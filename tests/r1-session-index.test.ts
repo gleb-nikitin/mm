@@ -90,6 +90,31 @@ describe('R1 session linkage index', () => {
       const out = resolveSessionLinks(['sess-old']);
       expect(out.acDbAvailable).toBe(true);
       expect(out.links.get('sess-old')).toEqual({
+        kind: 'retired',
+        participant_id: 'mm_cto',
+        project: 'mm',
+        role: 'cto',
+        project_role: 'mm/cto',
+      });
+    } finally {
+      if (saved === undefined) delete process.env.MT_AC_DB_PATH;
+      else process.env.MT_AC_DB_PATH = saved;
+    }
+  });
+
+  test('resolveSessionLinks marks active provenance and gives it precedence over valhalla', () => {
+    const acDb = makeAcShapeDb(acDbPath);
+    acDb.exec(`
+      INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_cto', 'mm', 'cto', 'sess-shared');
+      INSERT INTO valhalla_sessions (participant_id, version_n, old_session_id) VALUES ('mm_cto', 1, 'sess-shared');
+    `);
+    acDb.close();
+
+    const saved = process.env.MT_AC_DB_PATH;
+    process.env.MT_AC_DB_PATH = acDbPath;
+    try {
+      expect(resolveSessionLinks(['sess-shared']).links.get('sess-shared')).toEqual({
+        kind: 'active',
         participant_id: 'mm_cto',
         project: 'mm',
         role: 'cto',
@@ -167,14 +192,15 @@ describe('R1 session linkage index', () => {
     db.close();
   });
 
-  test('listActiveSessions derives stale non-terminal state before filtering and limit', () => {
+  test('stored derivation caps age at idle for every vendor and readers preserve it', () => {
     const res = runEval(`
       const { initDb, db } = await import('./src/core.ts');
       const { listActiveSessions, upsertSessionObservation } = await import('./src/r1/session-index.ts');
       initDb();
       const now = Date.now();
       const iso = ms => new Date(ms).toISOString();
-      const link = { participant_id: 'mm_cto', project: 'mm', role: 'cto', project_role: 'mm/cto' };
+      const link = { kind: 'active', participant_id: 'mm_cto', project: 'mm', role: 'cto', project_role: 'mm/cto' };
+      const retired = { ...link, kind: 'retired' };
       const base = {
         vendor: 'codex',
         source_path: '/tmp/session.jsonl',
@@ -187,15 +213,20 @@ describe('R1 session linkage index', () => {
         last_log_line: 'log',
         metadata: '{}',
       };
-      const seed = (session_id, last_activity_at, state, sessionLink = link) => {
-        upsertSessionObservation({ ...base, session_id, last_activity_at, state }, sessionLink);
+      const seed = (vendor, session_id, last_activity_at, state, sessionLink = link) => {
+        upsertSessionObservation({ ...base, vendor, session_id, last_activity_at, state }, sessionLink);
       };
-      seed('fresh-working', iso(now - 60 * 1000), 'working');
-      seed('stale-working', iso(now - 30 * 60 * 1000), 'working');
-      seed('done-old', iso(now - 60 * 60 * 1000), 'completed');
-      seed('orphan-old', iso(now - 60 * 60 * 1000), 'working', null);
+      seed('claude', 'fresh-working', iso(now - 60 * 1000));
+      seed('claude', 'stale-claude', iso(now - 30 * 60 * 1000));
+      seed('codex', 'stale-codex', iso(now - 30 * 60 * 1000));
+      seed('gemini', 'stale-gemini', iso(now - 30 * 60 * 1000));
+      seed('codex', 'explicit-wedged', iso(now - 60 * 1000), 'wedged');
+      seed('claude', 'retired-old', iso(now - 60 * 60 * 1000), undefined, retired);
+      seed('codex', 'orphan-old', iso(now - 60 * 60 * 1000), undefined, null);
 
-      const pick = rows => rows.map(row => ({ session_id: row.session_id, state: row.state }));
+      const pick = rows => rows
+        .map(row => ({ session_id: row.session_id, state: row.state }))
+        .sort((a, b) => a.session_id.localeCompare(b.session_id));
       console.log(JSON.stringify({
         defaults: pick(listActiveSessions()),
         wedged: pick(listActiveSessions({ states: ['wedged'] })),
@@ -203,22 +234,99 @@ describe('R1 session linkage index', () => {
         wedgedLimited: pick(listActiveSessions({ states: ['wedged'], limit: 1 })),
         completed: pick(listActiveSessions({ states: ['completed'] })),
         orphan: pick(listActiveSessions({ states: ['orphan'] })),
-        storedStale: db.prepare("SELECT state FROM session_index WHERE session_id = 'stale-working'").get().state,
+        readAll: pick(listActiveSessions({ states: ['working', 'idle', 'wedged', 'completed', 'orphan'] })),
+        stored: db.prepare("SELECT vendor, session_id, state FROM session_index ORDER BY session_id").all(),
       }));
       db.close();
     `);
     expect(res.exitCode).toBe(0);
     const body = JSON.parse(new TextDecoder().decode(res.stdout));
     expect(body.defaults).toEqual([
+      { session_id: 'explicit-wedged', state: 'wedged' },
       { session_id: 'fresh-working', state: 'working' },
-      { session_id: 'stale-working', state: 'wedged' },
+      { session_id: 'stale-claude', state: 'idle' },
+      { session_id: 'stale-codex', state: 'idle' },
+      { session_id: 'stale-gemini', state: 'idle' },
     ]);
-    expect(body.wedged).toEqual([{ session_id: 'stale-working', state: 'wedged' }]);
+    expect(body.wedged).toEqual([{ session_id: 'explicit-wedged', state: 'wedged' }]);
     expect(body.working).toEqual([{ session_id: 'fresh-working', state: 'working' }]);
-    expect(body.wedgedLimited).toEqual([{ session_id: 'stale-working', state: 'wedged' }]);
-    expect(body.completed).toEqual([{ session_id: 'done-old', state: 'completed' }]);
+    expect(body.wedgedLimited).toEqual([{ session_id: 'explicit-wedged', state: 'wedged' }]);
+    expect(body.completed).toEqual([{ session_id: 'retired-old', state: 'completed' }]);
     expect(body.orphan).toEqual([{ session_id: 'orphan-old', state: 'orphan' }]);
-    expect(body.storedStale).toBe('working');
+    const storedStates = body.stored.map((row: any) => ({ session_id: row.session_id, state: row.state }));
+    expect(storedStates).toEqual([
+      { session_id: 'explicit-wedged', state: 'wedged' },
+      { session_id: 'fresh-working', state: 'working' },
+      { session_id: 'orphan-old', state: 'orphan' },
+      { session_id: 'retired-old', state: 'completed' },
+      { session_id: 'stale-claude', state: 'idle' },
+      { session_id: 'stale-codex', state: 'idle' },
+      { session_id: 'stale-gemini', state: 'idle' },
+    ]);
+    expect(body.readAll).toEqual(storedStates);
+  });
+
+  test('refresh preserves completed and wedged evidence while retired completion stays terminal', () => {
+    const acDb = makeAcShapeDb(acDbPath);
+    acDb.exec(`
+      INSERT INTO participants (id, project, role, active_session_id) VALUES
+        ('mm_completed', 'mm', 'completed', 'sess-explicit-completed'),
+        ('mm_wedged', 'mm', 'wedged', 'sess-explicit-wedged'),
+        ('mm_retired', 'mm', 'retired', NULL);
+      INSERT INTO valhalla_sessions (participant_id, version_n, old_session_id)
+      VALUES ('mm_retired', 1, 'sess-retired-completed');
+    `);
+    acDb.close();
+
+    const res = runEval(`
+      const { Database } = await import('bun:sqlite');
+      const { initDb, db } = await import('./src/core.ts');
+      const { handleActiveTokens } = await import('./src/r1/api.ts');
+      const { recordSessionObservation, refreshStoredSessionStates } = await import('./src/r1/session-index.ts');
+      initDb();
+      const base = {
+        vendor: 'claude',
+        source_path: '/tmp/terminal.jsonl',
+        raw_event_id: null,
+        project: 'mm',
+        cwd: '/repo/mm',
+        model: 'claude-opus',
+        started_at: new Date(Date.now() - 60_000).toISOString(),
+        last_activity_at: new Date(Date.now() - 1_000).toISOString(),
+        last_mtime: 1,
+        last_log_line: 'terminal',
+        metadata: '{}',
+      };
+      recordSessionObservation({ ...base, session_id: 'sess-explicit-completed', state: 'completed' });
+      recordSessionObservation({ ...base, session_id: 'sess-explicit-wedged', state: 'wedged' });
+      recordSessionObservation({ ...base, session_id: 'sess-retired-completed' });
+      const acDb = new Database(process.env.MT_AC_DB_PATH);
+      acDb.prepare("UPDATE participants SET role = 'completed-renamed' WHERE id = 'mm_completed'").run();
+      acDb.close();
+      const eventCountBefore = db.prepare('SELECT COUNT(*) AS c FROM session_events').get().c;
+      const first = refreshStoredSessionStates('claude', { nowMs: 100_000, intervalSeconds: 30 });
+      const gated = refreshStoredSessionStates('claude', { nowMs: 120_000, intervalSeconds: 30 });
+      const next = refreshStoredSessionStates('claude', { nowMs: 131_000, intervalSeconds: 30 });
+      const states = db.prepare('SELECT session_id, state FROM session_index ORDER BY session_id').all();
+      const eventCountAfter = db.prepare('SELECT COUNT(*) AS c FROM session_events').get().c;
+      const active = JSON.parse(await handleActiveTokens(new URL('http://localhost/api/v1/tokens/active')).text());
+      console.log(JSON.stringify({ first, gated, next, states, eventCountBefore, eventCountAfter, active }));
+      db.close();
+    `);
+    if (res.exitCode !== 0) {
+      throw new Error(new TextDecoder().decode(res.stderr));
+    }
+    const body = JSON.parse(new TextDecoder().decode(res.stdout));
+    expect(body.first).toEqual({ ran: true, changed: 1 });
+    expect(body.gated).toEqual({ ran: false, changed: 0 });
+    expect(body.next).toEqual({ ran: true, changed: 0 });
+    expect(body.states).toEqual([
+      { session_id: 'sess-explicit-completed', state: 'completed' },
+      { session_id: 'sess-explicit-wedged', state: 'wedged' },
+      { session_id: 'sess-retired-completed', state: 'completed' },
+    ]);
+    expect(body.eventCountAfter).toBe(body.eventCountBefore);
+    expect(body.active.participants.map((row: any) => row.session_id)).toEqual(['sess-explicit-wedged']);
   });
 
   test('prompt footer links exact ids and skips legacy footer without synthetic id', () => {
@@ -392,6 +500,127 @@ describe('R1 session linkage index', () => {
       expect(reimported.exitCode).toBe(0);
       const recomputed = db.prepare(`SELECT COUNT(*) AS c, input_tokens, output_tokens, cached_tokens FROM session_usage`).get() as any;
       expect(recomputed).toEqual({ c: 1, input_tokens: 150, output_tokens: 30, cached_tokens: 80 });
+      db.close();
+    } finally {
+      fs.rmSync(importRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('unchanged Claude refresh advances working to idle and active to retired', () => {
+    const importRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mm-r1-claude-refresh-'));
+    const importAcDbPath = path.join(importRoot, 'ac-msg.db');
+    const claudeDir = path.join(importRoot, 'claude-projects');
+    const projectDir = path.join(claudeDir, '-Users-test-mm');
+    const sessionFile = path.join(projectDir, 'session.jsonl');
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    try {
+      const activityAt = new Date(Date.now() - 1_000).toISOString();
+      fs.writeFileSync(sessionFile, [
+        JSON.stringify({
+          type: 'user',
+          sessionId: 'sess-claude-refresh',
+          cwd: '/Users/test/mm',
+          timestamp: activityAt,
+          message: { content: [{ type: 'text', text: 'first' }] },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          sessionId: 'sess-claude-refresh',
+          cwd: '/Users/test/mm',
+          timestamp: activityAt,
+          message: { model: 'claude-opus-4-6', content: [{ type: 'text', text: 'reply' }] },
+        }),
+        JSON.stringify({
+          type: 'user',
+          sessionId: 'sess-claude-refresh',
+          cwd: '/Users/test/mm',
+          timestamp: activityAt,
+          message: { content: [{ type: 'text', text: 'second' }] },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          sessionId: 'sess-claude-refresh',
+          cwd: '/Users/test/mm',
+          timestamp: activityAt,
+          message: { model: 'claude-opus-4-6', content: [{ type: 'text', text: 'done' }] },
+        }),
+      ].join('\n') + '\n');
+      const settledMtime = (Date.now() - 10 * 60 * 1000) / 1000;
+      fs.utimesSync(sessionFile, settledMtime, settledMtime);
+      const originalMtime = fs.statSync(sessionFile).mtimeMs;
+
+      const acDb = makeAcShapeDb(importAcDbPath);
+      acDb.exec(`INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_devops', 'mm', 'devops', 'sess-claude-refresh')`);
+      acDb.close();
+
+      const runImporter = (idleSeconds: string) => Bun.spawnSync({
+        cmd: ['bun', 'scripts/import-claude.ts', '--projects-dir', claudeDir, '--days', '365', '--min-age-seconds', '0'],
+        cwd: REPO,
+        env: {
+          ...process.env,
+          MT_BRAIN_ROOT: importRoot,
+          MT_AC_DB_PATH: importAcDbPath,
+          MT_R1_IDLE_SECONDS: idleSeconds,
+          MT_R1_STATE_REFRESH_SECONDS: '0',
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+
+      const first = runImporter('3600');
+      expect(first.exitCode).toBe(0);
+      let db = new Database(path.join(importRoot, 'meta', 'brain.db'));
+      expect((db.prepare(`SELECT state FROM session_index WHERE session_id = 'sess-claude-refresh'`).get() as any).state).toBe('working');
+      db.close();
+
+      const second = runImporter('0');
+      expect(second.exitCode).toBe(0);
+      expect(new TextDecoder().decode(second.stdout)).toContain('skipped (unchanged): 1');
+      expect(new TextDecoder().decode(second.stdout)).toContain('state refresh:     1 changed');
+      expect(fs.statSync(sessionFile).mtimeMs).toBe(originalMtime);
+      db = new Database(path.join(importRoot, 'meta', 'brain.db'));
+      expect((db.prepare(`SELECT state FROM session_index WHERE session_id = 'sess-claude-refresh'`).get() as any).state).toBe('idle');
+      db.close();
+
+      const retiredAcDb = new Database(importAcDbPath);
+      retiredAcDb.exec(`
+        UPDATE participants SET active_session_id = NULL WHERE id = 'mm_devops';
+        INSERT INTO valhalla_sessions (participant_id, version_n, old_session_id)
+        VALUES ('mm_devops', 1, 'sess-claude-refresh');
+      `);
+      retiredAcDb.close();
+
+      const third = runImporter('0');
+      expect(third.exitCode).toBe(0);
+      expect(new TextDecoder().decode(third.stdout)).toContain('skipped (unchanged): 1');
+      expect(new TextDecoder().decode(third.stdout)).toContain('state refresh:     1 changed');
+      expect(fs.statSync(sessionFile).mtimeMs).toBe(originalMtime);
+
+      const activeTokens = Bun.spawnSync({
+        cmd: ['bun', '-e', `
+          const { initDb, db } = await import('./src/core.ts');
+          const { handleActiveTokens } = await import('./src/r1/api.ts');
+          initDb();
+          const response = handleActiveTokens(new URL('http://localhost/api/v1/tokens/active'));
+          console.log(await response.text());
+          db.close();
+        `],
+        cwd: REPO,
+        env: { ...process.env, MT_BRAIN_ROOT: importRoot, MT_AC_DB_PATH: importAcDbPath },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      expect(activeTokens.exitCode).toBe(0);
+      expect(JSON.parse(new TextDecoder().decode(activeTokens.stdout)).participants).toEqual([]);
+
+      db = new Database(path.join(importRoot, 'meta', 'brain.db'));
+      expect((db.prepare(`SELECT state FROM session_index WHERE session_id = 'sess-claude-refresh'`).get() as any).state).toBe('completed');
+      expect(db.prepare(`SELECT event_type FROM session_events ORDER BY id`).all()).toEqual([
+        { event_type: 'session_started' },
+        { event_type: 'session_idle' },
+        { event_type: 'session_completed' },
+      ]);
       db.close();
     } finally {
       fs.rmSync(importRoot, { recursive: true, force: true });

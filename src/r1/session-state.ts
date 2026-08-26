@@ -6,7 +6,6 @@ import type { SessionEventType, SessionState } from './types.ts';
 // changes state.
 
 export const DEFAULT_IDLE_SECONDS = Number(process.env.MT_R1_IDLE_SECONDS ?? 300);
-export const DEFAULT_WEDGED_SECONDS = Number(process.env.MT_R1_WEDGED_SECONDS ?? 900);
 
 export type DeriveSessionStateInput = {
   linked: boolean;
@@ -15,7 +14,6 @@ export type DeriveSessionStateInput = {
   last_activity_at: string;
   nowMs?: number;
   idleSeconds?: number;
-  wedgedSeconds?: number;
 };
 
 function parseTimeMs(value: string): number | null {
@@ -35,9 +33,9 @@ export function deriveSessionState(input: DeriveSessionStateInput): SessionState
 
   const nowMs = input.nowMs ?? Date.now();
   const ageSeconds = (nowMs - activityMs) / 1000;
-  const wedgedSeconds = input.wedgedSeconds ?? DEFAULT_WEDGED_SECONDS;
   const idleSeconds = input.idleSeconds ?? DEFAULT_IDLE_SECONDS;
-  if (ageSeconds > wedgedSeconds) return 'wedged';
+  // Transcript age is a session fact, not an outstanding-work signal. Only
+  // an explicit state supplied by the obligation owner may produce wedged.
   if (ageSeconds > idleSeconds) return 'idle';
   return 'working';
 }

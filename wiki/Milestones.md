@@ -23,3 +23,4 @@
 - **2026-05-05**: feat(brain): add distilled notes surface
 - **2026-05-06**: feat(notes): add browser UI and API
 - **2026-08-26**: chore(ops): refresh agent workflows and pricing data
+- **2026-08-26**: fix(r1): make session reconciliation provenance-safe

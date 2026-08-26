@@ -36,11 +36,12 @@ function runEval(root: string, acDb: string, code: string) {
 }
 
 describe('R1 session state derivation', () => {
-  test('thresholds derive working, idle, wedged, completed, and orphan states', () => {
+  test('age derives at most idle while explicit state can mark a session wedged', () => {
     const nowMs = Date.parse('2026-04-22T10:20:00Z');
     expect(deriveSessionState({ linked: true, last_activity_at: '2026-04-22T10:19:00Z', nowMs })).toBe('working');
     expect(deriveSessionState({ linked: true, last_activity_at: '2026-04-22T10:14:59Z', nowMs })).toBe('idle');
-    expect(deriveSessionState({ linked: true, last_activity_at: '2026-04-22T10:04:59Z', nowMs })).toBe('wedged');
+    expect(deriveSessionState({ linked: true, last_activity_at: '2026-04-22T10:04:59Z', nowMs })).toBe('idle');
+    expect(deriveSessionState({ linked: true, explicitState: 'wedged', last_activity_at: '2026-04-22T10:19:00Z', nowMs })).toBe('wedged');
     expect(deriveSessionState({ linked: true, completed: true, last_activity_at: '2026-04-22T10:19:00Z', nowMs })).toBe('completed');
     expect(deriveSessionState({ linked: false, last_activity_at: '2026-04-22T10:19:00Z', nowMs })).toBe('orphan');
   });
@@ -85,7 +86,7 @@ describe('R1 session state derivation', () => {
         recordSessionObservation(obs(recent));
         recordSessionObservation(obs(recent));
         recordSessionObservation(obs(idle));
-        recordSessionObservation(obs(wedged));
+        recordSessionObservation(obs(wedged, { state: 'wedged' }));
         recordSessionObservation(obs(recent));
         recordSessionObservation(obs(recent, { state: 'completed' }));
         db.close();

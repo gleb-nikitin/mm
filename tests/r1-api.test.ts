@@ -503,7 +503,7 @@ describe('R1 active sessions API', () => {
         project_role: 'mm/cto',
         seconds_ago: Math.floor((generatedAt - Date.parse('2026-04-22T10:05:00Z')) / 1000),
         last_log_line: 'working log',
-        state: 'wedged',
+        state: 'working',
       });
       expect(Object.keys(body.sessions[0])).toEqual(['project_role', 'seconds_ago', 'last_log_line', 'state']);
     });
@@ -531,7 +531,7 @@ describe('R1 active sessions API', () => {
         started_at: '2026-04-22T10:00:00Z',
         last_activity_at: '2026-04-22T10:05:00Z',
         last_log_line: 'working log',
-        state: 'wedged',
+        state: 'working',
       });
     });
   });
@@ -577,11 +577,11 @@ describe('R1 active sessions API', () => {
   test('state filters support single state and exhaustive CSV', async () => {
     await withApi(async base => {
       expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&state=wedged')).body)).toEqual([
-        'sess-mm-cto-working',
-        'sess-mm-devops-idle',
         'sess-ac-cto-wedged',
       ]);
-      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&state=working')).body)).toEqual([]);
+      expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&state=working')).body)).toEqual([
+        'sess-mm-cto-working',
+      ]);
       expect(sessionIds((await getJson(base, '/api/v1/sessions/active?fields=full&state=working,idle,wedged,completed,orphan')).body)).toEqual([
         'sess-mm-cto-working',
         'sess-mm-devops-idle',
@@ -589,6 +589,50 @@ describe('R1 active sessions API', () => {
         'sess-ac-qa-completed',
         'sess-infra-devops-orphan',
       ]);
+    });
+  });
+
+  test('retired sessions are completed at ingestion and excluded from active tokens by default', async () => {
+    const proc = Bun.spawnSync({
+      cmd: ['bun', '-e', `
+        const { initDb, db } = await import('./src/core.ts');
+        const { upsertSessionObservation } = await import('./src/r1/session-index.ts');
+        initDb();
+        upsertSessionObservation({
+          vendor: 'claude',
+          session_id: 'sess-mm-cto-retired',
+          source_path: '/tmp/retired',
+          raw_event_id: null,
+          project: 'mm',
+          cwd: '/repo/mm',
+          model: 'claude-opus',
+          started_at: '2026-04-21T10:00:00Z',
+          last_activity_at: '2026-04-21T10:05:00Z',
+          last_mtime: 1,
+          last_log_line: 'retired log',
+          metadata: '{}',
+        }, {
+          kind: 'retired',
+          participant_id: 'mm_cto',
+          project: 'mm',
+          role: 'cto',
+          project_role: 'mm/cto',
+        });
+        console.log(db.prepare("SELECT state FROM session_index WHERE session_id = 'sess-mm-cto-retired'").get().state);
+        db.close();
+      `],
+      cwd: REPO,
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(proc.exitCode).toBe(0);
+    expect(new TextDecoder().decode(proc.stdout).trim()).toBe('completed');
+
+    await withApi(async base => {
+      const result = await getJson(base, '/api/v1/tokens/active?project=mm&role=cto&vendor=claude');
+      expect(result.status).toBe(200);
+      expect(result.body.participants.map((row: any) => row.session_id)).toEqual(['sess-mm-cto-working']);
     });
   });
 

@@ -39,12 +39,13 @@ export function resolveSessionLinks(sessionIds: string[]): SessionLinkResolution
     const placeholders = sessionIds.map(() => '?').join(',');
     const queryParams = [...sessionIds, ...sessionIds];
     const rows = acDb.prepare(
-      `SELECT session_id, participant_id, project, role FROM (
+      `SELECT session_id, participant_id, project, role, kind FROM (
          SELECT
            p.active_session_id AS session_id,
            p.id AS participant_id,
            p.project,
-           p.role
+           p.role,
+           'active' AS kind
          FROM participants p
          WHERE p.active_session_id IN (${placeholders})
          UNION ALL
@@ -52,7 +53,8 @@ export function resolveSessionLinks(sessionIds: string[]): SessionLinkResolution
            v.old_session_id AS session_id,
            v.participant_id,
            p.project,
-           p.role
+           p.role,
+           'retired' AS kind
          FROM valhalla_sessions v
          JOIN participants p ON p.id = v.participant_id
          WHERE v.old_session_id IN (${placeholders})
@@ -62,12 +64,16 @@ export function resolveSessionLinks(sessionIds: string[]): SessionLinkResolution
       participant_id: string | null;
       project: string | null;
       role: string | null;
+      kind: 'active' | 'retired';
     }>;
 
     for (const row of rows) {
       if (!row.participant_id) continue;
+      const existing = links.get(row.session_id);
+      if (existing?.kind === 'active' && row.kind === 'retired') continue;
       const projectRole = row.project && row.role ? `${row.project}/${row.role}` : null;
       links.set(row.session_id, {
+        kind: row.kind,
         participant_id: row.participant_id,
         project: row.project,
         role: row.role,

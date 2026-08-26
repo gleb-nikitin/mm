@@ -21,7 +21,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { initDb, db, upsertRawEvent } from '../src/core.ts';
-import { findRawEventIdByExternalId, recordSessionObservation, recordSessionUsage } from '../src/r1/session-index.ts';
+import { findRawEventIdByExternalId, recordSessionObservation, recordSessionUsage, refreshStoredSessionStates } from '../src/r1/session-index.ts';
 import { extractClaudeTokenUsage } from '../src/r1/token-usage.ts';
 
 type Flags = {
@@ -398,6 +398,10 @@ async function main() {
     }
   }
 
+  const refresh = flags.dryRun
+    ? { ran: false, changed: 0 }
+    : refreshStoredSessionStates('claude');
+
   console.log();
   console.log(`Summary:`);
   console.log(`  imported:          ${imported}${flags.dryRun ? ' (dry-run)' : ''}`);
@@ -407,6 +411,7 @@ async function main() {
   console.log(`  skipped (turns):   ${skippedMinTurns}`);
   console.log(`  skipped (live):    ${skippedLive}`);
   console.log(`  skipped (unchanged): ${skippedUnchanged}`);
+  console.log(`  state refresh:     ${refresh.ran ? `${refresh.changed} changed` : 'not due'}`);
   if (errored > 0) console.log(`  parse errors:      ${errored}`);
   if (!flags.dryRun && imported > 0) {
     console.log();
