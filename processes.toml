@@ -1,0 +1,24 @@
+# mm plugin manifest. Loaded via the user_root's processes.toml `include`.
+# Supervisor expands `$AURORA_DATA` to the platform data dir and creates the
+# parent of `socket` on spawn.
+#
+# mm runs two managed processes:
+# - process.mm        — HTTP API server, binds the unix socket
+# - process.mm-watch  — importer loop (3 vendors every 1s); no socket
+
+[process.mm]
+command = "bun"
+args = ["src/api.ts"]
+cwd = "plugins/mm"
+socket = "$AURORA_DATA/sockets/mm.sock"
+auto_start = true
+restart_policy = "on-failure"
+
+[process.mm-watch]
+command = "bun"
+args = ["scripts/watch.ts"]
+cwd = "plugins/mm"
+auto_start = true
+restart_policy = "on-failure"
+# No socket — non-HTTP background importer loop. Logs structured per-tick lines.
+

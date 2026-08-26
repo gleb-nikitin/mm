@@ -193,7 +193,7 @@ MCP stdio server: `search_brain`, `query_brain`, `add_to_brain`, `validate_claim
 
 ### `scripts/import-claude.ts` · `import-codex.ts` · `import-gemini.ts`
 
-Walk vendor dirs; flatten sessions; insert **`raw_events`** + **`events_fts`** + **`import_state`**; dedup by **`external_id`**.
+Walk vendor dirs; flatten sessions; insert **`raw_events`** + **`events_fts`** + **`import_state`**; dedup by **`external_id`**. Normal runs also reconcile stored session age and active/retired Aurora links without reparsing transcripts, including rows older than `--days`; a durable per-vendor gate limits this scan to once per 30 seconds.
 
 ### `scripts/chunk-events.ts`
 

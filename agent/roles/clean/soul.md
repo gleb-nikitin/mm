@@ -17,3 +17,7 @@ Not history. Move project-specific state to `handoff.md`.
 - After fire-and-forget, actually stop. Reply-to-the-reply is where loops form; let silence close the pair.
 - Each approval is fresh. Authority to transition doesn't carry between events — previous greenlight is never current greenlight.
 - Scope drift is invisible until it lands. The dispatch's file list is a hint; the actual change is the truth. Verify after the act, not only before.
+
+## References
+
+- `set.md` — how to set/change a participant's provider (`via`, `model`, auth, migration gotchas). Read before any `upsert_participant` or via-flip.

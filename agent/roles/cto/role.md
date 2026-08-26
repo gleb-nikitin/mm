@@ -72,5 +72,5 @@ Participant ID: `mm_cto`.
 
 ## Every session
 
-- Start: read `agent/roles/cto/soul.md`, read `agent/roles/cto/handoff.md`, scan `mm brain_stats` + `list_active_agents` + `list_projects` before any docs.
-- Stop: update `agent/roles/cto/handoff.md` with only what the next CTO needs on cold start.
+- Start: read `agent/roles/cto/soul.md`, read `agent/roles/cto/state.md`, scan `mm brain_stats` + `list_active_agents` + `list_projects` before any docs.
+- Stop: update `agent/roles/cto/state.md` with only what the next CTO needs on cold start.

@@ -1,26 +1,16 @@
 # Handoff: mm_lib
 
-## Current State (2026-04-20, post-catchup)
+## Current State (2026-04-21)
+- **Queue**: ✨ Empty. 52 chunks processed and marked.
+- **Corpus**: ~150+ atomic artifacts extracted (Decisions, Intents, Bugs, Friction, etc.).
+- **Stability**: v11 "Atom Factory" model is now the proven standard for high-volume synthesis.
 
-- **Artifacts**: ~100+ atomic artifacts successfully extracted from all 21 historical chunks.
-- **Queue**: ✨ Empty. All pending virtual chunks for project `mm` have been processed.
-- **Model**: v11 Atomic Truth model is fully populated. Knowledge is stored as structured relational rows in the `artifacts` table.
-- **Key Wins**:
-    - Captured the full history of the **Atomic Pivot** and the transition to a **Knowledge OS**.
-    - Codified the **Tiered Compute Philosophy**, **Narrative Chunker** logic, and **Agent Excellence Standards**.
-    - Identified and documented critical operational intuition in "Wish I knew" formats.
-    - Integrated "Chain-of-Command Extraction" and "Shadow-Session Monitoring" ideas.
+## Sharp Edges (Wish I Knew)
+- **API Instability**: Provider-side issues can cause thrashing; always check `brain_stats` vs qualitative key audits to ensure extraction quality didn't degrade during high-latency periods.
+- **Handoff Echo**: The `process-new.command` previously injected my own handoff back into my prompt, causing me to "recommend" things I'd already planned. This is now fixed, but watch for other "agent-reflexive" context loops.
+- **SQL Foreign Keys**: Ad-hoc `bun:sqlite` scripts default `foreign_keys = OFF`. Always set `PRAGMA foreign_keys = ON` in wipe scripts to avoid orphaned provenance rows.
 
-## Blockers
-
-- None.
-
-## Next Steps
-
-1. **V12 Query/Briefing Protocol**: Now that the artifacts table is rich with data, we need to implement the task-aware context injection layer.
-2. **Wiki Generator**: Develop the script to project `artifacts` back into human-readable markdown files in `wiki/mm/` (per the "Librarian emits JSON -> Script renders MD" decision).
-3. **Signal Filter**: Implement the deterministic regex-based noise filter in the chunker to further reduce token usage.
-4. **Observer Mode**: Implement automated file-watching to remove manual `index rebuild` friction.
-
-## Known Artifacts (project: mm, status=active)
-The `artifacts` table is now the authoritative source of truth. Use `bun run brain artifact list --project mm` to explore.
+## Next Strategic Moves
+1. **v12 Briefing Protocol**: Close the loop by pushing artifacts into new session preambles.
+2. **Semantic Dedup**: Move beyond lexicographical idempotency to vector-based similarity to collapse rephrased artifacts.
+3. **Synthesis Provider**: Abstract the LLM interface to allow for provider-swapping during API outages.

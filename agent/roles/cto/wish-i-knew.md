@@ -1,0 +1,146 @@
+# wish-i-knew — mm_cto
+
+Terse working notes. Append as you learn. Not a changelog.
+
+## Two independent "is this session active" paths
+
+mm has **two** unrelated mechanisms and they are easy to conflate:
+
+- `/active` → `src/session-probe.ts` — jsonl **file mtime**, returns `seconds_ago`,
+  **no `state` field**. Never touches session_index.
+- `/api/v1/{sessions,tokens}/active` → `session_index` + `deriveSessionState` —
+  age-bucketed `state`, recomputed at read time.
+
+Changing state derivation does **not** affect `/active`. Check which path a
+consumer uses before promising a fix.
+
+## ac's consumers of mm endpoints (verified 2026-08-07)
+
+| ac file | mm endpoint | carries state? |
+|---|---|---|
+| `src-server/lib/brain.ts` | `/active?probe=live` | no — `seconds_ago` only |
+| `src-server/llm/mm-token-client.ts` | `/api/v1/tokens/active` | yes, 30s poll, drives relaunch |
+| `ui/apps/mcp-status.html` | `/api/v1/sessions/active` | yes |
+
+ac's activity-watchdog consumes `brain.ts` → the mtime path. Its
+`"N min idle per brain"` string is ac formatting mm's `seconds_ago` with ac's
+own threshold — **not** mm's `idle`/`wedged` classification. The string caused a
+cross-project CTO to infer a `brain.db` dependency that does not exist.
+
+## Standing boundary: mm does not read ac's `llm_query_log`
+
+mm publishes **session facts** (link kind, age, vendor). "Was a dispatch
+outstanding" is **ac's fact**. A second stuck-dispatch detector inside mm's
+derivation, on the same input, owned by nobody, is worse than one unqualified
+signal.
+
+Ruled at `yhk-3`. ac_cto agreed at `yha-27` and asked that it hold **even if ac
+later requests it**. Treat a future ac request for liveness corroboration in mm
+as pre-refused; point at those two messages.
+
+## `wedged` was never a wedge detector
+
+Age-only, vendor-blind, no liveness input. 138/143 linked sessions derived
+`wedged` at the time of the finding (claude 101/106, codex 28/28, gemini 9/9).
+Post-`yhk`: age tops out at `idle`; `wedged` is explicit-only.
+
+## Stored vs derived state disagree
+
+`session_index.state` is written at import; `deriveStateForIndexRow` recomputes
+at read. 62/143 linked rows disagreed (59 `working`→`wedged`, 3 `idle`→`wedged`).
+Direct-DB readers and API readers saw different states for the same session.
+Collapsed to one derivation path in `yhk`.
+
+## xkd-4 was this bug
+
+`/api/v1/tokens/active` multi-row-per-participant = valhalla-retired sessions
+deriving as live beside the active one. Retired → `completed` fixes it mm-side;
+ac's `state ∈ {working,idle}` workaround becomes redundant.
+
+## mtime is not a freshness signal in this tree
+
+Every dirty path carries an **Aug 7 mtime**, including files that changed during
+a live session weeks later. Clock is fine (`date` agrees with chain timestamps);
+the mtimes just don't move. A cross-project CTO read "last touched Aug 7" as
+"settled, safe to commit" — for four files that were that day's unaudited work.
+
+**Read `git diff`, never `ls -lT`, to decide whether a change is in-flight.**
+
+I made the inverse error the same day: reported `yhk` as "still out with devops"
+while the full implementation was already on disk. Devops going quiet is not
+evidence of nothing landing. Check the tree before reporting dispatch state.
+
+## Reconciliation must not manufacture transitions it has no evidence for
+
+`yhk`'s refresh lane rebuilt an observation from stored row facts and passed
+`state: row.state === 'wedged' ? 'wedged' : undefined` — destroying explicit
+`completed` on active-linked rows, which then re-derived from age as
+`working`/`idle`. It **wrote** the resurrection and **emitted** a reverse
+terminal→active event. The fix for phantom-live sessions was creating them.
+
+Sort states by whether the row still holds what produced them:
+
+- **Reconstructible** — `working`/`idle` from `last_activity_at`, `orphan` from
+  the link. A refresh may re-derive these.
+- **Not reconstructible** — `wedged`, `completed`. The evidence lives nowhere
+  but `state` itself. Discarding it destroys information.
+
+No new column needed to allow revival. The distinction is the **caller**:
+observing carries fresh evidence and may revive; reconciling does not and must
+pass non-reconstructible states through untouched.
+
+## ac's `msg.db` — two unindexed scans under mm's link query
+
+`EXPLAIN QUERY PLAN` on `resolveSessionLinks` (verified, not relayed):
+
+```
+SCAN p                    -- participants.active_session_id  (60 rows)
+SCAN v                    -- valhalla_sessions.old_session_id (197 rows)
+SEARCH p USING INDEX ...  -- the JOIN on p.id, fine
+```
+
+`valhalla_sessions` carries PK `(participant_id, version_n)` and
+`idx_valhalla_participant_version`; **neither covers `old_session_id`**.
+`participants` has only its PK on `id`.
+
+Both are full scans **per 400-row batch**, so cost grows with mm's corpus
+(batch count) *and* ac's retirements (valhalla rows) — the superlinearity audit
+measured: ~6 ms/tick at 1,355 rows, ~545 ms at 50k, ~2,045 ms at 100k.
+
+Fix is `valhalla_sessions(old_session_id)` + `participants(active_session_id)`,
+**on ac's side** — mm opens `msg.db` readonly and cannot add them.
+
+## Deferred: three compile-time deps in `dependencies` (post-build-cut)
+
+`bun install --production` installs them because they sit in `dependencies`:
+
+| package | size |
+|---|---|
+| `typescript` | 23 MB |
+| `bun-types` | 6.1 MB |
+| `@types/node` | 2.5 MB |
+| **total** | **31.6 MB** of a 78 MB `node_modules` |
+
+Verified compile-time only — no runtime import anywhere in `src/` or `scripts/`;
+reached solely via `tsconfig.json` `"types": ["bun-types", "node"]`.
+
+ac's Product bundle: **256 MB against a 288 MB ceiling**, mm's vendored tree
+~55 MB after ac's test-artifact prune. So these three are worth roughly ac's
+*entire* 32 MB of headroom.
+
+Safe in principle, but it changes what `bun install --production` resolves —
+verify by running that install and exercising the shipped entrypoints, not by
+reasoning. ac_server tightens the ceiling in the same phase it lands; aim at the
+smallest honest number, not at the ceiling.
+
+## "Clean tree" and "safe to publish" are different questions
+
+`git add -A` on a CEO cleanup ask nearly published `meta/distill-dump.md`
+(160 KB of brain.db distillate) and `raw/chains/` to a public remote. Both were
+untracked *and* unignored. Same shape as the earlier `.claude/` catch.
+
+The `.gitignore` has policy blocks — "Imported session content — never tracked",
+"Runtime-generated brain reports" — that new outputs don't get added to. When a
+cleanup ask arrives, **audit untracked paths against those stated policies**
+before staging. An allow-list that protects a *bundle* says nothing about what
+reaches *git*.

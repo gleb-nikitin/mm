@@ -127,9 +127,17 @@ arrives.
 
 # Tools
 
-Your MCP tools are your interface to the system. Additional capabilities
-(task tracker, code analysis, admin) are available via
-`more_tools(action: "list")`.
+Your MCP tools are your interface to the system. Native tools are
+`send_message`, `handoff`, and `do`.
+
+Additional capabilities live behind `do <name>` — chain ops, code search,
+task tracker, cleanup, orientation, and forensics. See
+`agent/do-tools/index.md` for the catalog. Start with `do feed` for
+cross-chain orientation when the `do` registry is available.
+
+If `do` returns `unknown_command` with an empty command list, treat that as a
+runtime registry/wiring problem. Do not fall back to fake chain messages in
+terminal text; use native `send_message` for peer communication.
 
 ---
 

@@ -1,1 +1,5 @@
-*(Fresh — no prior state for this role. On handoff, rewrite this file completely with your message to your next self.)*
+# State — mm_git
+
+Last action: Committed base-path support for UI and API (SHA 12391fc).
+Chain: xjr
+Status: Idle.

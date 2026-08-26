@@ -1,7 +1,7 @@
 # Operator-editable R1 token pricing, in USD per million tokens.
-# Source: https://platform.claude.com/docs/en/about-claude/pricing (retrieved 2026-04-28)
-# Source: https://openai.com/api/pricing/ (retrieved 2026-04-28)
-# Source: https://ai.google.dev/gemini-api/docs/pricing (retrieved 2026-04-28)
+# Source: https://platform.claude.com/docs/en/about-claude/pricing (retrieved 2026-05-05)
+# Source: https://openai.com/api/pricing/ (retrieved 2026-05-05)
+# Source: https://ai.google.dev/gemini-api/docs/pricing (retrieved 2026-05-05)
 
 [claude."claude-opus-4-7"]
 input = 5.0
@@ -27,6 +27,11 @@ cache_creation_1h = 6.0
 cache_read = 0.3
 reasoning = 15.0
 
+[codex."gpt-5.5-pro"]
+input = 30.0
+output = 180.0
+cached = 1.0
+
 [codex."gpt-5.5"]
 input = 5.0
 output = 30.0
@@ -42,6 +47,18 @@ input = 0.75
 output = 4.5
 cached = 0.075
 
+[gemini."gemini-3.1-flash"]
+input = 0.5
+output = 3.0
+cached = 0.05
+reasoning = 3.0
+
+[gemini."gemini-3.1-flash-lite"]
+input = 0.25
+output = 1.5
+cached = 0.02
+reasoning = 1.5
+
 [gemini."gemini-3-flash-preview"]
 input = 0.5
 output = 3.0
@@ -49,6 +66,8 @@ cached = 0.05
 reasoning = 3.0
 
 [gemini."gemini-2.5-pro"]
+# Note: Google charges $2.50/$15.00 for context > 200K.
+# Current R1 logic uses a single rate; using standard rate here.
 input = 1.25
 output = 10.0
 cached = 0.31
