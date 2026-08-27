@@ -29,3 +29,4 @@
 - **2026-08-27**: docs(roles): refresh cto notes and devops handoff
 - **2026-08-27**: docs(roles): remove dangling global-doc references
 - **2026-08-27**: chore(deps): move type tooling to dev dependencies
+- **2026-08-27**: docs(roles): capture dependency landing handoffs

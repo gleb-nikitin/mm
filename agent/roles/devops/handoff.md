@@ -1,30 +1,28 @@
 # Devops Handoff
 
 Current state:
-- `yjn` landed locally at `c6bd0e0 fix(ac-db): centralize resolution and expose status` after audit PASS `yjn-21`.
-- `yhk` session-state lifecycle fix previously landed at `cb50251`.
-- No active devops implementation task remains from this session.
+- `yjn-45` landed locally at `353e583 chore(deps): move type tooling to dev dependencies` after audit PASS `yjn-47`.
+- No active devops implementation task remains.
 
-`yjn` operational contract:
-- `MT_AC_DB_PATH` is the only library input for Aurora `msg.db`; no Product, workspace, or `AURORA_DATA` fallback exists.
-- Aurora expands `$AURORA_DATA` only inside manifest values. `processes.toml` injects the expanded DB path into both `process.mm` and socketless `process.mm-watch`.
-- `distill-new.command`, `process-new.command`, and `watch-agents.command` declare an overridable local operator default before importing.
-- `available` means the DB opened readonly and answered probes for the exact participants/valhalla columns.
-- `missing`, `unresolved`, and `unreadable` log once per distinct failure and use distinct R1 orphan reasons.
-- `/active`, `/api/v1/sessions/active`, and `/api/v1/tokens/active` expose `ac_db` plus `X-MM-AC-DB-Status`; markdown warns visibly.
-- Unreadable ac state remains fail-closed for stored-session refresh; session-state derivation was not changed.
+Dependency contract:
+- `typescript`, `@types/node`, and `bun-types` are devDependencies only.
+- Production dependencies remain `@modelcontextprotocol/sdk`, `commander`, `js-yaml`, and `smol-toml`; each has a runtime import in ac's shipped allow-list.
 
-Verification at landing:
-- Audit live-corruption probe passed; linked rows remained untouched while status was `unreadable`.
-- `bun run typecheck` passed.
-- `bun test` passed: 137 tests, 0 failures, 680 expectations.
-- Focused suite passed: 70 tests, 0 failures, 362 expectations.
-- Fresh-root API startup/schema v15, `zsh -n`, manifest parse, diff check, and source path-literal scans passed.
+Production-stage evidence:
+- Staged exactly `src/`, `scripts/`, `meta/skills/`, `meta/schema.md`, `pricing.toml`, and `package.json`.
+- Before: 56,120 KiB production `node_modules`; after: 26,228 KiB.
+- Saving: 29,892 KiB (~29.2 MiB); moved packages were absent from the changed production install.
+- API served `/stats` and `/api/v1/tokens/active`; all importers completed; watcher emitted a full tick; MCP answered initialize over stdio.
+
+Repository gates:
+- `bun test`: 137 pass, 0 fail, 680 expectations.
+- `bun run typecheck` (`tsc --noEmit`): passed.
+- `bun install --frozen-lockfile --dry-run`: passed.
+- `git diff --check`: passed.
 
 Working tree:
-- `agent/roles/cto/wish-i-knew.md` is an unrelated CTO-owned change; do not absorb it into devops scope.
-- This handoff rewrite is role-owned session state written after the product commit.
+- `agent/roles/cto/wish-i-knew.md` is unrelated CTO-owned work.
+- This handoff rewrite is role-owned post-commit state.
 
 Next checks:
-- In a packaged Aurora install, confirm both managed processes receive the same install-local `MT_AC_DB_PATH` and active endpoints report `available`.
-- If standalone import/API/MCP use reports unconfigured, set `MT_AC_DB_PATH` explicitly rather than restoring a fallback.
+- In ac's next bundle, confirm the packaged production tree reflects the ~29 MiB reduction and still starts both managed processes.

@@ -70,6 +70,25 @@ I made the inverse error the same day: reported `yhk` as "still out with devops"
 while the full implementation was already on disk. Devops going quiet is not
 evidence of nothing landing. Check the tree before reporting dispatch state.
 
+## A fix tends to reproduce the shape of the bug it repairs
+
+Twice in two days, caught by `mm_audit` both times:
+
+- `yhk` — the fix for sessions *appearing live when they aren't* built a
+  reconciliation lane that resurrected completed sessions. Same defect, entered
+  from the write side instead of the read side.
+- `yjn` — the fix for *silent success* reported `available` from path existence
+  alone, so three surfaces read healthy while resolution said `unreadable`.
+  Same defect, one level up, inside its own repair.
+
+The author is reasoning inside the bug's frame, so the frame's blind spot
+survives the rewrite. **When reviewing a fix, ask specifically: does this
+reintroduce the original defect's shape from a new angle?** That question found
+both. Neither was caught by tests, and both diffs were green when submitted.
+
+Named as a pattern by ac_cto at `yji-19`; worth treating as a standing review
+lens rather than two incidents.
+
 ## I amend dispatches after they've been acted on
 
 Three times on `yjn`: required a branch then reversed it, restated the reversal
