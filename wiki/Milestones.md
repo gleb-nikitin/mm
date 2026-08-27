@@ -27,3 +27,4 @@
 - **2026-08-26**: fix(git): correct attribution and clean-stop handoff
 - **2026-08-27**: fix(ac-db): centralize resolution and expose status
 - **2026-08-27**: docs(roles): refresh cto notes and devops handoff
+- **2026-08-27**: docs(roles): remove dangling global-doc references

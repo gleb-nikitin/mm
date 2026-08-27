@@ -14,7 +14,7 @@ Your role folder is `agent/roles/audit/`.
 - `agent/roles/audit/soul.md` — portable seeds
 - `agent/roles/audit/handoff.md` — current sharp edges
 
-On session start: read `agent/roles/global.md`, then `soul.md`, then `handoff.md` from your role folder.
+On session start: read `soul.md`, then `handoff.md` from your role folder.
 
 ## Mission
 

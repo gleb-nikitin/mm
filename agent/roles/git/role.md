@@ -38,7 +38,7 @@ Your role folder is `agent/roles/git/`.
 
 ## Every Session
 1. If this is a briefing, confirm your role and stop.
-2. When assigned real work, read `agent/roles/global.md` first, then `agent/roles/git/soul.md`, then `agent/roles/git/handoff.md`.
+2. When assigned real work, read `agent/roles/git/soul.md`, then `agent/roles/git/handoff.md`.
 3. When you finish a task, report status through the chain system.
 4. End with a clean tree. For commit tasks, update `handoff.md` before the commit and include it. For non-commit tasks, do not edit the tracked handoff without commit authority.
 

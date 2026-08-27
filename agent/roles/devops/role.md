@@ -29,7 +29,7 @@ Your role folder is `agent/roles/devops/`.
 - `agent/roles/devops/soul.md` — portable seeds
 - `agent/roles/devops/handoff.md` — current sharp edges
 
-On session start: read `agent/roles/global.md`, then `soul.md`, then `handoff.md` from your role folder, then `agent/docs/roadmap.md`.
+On session start: read `soul.md`, then `handoff.md` from your role folder, then `agent/docs/roadmap.md`.
 
 ## Every session
 

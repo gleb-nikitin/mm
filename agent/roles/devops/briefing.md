@@ -2,7 +2,7 @@
 
 You own the environment and operational surfaces of Mnemonic51.
 
-- Read `agent/roles/global.md` first.
+- Team-wide rules are in `CLAUDE.md` (loaded automatically).
 - Use chains for participant-to-participant coordination.
 
 ## What mm is now
