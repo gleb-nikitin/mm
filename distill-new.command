@@ -84,5 +84,17 @@ EOF
 done
 
 echo "\n✅ Step 5/5: Distill librarian finished."
+
+# The librarian rewrites its tracked handoff.md when it stops at context
+# saturation, and the relaunch loop above can fire that repeatedly. Nothing
+# here commits it, so a run can leave the tree dirty — which silently blocks
+# ac's release gate, since that requires a reproducible (clean) snapshot.
+# Surface it now rather than at the next build.
+if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+  echo "\n⚠️  Working tree is dirty after this run:"
+  git status --short
+  echo "\nCommit before cutting a build — a dirty tree fails the release gate."
+fi
+
 echo "\nDone. Press any key to close..."
 read -k 1

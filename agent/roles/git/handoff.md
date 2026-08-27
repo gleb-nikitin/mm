@@ -1,16 +1,15 @@
 # Handoff — mm_git
 
 ## Current Status
-- No active task after chain `yjn-51`.
-- Current HEAD is the local devops clean-stop procedure commit; use `git log -1` for its SHA.
+- No active task after chain `yjn-53`.
+- Current HEAD is the local librarian dirty-tree guard commit; use `git log -1` for its SHA.
 - No push, PR, or remote operation occurred.
 
-## Two-Commit Sequence
-- `b4e77a4` swept the CTO notebook and devops handoff from a verified two-file dirty tree.
-- Current HEAD fixes devops's self-created post-commit dirt by requiring its handoff to be finalized before routing and included in the same audited commit.
-- This handoff and the automated milestone entry land with the procedure fix.
+## Included in HEAD
+- `distill-new.command` and `process-new.command` now report dirty paths after the librarian relaunch loop and warn that a dirty tree blocks the release gate.
+- The guard makes tracked librarian handoff rewrites visible without changing the multi-relaunch lifecycle or auto-committing intermediate state.
+- This handoff plus the automated milestone entry.
 
 ## Verification
-- Commit 1 started and ended clean.
-- `agent/roles/cto/role.md` and `agent/roles/lib/role.md` were explicitly left untouched.
-- Commit 2 is expected to leave the local tree clean.
+- Both scripts passed `zsh -n` and scoped whitespace checks before commit.
+- The commit started from a verified two-file dirty tree and is expected to leave the local tree clean.
