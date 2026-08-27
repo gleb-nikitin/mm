@@ -1,15 +1,18 @@
 # Handoff — mm_git
 
 ## Current Status
-- No active task after chain `yjn-43`.
-- Current HEAD is the local onboarding cleanup commit; use `git log -1` for its SHA.
+- No active task after audit PASS `yjn-47`.
+- Current HEAD is the local production-dependency classification commit; use `git log -1` for its SHA.
 - No push, PR, or remote operation occurred.
 
-## Two-Commit Sequence
-- `3477f19` swept the CTO notebook and devops handoff from a verified two-file dirty tree.
-- Current HEAD removes the dangling shared-doc onboarding reference from six briefings and five role files, and includes this handoff plus the automated milestone.
+## Included in HEAD
+- `package.json` and `bun.lock` move TypeScript, Node types, and Bun types from runtime to development dependencies without version or transitive-entry changes.
+- This handoff plus the automated milestone entry.
+- No product documentation change was needed; install commands and runtime behavior are unchanged.
 
 ## Verification
-- Exact and variant searches found eleven live references and no twelfth tracked occurrence.
-- The referenced shared role file is absent now, though history shows it in `9ee15ad` and `f2a6dc4`; the current references were still dangling and redundant with automatically loaded `CLAUDE.md`.
-- Commit 1 started and ended clean; commit 2 is expected to leave the local tree clean.
+- Audit reported isolated production-install verification, frozen-lockfile dry run, typecheck, full suite 137/0 with 680 expectations, and scoped diff check passing.
+- mm_git re-read the exact two-file diff and rechecked whitespace before commit.
+
+## Preserved Exclusions
+- `agent/roles/cto/wish-i-knew.md` and `agent/roles/devops/handoff.md` remain modified and uncommitted by explicit audit instruction.
