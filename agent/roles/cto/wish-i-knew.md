@@ -70,6 +70,63 @@ I made the inverse error the same day: reported `yhk` as "still out with devops"
 while the full implementation was already on disk. Devops going quiet is not
 evidence of nothing landing. Check the tree before reporting dispatch state.
 
+## I amend dispatches after they've been acted on
+
+Three times on `yjn`: required a branch then reversed it, restated the reversal
+too late, then added scope *after* devops had already gone to audit — which
+forced a hold, a resend, and an audit-scope re-declaration. Devops twice said
+"I had not yet read X when I did Y"; both times the ordering fault was mine.
+Same shape as `yhk-3`/`yhk-5`.
+
+**Think the whole scope through before dispatching. Mark anything provisional
+as provisional.** A dispatch that arrives mid-execution costs more than the
+delay of getting it right first — and the cost lands on someone else's work.
+
+## Health needs one derivation path too
+
+`yhk` established one path for session *state*. `yjn` proved the same argument
+applies to *health*: each surface deciding independently whether ac's DB was
+usable produced `available` on three endpoints while resolution said
+`unreadable`.
+
+**`available` must mean "opened it and it answered", never "the path exists."**
+Existence-as-usability is the same silent-success class as the fallback chain
+that started `yjn`. Probe before claiming health, including on empty input —
+"nothing to resolve" is not evidence the database is fine.
+
+Corollary worth remembering: a shallow success check that resets a
+dedupe-by-status logger makes a real failure re-log every tick. Loud becomes
+noise, an operator learns to ignore it, and that is worse than silence because
+it looks like it works.
+
+## `$AURORA_DATA` is expanded, not exported
+
+**`process.env.AURORA_DATA` is undefined in mm's processes.** The supervisor
+expands `$AURORA_DATA` as a *token inside manifest string values*; it never
+injects it as an environment variable.
+
+`ac/src-tauri/src/shell/processes.rs`: `.envs(&config.env)` (993) is the whole
+child environment, plus exactly two injections — `AURORA_BUN_PATH` (998) and
+`AURORA_PLUGIN_SOCKET` (1026). No `cmd.env("AURORA_DATA", …)` exists.
+
+So the way to get a path is to declare it in mm's own `processes.toml`, where
+env **values** are expanded (~296, `resolve_path_vars(&v, data_dir)`):
+
+```toml
+[process.mm.env]
+MT_AC_DB_PATH = "$AURORA_DATA/msg.db"
+```
+
+**Declare it for `mm-watch` too.** `AURORA_PLUGIN_SOCKET` is set only when
+`socket` is `Some`, and `mm-watch` has none — yet it is the importer, the
+process that actually resolves links. Never derive the data dir from the socket
+path; it is absent in exactly the process that needs it.
+
+ac's comment at 284-289 (`xrs-40`) is this same bug in the other direction:
+*"the supervisor's own env never has that set, so the substitution silently
+no-op'd."* I restated the mechanism from memory instead of source and nearly
+shipped a step-2 branch that could never fire.
+
 ## mm_git's commit helper stamps a wrong co-author
 
 `2d0a336` carries `Co-Authored-By: Claude Opus 3.5 (1M context)`. Wrong model —
