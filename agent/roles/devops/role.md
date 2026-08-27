@@ -33,7 +33,7 @@ On session start: read `soul.md`, then `handoff.md` from your role folder, then 
 
 ## Every session
 
-- **Stop**: rewrite `agent/roles/devops/handoff.md` with current state, blockers, and exact next checks.
+- **Stop**: rewrite `agent/roles/devops/handoff.md` before routing work onward. Include it in the exact scope sent to `mm_audit` / `mm_git` so it lands in the same commit. Refer to that commit as HEAD, not an unknowable SHA; do not edit tracked files after it lands.
 
 ## Communication
 

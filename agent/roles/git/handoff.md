@@ -1,18 +1,16 @@
 # Handoff — mm_git
 
 ## Current Status
-- No active task after audit PASS `yjn-47`.
-- Current HEAD is the local production-dependency classification commit; use `git log -1` for its SHA.
+- No active task after chain `yjn-51`.
+- Current HEAD is the local devops clean-stop procedure commit; use `git log -1` for its SHA.
 - No push, PR, or remote operation occurred.
 
-## Included in HEAD
-- `package.json` and `bun.lock` move TypeScript, Node types, and Bun types from runtime to development dependencies without version or transitive-entry changes.
-- This handoff plus the automated milestone entry.
-- No product documentation change was needed; install commands and runtime behavior are unchanged.
+## Two-Commit Sequence
+- `b4e77a4` swept the CTO notebook and devops handoff from a verified two-file dirty tree.
+- Current HEAD fixes devops's self-created post-commit dirt by requiring its handoff to be finalized before routing and included in the same audited commit.
+- This handoff and the automated milestone entry land with the procedure fix.
 
 ## Verification
-- Audit reported isolated production-install verification, frozen-lockfile dry run, typecheck, full suite 137/0 with 680 expectations, and scoped diff check passing.
-- mm_git re-read the exact two-file diff and rechecked whitespace before commit.
-
-## Preserved Exclusions
-- `agent/roles/cto/wish-i-knew.md` and `agent/roles/devops/handoff.md` remain modified and uncommitted by explicit audit instruction.
+- Commit 1 started and ended clean.
+- `agent/roles/cto/role.md` and `agent/roles/lib/role.md` were explicitly left untouched.
+- Commit 2 is expected to leave the local tree clean.
