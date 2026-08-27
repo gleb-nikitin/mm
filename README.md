@@ -44,6 +44,11 @@ MT_BRAIN_ROOT=~/my-brain bun run api
 
 `MT_PORT` sets the HTTP port for `bun run api` (default **3000**).
 
+`MT_AC_DB_PATH` must point to Aurora's `msg.db` for participant/session linking
+when mm runs outside the Aurora supervisor. The plugin manifest supplies it to
+managed API and watcher processes; standalone importers and MCP/API processes
+must receive it explicitly.
+
 ## HTTP API
 
 Responses are mostly **markdown**. **`GET /`** serves the **web UI** (`ui/index.html`). For a markdown list of routes, use **`GET /help`**.

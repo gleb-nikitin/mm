@@ -20,6 +20,9 @@ Session cost attribution uses token counts extracted from the vendor transcript 
 `raw_events.external_id` is vendor-prefixed (`claude:<session_id>`, `codex:<session_id>`, `gemini:<session_id>`) so global uniqueness survives cross-vendor session-id collisions. `import_state.external_id` intentionally remains the raw vendor session id because `/active` and ac `participants.active_session_id` matching depend on that raw id.
 
 ```sh
+# Required outside the Aurora supervisor; use the path for your installation.
+export MT_AC_DB_PATH="$HOME/Library/Application Support/com.aurora.core/data/msg.db"
+
 # Default: last 30 days, min user turns, no thinking blocks, etc.
 bun scripts/import-claude.ts
 

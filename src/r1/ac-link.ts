@@ -1,39 +1,44 @@
 import { Database } from 'bun:sqlite';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import {
+  acDbOrphanReason,
+  acDbIsUsable,
+  acDbUnreadable,
+  reportAcDbStatus,
+  resolveAcDbPath,
+  type AcDbStatus,
+} from '../ac-db.ts';
 import type { SessionLink } from './types.ts';
-
-export interface AcDbPathOpts {
-  envValue?: string;
-  prodPath?: string;
-  workspacePath?: string;
-}
-
-export function resolveAcDbPath(opts: AcDbPathOpts = {}): string {
-  const envValue = opts.envValue ?? process.env.MT_AC_DB_PATH;
-  if (envValue) return envValue;
-  const prodPath = opts.prodPath
-    ?? path.join(os.homedir(), 'Library/Application Support/com.aurora.core/data/msg.db');
-  if (fs.existsSync(prodPath)) return prodPath;
-  return opts.workspacePath ?? path.join(os.homedir(), 'work/code/ac/data/msg.db');
-}
 
 export type SessionLinkResolution = {
   links: Map<string, SessionLink>;
   acDbAvailable: boolean;
+  acDbStatus: AcDbStatus;
+  acDbFailureReason: string | null;
 };
 
 export function resolveSessionLinks(sessionIds: string[]): SessionLinkResolution {
   const links = new Map<string, SessionLink>();
-  if (sessionIds.length === 0) return { links, acDbAvailable: true };
-
-  const acDbPath = resolveAcDbPath();
-  if (!fs.existsSync(acDbPath)) return { links, acDbAvailable: false };
+  const pathStatus = resolveAcDbPath();
+  if (!acDbIsUsable(pathStatus) || !pathStatus.path) {
+    return {
+      links,
+      acDbAvailable: false,
+      acDbStatus: pathStatus,
+      acDbFailureReason: acDbOrphanReason(pathStatus),
+    };
+  }
+  if (sessionIds.length === 0) {
+    return {
+      links,
+      acDbAvailable: true,
+      acDbStatus: pathStatus,
+      acDbFailureReason: null,
+    };
+  }
 
   let acDb: Database | null = null;
   try {
-    acDb = new Database(acDbPath, { readonly: true });
+    acDb = new Database(pathStatus.path, { readonly: true });
     acDb.exec('PRAGMA query_only = ON;');
     acDb.exec('PRAGMA busy_timeout = 5000;');
     const placeholders = sessionIds.map(() => '?').join(',');
@@ -80,9 +85,16 @@ export function resolveSessionLinks(sessionIds: string[]): SessionLinkResolution
         project_role: projectRole,
       });
     }
-    return { links, acDbAvailable: true };
-  } catch {
-    return { links, acDbAvailable: false };
+    return { links, acDbAvailable: true, acDbStatus: pathStatus, acDbFailureReason: null };
+  } catch (error) {
+    const acDbStatus = acDbUnreadable(pathStatus, error);
+    reportAcDbStatus(acDbStatus);
+    return {
+      links,
+      acDbAvailable: false,
+      acDbStatus,
+      acDbFailureReason: acDbOrphanReason(acDbStatus),
+    };
   } finally {
     if (acDb) {
       try { acDb.close(); } catch {}

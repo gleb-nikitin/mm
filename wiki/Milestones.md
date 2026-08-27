@@ -25,3 +25,4 @@
 - **2026-08-26**: chore(ops): refresh agent workflows and pricing data
 - **2026-08-26**: fix(r1): make session reconciliation provenance-safe
 - **2026-08-26**: fix(git): correct attribution and clean-stop handoff
+- **2026-08-27**: fix(ac-db): centralize resolution and expose status

@@ -109,7 +109,11 @@ function runImmediateTransaction<T>(fn: () => T): T {
   }
 }
 
-function stateForObservation(observation: SessionObservation, link: SessionLink | null, acDbAvailable: boolean) {
+function stateForObservation(
+  observation: SessionObservation,
+  link: SessionLink | null,
+  acDbFailureReason: string | null,
+) {
   const state = deriveSessionState({
     linked: Boolean(link),
     completed: link?.kind === 'retired' || observation.state === 'completed',
@@ -119,7 +123,7 @@ function stateForObservation(observation: SessionObservation, link: SessionLink 
   if (state !== 'orphan') return { state, orphan_reason: null };
   return {
     state: 'orphan' as const,
-    orphan_reason: observation.orphan_reason ?? (acDbAvailable ? 'participant_not_found' : 'ac_db_unavailable'),
+    orphan_reason: observation.orphan_reason ?? acDbFailureReason ?? 'participant_not_found',
   };
 }
 
@@ -131,8 +135,8 @@ export function findRawEventIdByExternalId(externalId: string): number | null {
 export function upsertSessionObservation(
   observation: SessionObservation,
   link: SessionLink | null = null,
-  acDbAvailable = true,
-  derivedState = stateForObservation(observation, link, acDbAvailable),
+  acDbFailureReason: string | null = null,
+  derivedState = stateForObservation(observation, link, acDbFailureReason),
 ): void {
   db.prepare(
     `INSERT INTO session_index
@@ -179,26 +183,26 @@ export function upsertSessionObservation(
 }
 
 export function linkSession(observation: SessionObservation, link: SessionLink): void {
-  upsertSessionObservation(observation, link, true);
+  upsertSessionObservation(observation, link);
 }
 
 export function recordSessionObservation(observation: SessionObservation, messageText?: string): void {
-  const { links, acDbAvailable } = resolveSessionLinks([observation.session_id]);
+  const { links, acDbFailureReason } = resolveSessionLinks([observation.session_id]);
   const link = links.get(observation.session_id) ?? null;
-  recordResolvedSessionObservation(observation, link, acDbAvailable, messageText);
+  recordResolvedSessionObservation(observation, link, acDbFailureReason, messageText);
 }
 
 function recordResolvedSessionObservation(
   observation: SessionObservation,
   link: SessionLink | null,
-  acDbAvailable: boolean,
+  acDbFailureReason: string | null,
   messageText?: string,
   reconciledState?: ReturnType<typeof stateForObservation>,
 ): void {
   const events = runImmediateTransaction(() => {
     const previous = getSessionByVendorAndId(observation.vendor, observation.session_id);
-    const derivedState = reconciledState ?? stateForObservation(observation, link, acDbAvailable);
-    upsertSessionObservation(observation, link, acDbAvailable, derivedState);
+    const derivedState = reconciledState ?? stateForObservation(observation, link, acDbFailureReason);
+    upsertSessionObservation(observation, link, acDbFailureReason, derivedState);
     const event = recordStateTransition({
       previous,
       observation,
@@ -285,7 +289,7 @@ export function refreshStoredSessionStates(
       // importer observation may still reactivate them through the normal path.
       const derived = row.state === 'completed' || row.state === 'wedged'
         ? { state: row.state, orphan_reason: null }
-        : stateForObservation(observation, link, true);
+        : stateForObservation(observation, link, null);
       const participantId = link?.participant_id ?? null;
       const project = link?.project ?? observation.project;
       const role = link?.role ?? null;
@@ -302,7 +306,7 @@ export function refreshStoredSessionStates(
       recordResolvedSessionObservation(
         observation,
         link,
-        true,
+        null,
         undefined,
         derived,
       );

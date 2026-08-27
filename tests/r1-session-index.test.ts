@@ -388,7 +388,7 @@ describe('R1 session linkage index', () => {
     const db = openBrainDb();
     const rows = db.prepare(`SELECT vendor, session_id, state, orphan_reason FROM session_index ORDER BY vendor`).all() as any[];
     expect(rows).toEqual([
-      { vendor: 'claude', session_id: 'sess-good', state: 'orphan', orphan_reason: 'ac_db_unavailable' },
+      { vendor: 'claude', session_id: 'sess-good', state: 'orphan', orphan_reason: 'ac_db_path_missing' },
       { vendor: 'codex', session_id: 'sess-bad', state: 'orphan', orphan_reason: 'metadata_parse_error' },
     ]);
     db.close();

@@ -2,10 +2,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   initDb, hybridSearch, getStats, queryBrain, validateClaim, addToBrain, PATHS,
-  renderActiveAgentsMarkdown, getActiveAgents, listArtifacts, queueChunks, readChunk, db,
+  renderActiveAgentsMarkdown, getActiveAgentsWithStatus, listArtifacts, queueChunks, readChunk, db,
   searchArtifacts, listNotes, getNote, searchNotes, getBrief, renderBrief,
 } from './core.ts';
-import { getActiveAgentsLive } from './session-probe.ts';
+import { getActiveAgentsLiveWithStatus } from './session-probe.ts';
 import { filterMechanical } from './narrative.ts';
 import { apiError, handleActiveSessions, handleActiveTokens, handleCostByMessage, handleCostBySession, handleSessionContent, handleSessionEvents, handleSessions, handleTokensByParticipant } from './r1/api.ts';
 
@@ -214,16 +214,18 @@ const serveOptions = {
       const maxAge = parseInt(url.searchParams.get("max_age_seconds") || "300", 10);
       const live = url.searchParams.get("probe") === "live";
       const wantJson = url.searchParams.get("format") === "json";
-      const agents = live
-        ? getActiveAgentsLive({ maxAgeSeconds: maxAge })
-        : getActiveAgents({ maxAgeSeconds: maxAge });
+      const { agents, acDbStatus } = live
+        ? getActiveAgentsLiveWithStatus({ maxAgeSeconds: maxAge })
+        : getActiveAgentsWithStatus({ maxAgeSeconds: maxAge });
+      const headers = {
+        "Content-Type": wantJson ? "application/json" : "text/markdown",
+        "X-MM-AC-DB-Status": acDbStatus.status,
+      };
       if (wantJson) {
-        const body = JSON.stringify({ agents, generated_at: new Date().toISOString() });
-        return new Response(body, { headers: { "Content-Type": "application/json" } });
+        const body = JSON.stringify({ agents, generated_at: new Date().toISOString(), ac_db: acDbStatus });
+        return new Response(body, { headers });
       }
-      return new Response(renderActiveAgentsMarkdown(agents, maxAge), {
-        headers: { "Content-Type": "text/markdown" },
-      });
+      return new Response(renderActiveAgentsMarkdown(agents, maxAge, acDbStatus), { headers });
     }
 
     if (url.pathname === "/brief") {

@@ -4,6 +4,14 @@ import * as os from 'os';
 import * as path from 'path';
 import yaml from 'js-yaml';
 import { execFileSync } from 'child_process';
+import {
+  acDbUnreadable,
+  acDbIsUsable,
+  reportAcDbStatus,
+  resolveAcDbPath,
+  type AcDbStatus,
+} from './ac-db.ts';
+export { resolveAcDbPath } from './ac-db.ts';
 
 // --- Configuration ---
 export const BRAIN_ROOT = process.env.MT_BRAIN_ROOT || process.cwd();
@@ -337,38 +345,27 @@ export function initDb() {
 
 // --- Common Logic ---
 
-// Resolve which ac msg.db to read. Precedence: explicit env override > Prod DB
-// (Aurora Core.app data dir, the live write target) > ac workspace DB (used by
-// tests and standalone bun invocations). Env wins even if the target doesn't
-// exist — caller's existsSync check treats that as "silent fallback".
-export interface AcDbPathOpts {
-  envValue?: string;
-  prodPath?: string;
-  workspacePath?: string;
-}
-
-export function resolveAcDbPath(opts: AcDbPathOpts = {}): string {
-  const envValue = opts.envValue ?? process.env.MT_AC_DB_PATH;
-  if (envValue) return envValue;
-  const prodPath = opts.prodPath
-    ?? path.join(os.homedir(), 'Library/Application Support/com.aurora.core/data/msg.db');
-  if (fs.existsSync(prodPath)) return prodPath;
-  return opts.workspacePath ?? path.join(os.homedir(), 'work/code/ac/data/msg.db');
-}
-
 // Resolve external session ids to ac participant ids (e.g. "mm_cto") by
-// reading ac's msg.db read-only. Fails silently: if the DB is missing or
-// the query errors, returns an empty map and mm renders today's shape.
-export function resolveParticipantIds(externalIds: string[]): Map<string, string> {
-  const result = new Map<string, string>();
-  if (externalIds.length === 0) return result;
+// reading ac's msg.db read-only. The status-bearing form is used by operator
+// surfaces; the map-only wrapper preserves the existing internal API.
+export type ParticipantIdResolution = {
+  participantIds: Map<string, string>;
+  acDbStatus: AcDbStatus;
+};
 
-  const acDbPath = resolveAcDbPath();
-  if (!fs.existsSync(acDbPath)) return result;
+export function resolveParticipantIdsWithStatus(externalIds: string[]): ParticipantIdResolution {
+  const result = new Map<string, string>();
+  const pathStatus = resolveAcDbPath();
+  if (!acDbIsUsable(pathStatus) || !pathStatus.path) {
+    return { participantIds: result, acDbStatus: pathStatus };
+  }
+  if (externalIds.length === 0) {
+    return { participantIds: result, acDbStatus: pathStatus };
+  }
 
   let acDb: Database | null = null;
   try {
-    acDb = new Database(acDbPath, { readonly: true });
+    acDb = new Database(pathStatus.path, { readonly: true });
     const placeholders = externalIds.map(() => '?').join(',');
     const queryParams = [...externalIds, ...externalIds];
     const rows = acDb.prepare(
@@ -386,14 +383,20 @@ export function resolveParticipantIds(externalIds: string[]): Map<string, string
     for (const row of rows) {
       if (row.participant_id) result.set(row.id, row.participant_id);
     }
-  } catch {
-    // Silent fallback — mm must stay runnable standalone.
+    return { participantIds: result, acDbStatus: pathStatus };
+  } catch (error) {
+    const acDbStatus = acDbUnreadable(pathStatus, error);
+    reportAcDbStatus(acDbStatus);
+    return { participantIds: new Map(), acDbStatus };
   } finally {
     if (acDb) {
       try { acDb.close(); } catch {}
     }
   }
-  return result;
+}
+
+export function resolveParticipantIds(externalIds: string[]): Map<string, string> {
+  return resolveParticipantIdsWithStatus(externalIds).participantIds;
 }
 
 export type ActiveAgentRow = {
@@ -407,7 +410,14 @@ export type ActiveAgentRow = {
   cwd: string | null;
 };
 
-export function getActiveAgents(opts: { maxAgeSeconds?: number; project?: string } = {}): ActiveAgentRow[] {
+export type ActiveAgentsResult = {
+  agents: ActiveAgentRow[];
+  acDbStatus: AcDbStatus;
+};
+
+export function getActiveAgentsWithStatus(
+  opts: { maxAgeSeconds?: number; project?: string } = {},
+): ActiveAgentsResult {
   const maxAgeSeconds = opts.maxAgeSeconds ?? 300;
   const clauses: string[] = [
     "(strftime('%s', 'now') - (last_mtime / 1000.0)) <= ?",
@@ -426,9 +436,9 @@ export function getActiveAgents(opts: { maxAgeSeconds?: number; project?: string
     ORDER BY seconds_ago ASC
   `).all(...params) as any[];
   const externalIds = rows.map(r => r.external_id).filter(Boolean) as string[];
-  const participantMap = resolveParticipantIds(externalIds);
-  return rows.map(r => ({
-    participant_id: r.external_id ? (participantMap.get(r.external_id) ?? null) : null,
+  const { participantIds, acDbStatus } = resolveParticipantIdsWithStatus(externalIds);
+  const agents = rows.map(r => ({
+    participant_id: r.external_id ? (participantIds.get(r.external_id) ?? null) : null,
     provider: r.provider,
     project: r.project,
     seconds_ago: r.seconds_ago,
@@ -437,12 +447,25 @@ export function getActiveAgents(opts: { maxAgeSeconds?: number; project?: string
     external_id: r.external_id,
     cwd: r.cwd,
   }));
+  return { agents, acDbStatus };
 }
 
-export function renderActiveAgentsMarkdown(agents: ActiveAgentRow[], maxAgeSeconds: number = 300): string {
+export function getActiveAgents(opts: { maxAgeSeconds?: number; project?: string } = {}): ActiveAgentRow[] {
+  return getActiveAgentsWithStatus(opts).agents;
+}
+
+export function renderActiveAgentsMarkdown(
+  agents: ActiveAgentRow[],
+  maxAgeSeconds: number = 300,
+  acDbStatus?: AcDbStatus,
+): string {
   const nowIso = new Date().toISOString();
   let md = `# Active agents (last ${Math.floor(maxAgeSeconds / 60)} min)\n\n`;
   md += `_Generated: ${nowIso}_\n\n`;
+
+  if (acDbStatus && acDbStatus.status !== 'available') {
+    md += `> **Warning:** participant resolution is unavailable (${acDbStatus.status}). ${acDbStatus.message}\n\n`;
+  }
 
   if (agents.length === 0) {
     md += `_No agents active._\n`;

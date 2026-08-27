@@ -9,8 +9,8 @@
 // goal, different parser depth. Intentionally not sharing helpers while
 // both sides stabilize; consolidation is a follow-up.
 
-import type { ActiveAgentRow } from './core';
-import { resolveParticipantIds } from './core';
+import type { ActiveAgentRow, ActiveAgentsResult } from './core';
+import { resolveParticipantIdsWithStatus } from './core';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -389,7 +389,7 @@ function probeGemini(dir: string, maxAgeSeconds: number): SessionSummary[] {
   return out;
 }
 
-export function getActiveAgentsLive(opts: LiveProbeOptions = {}): ActiveAgentRow[] {
+export function getActiveAgentsLiveWithStatus(opts: LiveProbeOptions = {}): ActiveAgentsResult {
   const maxAgeSeconds = opts.maxAgeSeconds ?? 300;
   const claudeDir = opts.claudeProjectsDir
     ?? process.env.MT_CLAUDE_PROJECTS_DIR
@@ -417,10 +417,10 @@ export function getActiveAgentsLive(opts: LiveProbeOptions = {}): ActiveAgentRow
   filtered.sort((a, b) => a.seconds_ago - b.seconds_ago);
 
   const externalIds = filtered.map(s => s.external_id);
-  const participantMap = resolveParticipantIds(externalIds);
+  const { participantIds, acDbStatus } = resolveParticipantIdsWithStatus(externalIds);
 
-  return filtered.map(s => ({
-    participant_id: participantMap.get(s.external_id) ?? null,
+  const agents = filtered.map(s => ({
+    participant_id: participantIds.get(s.external_id) ?? null,
     provider: s.provider,
     project: s.project,
     seconds_ago: s.seconds_ago,
@@ -429,4 +429,9 @@ export function getActiveAgentsLive(opts: LiveProbeOptions = {}): ActiveAgentRow
     external_id: s.external_id,
     cwd: s.cwd,
   }));
+  return { agents, acDbStatus };
+}
+
+export function getActiveAgentsLive(opts: LiveProbeOptions = {}): ActiveAgentRow[] {
+  return getActiveAgentsLiveWithStatus(opts).agents;
 }
