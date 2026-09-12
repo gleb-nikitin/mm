@@ -1,15 +1,16 @@
 # Handoff — mm_git
 
 ## Current Status
-- No active task after chain `yjn-53`.
-- Current HEAD is the local librarian dirty-tree guard commit; use `git log -1` for its SHA.
+- No active task after chain `ymx-1`.
+- Current HEAD contains the Aurora managed-process database path correction and all other unsaved work requested by the operator; use `git log -1` for its SHA.
 - No push, PR, or remote operation occurred.
 
 ## Included in HEAD
-- `distill-new.command` and `process-new.command` now report dirty paths after the librarian relaunch loop and warn that a dirty tree blocks the release gate.
-- The guard makes tracked librarian handoff rewrites visible without changing the multi-relaunch lifecycle or auto-committing intermediate state.
-- This handoff plus the automated milestone entry.
+- `processes.toml` now supplies `$AURORA_DATA/data/msg.db` to the managed API and watcher processes.
+- The pre-correction `processes.toml` backup was included because the operator explicitly requested a sweep of all unsaved changes.
+- README, project-entry, and CTO role notes now agree with the corrected managed path.
+- CTO operational learnings and this handoff are included, together with the automated milestone entry.
 
 ## Verification
-- Both scripts passed `zsh -n` and scoped whitespace checks before commit.
-- The commit started from a verified two-file dirty tree and is expected to leave the local tree clean.
+- The corrected Aurora database target existed before commit.
+- TOML parsing, whitespace checks, HEAD/stash state, and final tree cleanliness were verified around the sweep commit.

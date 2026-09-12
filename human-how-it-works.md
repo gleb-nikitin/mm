@@ -169,7 +169,7 @@ These files are **part of the product**: runtime code **reads** several of them 
 
 - **`MT_BRAIN_ROOT`** — Directory containing `raw/`, `wiki/`, `meta/`.
 - **`MT_PORT`** — HTTP port for **`bun run api`**.
-- **`MT_AC_DB_PATH`** — Aurora `msg.db` used for participant/session linking. The plugin manifest supplies this to managed API and watcher processes; set it explicitly for standalone importers, API, or MCP runs.
+- **`MT_AC_DB_PATH`** — Aurora `msg.db` used for participant/session linking. The plugin manifest supplies `$AURORA_DATA/data/msg.db` to managed API and watcher processes; set it explicitly for standalone importers, API, or MCP runs.
 - **`.mcp.json`** — e.g. Cursor: **`mm`** → `bun` + `src/mcp.ts` (stdio). Other entries (e.g. **aurora** HTTP) are **not** implemented in this repo's `src/`.
 
 ---

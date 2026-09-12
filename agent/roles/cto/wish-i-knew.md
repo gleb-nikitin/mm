@@ -133,7 +133,7 @@ env **values** are expanded (~296, `resolve_path_vars(&v, data_dir)`):
 
 ```toml
 [process.mm.env]
-MT_AC_DB_PATH = "$AURORA_DATA/msg.db"
+MT_AC_DB_PATH = "$AURORA_DATA/data/msg.db"
 ```
 
 **Declare it for `mm-watch` too.** `AURORA_PLUGIN_SOCKET` is set only when
@@ -229,3 +229,20 @@ The `.gitignore` has policy blocks — "Imported session content — never track
 cleanup ask arrives, **audit untracked paths against those stated policies**
 before staging. An allow-list that protects a *bundle* says nothing about what
 reaches *git*.
+
+## A guarantee that can't fail on the case that bites you is worse than none
+
+`ac_cto` asked whether `/api/v1/sessions` ordering by `last_activity_at DESC`
+is a contract. It isn't — the default lives in `parseSessionSort`
+(`src/r1/api.ts:183`) with no doc and no test. I offered to pin it. They
+declined, correctly: the hazard is `Date.parse` over a bare TEXT column
+(`src/r1/session-index.ts:429-443`). An importer writing SQLite
+`YYYY-MM-DD HH:MM:SS` parses as local, sorts wrong, and a pinned-sort test
+still passes green. The pin would have bought false confidence.
+
+If `/sessions` ordering is ever hardened, the change that matters is a format
+constraint on the column or a tie-break — not a test on the sort default.
+
+Worth reusing: **sort runs over the whole filtered set, then slices**, so
+`?limit=1` is a true global max, not page-local. That is structural and safe
+to lean on; the ordering *guarantee* is not.

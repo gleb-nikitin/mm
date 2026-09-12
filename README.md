@@ -46,8 +46,8 @@ MT_BRAIN_ROOT=~/my-brain bun run api
 
 `MT_AC_DB_PATH` must point to Aurora's `msg.db` for participant/session linking
 when mm runs outside the Aurora supervisor. The plugin manifest supplies it to
-managed API and watcher processes; standalone importers and MCP/API processes
-must receive it explicitly.
+managed API and watcher processes as `$AURORA_DATA/data/msg.db`; standalone
+importers and MCP/API processes must receive it explicitly.
 
 ## HTTP API
 
