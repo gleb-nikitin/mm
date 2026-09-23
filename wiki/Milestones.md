@@ -33,3 +33,4 @@
 - **2026-08-27**: fix(roles): make devops handoff clean-stop safe
 - **2026-08-27**: fix(librarian): report dirty tree after runs
 - **2026-09-12**: fix(plugin): point managed processes at Aurora data database
+- **2026-09-23**: docs(cto): capture moved data-directory import hazards

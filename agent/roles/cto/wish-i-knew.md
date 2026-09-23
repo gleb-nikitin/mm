@@ -246,3 +246,13 @@ constraint on the column or a tie-break — not a test on the sort default.
 Worth reusing: **sort runs over the whole filtered set, then slices**, so
 `?limit=1` is a true global max, not page-local. That is structural and safe
 to lean on; the ordering *guarantee* is not.
+
+## Moved data dirs leave frozen copies behind
+
+When ac isolated codex state (`yws`), 4 rollouts were seeded into the new dir and
+their originals stayed in `~/.codex/sessions`, frozen at the switch. Same
+session_id, different inodes, and one copy is a stale prefix. Any "just add the
+second dir" fix must pick one winner per session_id, or a re-import regresses
+content. Bare `bun` in plugin children is safe under the supervisor, which puts the
+resolved bun's dir first on the child's PATH (ac `processes.rs:1273-1279`). I claimed a
+crash loop before checking that. Read the spawner before calling a PATH failure.
