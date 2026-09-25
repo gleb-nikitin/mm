@@ -996,6 +996,35 @@ describe('R1 session linkage index', () => {
     db.close();
   });
 
+  test('Codex importer keeps the first session_meta identity when a rollout repeats metadata', () => {
+    const codexDir = path.join(tmpRoot, 'codex-repeated-meta');
+    const firstSessionId = '01a09c2f-7e4a-7962-8765-3915441b7680';
+    const sessionFile = path.join(codexDir, '2026', '09', '24', `rollout-2026-09-24T10-00-00-${firstSessionId}.jsonl`);
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(sessionFile, [
+      { timestamp: '2026-09-24T10:00:00Z', type: 'session_meta', payload: { id: firstSessionId, cwd: '/Users/test/work/mm' } },
+      { timestamp: '2026-09-24T10:00:01Z', type: 'event_msg', payload: { type: 'user_message', message: 'first prompt' } },
+      { timestamp: '2026-09-24T10:00:02Z', type: 'session_meta', payload: { id: '01a095ee-d2ad-7283-8398-90b17447b415', cwd: '/Users/test/work/mm' } },
+      { timestamp: '2026-09-24T10:00:03Z', type: 'event_msg', payload: { type: 'user_message', message: 'second prompt' } },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+
+    const imported = Bun.spawnSync({
+      cmd: ['bun', 'scripts/import-codex.ts', '--sessions-dir', codexDir, '--days', '365', '--force', '--min-turns', '2'],
+      cwd: REPO,
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot, MT_AC_DB_PATH: acDbPath },
+      stdout: 'pipe', stderr: 'pipe',
+    });
+    expect(imported.exitCode).toBe(0);
+    const db = openBrainDb();
+    expect(db.prepare(`SELECT external_id FROM raw_events WHERE external_id LIKE 'codex:01a09%'`).all()).toEqual([
+      { external_id: `codex:${firstSessionId}` },
+    ]);
+    expect(db.prepare(`SELECT session_id FROM session_index WHERE vendor = 'codex'`).all()).toEqual([
+      { session_id: firstSessionId },
+    ]);
+    db.close();
+  });
+
   test('Codex importer does not promote a recent fallback when the primary copy is outside the days window', () => {
     const primaryDir = path.join(tmpRoot, 'codex-primary');
     const fallbackDir = path.join(tmpRoot, 'codex-fallback');

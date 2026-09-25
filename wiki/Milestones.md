@@ -40,3 +40,4 @@
 - **2026-09-25**: fix(codex): normalize current prompt records
 - **2026-09-25**: docs(devops): correct Codex backfill handoff
 - **2026-09-25**: fix(codex): filter unannotated host context
+- **2026-09-25**: fix(codex): retain first session metadata identity

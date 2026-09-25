@@ -241,7 +241,7 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
     const payload = rec?.payload || {};
 
     if (recordType === 'session_meta') {
-      if (typeof payload.id === 'string' && payload.id) sessionId = payload.id;
+      if (!sessionId && typeof payload.id === 'string' && payload.id) sessionId = payload.id;
       if (typeof payload.cwd === 'string' && payload.cwd) cwd = payload.cwd;
       if (typeof payload.model === 'string' && payload.model) model = payload.model;
       continue;
