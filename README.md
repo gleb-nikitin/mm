@@ -44,6 +44,10 @@ MT_BRAIN_ROOT=~/my-brain bun run api
 
 `MT_PORT` sets the HTTP port for `bun run api` (default **3000**).
 
+`MT_CODEX_SESSIONS_DIR` is an ordered `:`-separated list of Codex rollout
+roots. A leading `~/` is expanded by mm; the first root containing a duplicated
+session ID wins. When unset, it defaults to `~/.codex/sessions`.
+
 `MT_AC_DB_PATH` must point to Aurora's `msg.db` for participant/session linking
 when mm runs outside the Aurora supervisor. The plugin manifest supplies it to
 managed API and watcher processes as `$AURORA_DATA/data/msg.db`; standalone

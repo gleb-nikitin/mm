@@ -35,3 +35,10 @@
 - **2026-09-12**: fix(plugin): point managed processes at Aurora data database
 - **2026-09-23**: docs(cto): capture moved data-directory import hazards
 - **2026-09-25**: feat(git): add guarded publish workflow
+- **2026-09-25**: feat(codex): support ordered multi-root sessions
+- **2026-09-25**: fix(git): harden sweep and publish recovery
+- **2026-09-25**: fix(codex): normalize current prompt records
+- **2026-09-25**: docs(devops): correct Codex backfill handoff
+- **2026-09-25**: fix(codex): filter unannotated host context
+- **2026-09-25**: fix(codex): retain first session metadata identity
+- **2026-09-25**: docs(cto): capture coordination and backup lessons

@@ -3,7 +3,8 @@ set -euo pipefail
 
 # commit-sweep.sh — safety-filtered sweep commit for mm_git.
 
-REPO="${MM_GIT_REPO:-/Users/glebnikitin/work/code/mm}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO="${MM_GIT_REPO:-$(cd -- "$SCRIPT_DIR/../../.." && pwd -P)}"
 TRAILER="Co-Authored-By: Claude <noreply@anthropic.com>"
 MILESTONES="wiki/Milestones.md"
 
@@ -30,13 +31,26 @@ exclude_reason() {
 
 included=()
 excluded=()
-while IFS= read -r line; do
-  [[ -z "$line" ]] && continue
-  path="${line:3}"
-  path="${path##* -> }"
+staged_excluded=()
+while IFS= read -r -d '' path; do
+  reason="$(exclude_reason "$path")"
+  [[ -z "$reason" ]] || staged_excluded+=("$path ($reason)")
+done < <(git diff --cached --name-only -z --no-renames --)
+
+if [[ ${#staged_excluded[@]} -gt 0 ]]; then
+  echo "error: refusing sweep because excluded paths are staged:" >&2
+  for entry in "${staged_excluded[@]}"; do echo "  $entry" >&2; done
+  exit 1
+fi
+
+while IFS= read -r -d '' path; do
   reason="$(exclude_reason "$path")"
   if [[ -n "$reason" ]]; then excluded+=("$path ($reason)"); else included+=("$path"); fi
-done < <(git status --porcelain --untracked-files=all)
+done < <(git diff HEAD --name-only -z --no-renames --)
+while IFS= read -r -d '' path; do
+  reason="$(exclude_reason "$path")"
+  if [[ -n "$reason" ]]; then excluded+=("$path ($reason)"); else included+=("$path"); fi
+done < <(git ls-files --others --exclude-standard -z --)
 
 if [[ ${#included[@]} -eq 0 ]]; then
   echo "nothing to commit"
@@ -54,8 +68,10 @@ if [[ -f "$MILESTONES" ]]; then
   [[ $found -eq 1 ]] || included+=("$MILESTONES")
 fi
 
-for file in "${included[@]}"; do git add -- "$file"; done
-git commit --quiet -m "$(printf '%s\n\n%s\n' "$MSG" "$TRAILER")"
+literal_pathspecs=()
+for file in "${included[@]}"; do literal_pathspecs+=(":(literal)$file"); done
+git add -A -- "${literal_pathspecs[@]}"
+git commit --quiet -m "$(printf '%s\n\n%s\n' "$MSG" "$TRAILER")" -- "${literal_pathspecs[@]}"
 sha="$(git rev-parse --short HEAD)"
 
 echo "committed $sha"

@@ -1,28 +1,34 @@
 # Devops Handoff
 
-Current state:
-- `yjn-45` landed locally at `353e583 chore(deps): move type tooling to dev dependencies` after audit PASS `yjn-47`.
-- No active devops implementation task remains.
+Current state: the repeated-`session_meta` identity fix passed audit at `ywu-47` and is included in HEAD; final production import verification remains.
 
-Dependency contract:
-- `typescript`, `@types/node`, and `bun-types` are devDependencies only.
-- Production dependencies remain `@modelcontextprotocol/sdk`, `commander`, `js-yaml`, and `smol-toml`; each has a runtime import in ac's shipped allow-list.
+Contract implemented:
+- `MT_CODEX_SESSIONS_DIR` is an ordered `:` list with leading `~/` expansion and default `~/.codex/sessions`.
+- Explicit importer/probe overrides replace the environment list.
+- Root order selects one winner per session before mutation; force, mtime, scan order, and days filtering cannot promote a fallback.
+- Winner imports self-heal stale `session_index.source_path`; losing Codex `import_state` rows are removed.
+- Missing roots warn while available roots continue; all missing roots fail.
+- Live probe uses the same winner order, including inactive-primary shadowing.
+- Watch uses `process.execPath` and emits child stderr only when diagnostics change.
+- Both managed processes receive `$AURORA_DATA/data/codex-home/sessions:~/.codex/sessions`.
+- Current Codex `response_item` user messages with `input_text` are parsed alongside legacy `event_msg` prompts.
+- Classified non-`user.text` and recognizable unannotated AGENTS/environment/plugin context records are excluded symmetrically by importer and probe.
 
-Production-stage evidence:
-- Staged exactly `src/`, `scripts/`, `meta/skills/`, `meta/schema.md`, `pricing.toml`, and `package.json`.
-- Before: 56,120 KiB production `node_modules`; after: 26,228 KiB.
-- Saving: 29,892 KiB (~29.2 MiB); moved packages were absent from the changed production install.
-- API served `/stats` and `/api/v1/tokens/active`; all importers completed; watcher emitted a full tick; MCP answered initialize over stdio.
+Current audit/commit scope:
+- `scripts/import-codex.ts`, `tests/r1-session-index.test.ts`, this handoff
 
-Repository gates:
-- `bun test`: 137 pass, 0 fail, 680 expectations.
-- `bun run typecheck` (`tsc --noEmit`): passed.
-- `bun install --frozen-lockfile --dry-run`: passed.
+Verification:
+- `bun test`: 152 pass, 0 fail, 738 expectations.
+- Targeted repeated-metadata suite: 21 pass, 0 fail, 104 expectations.
+- `bun run typecheck`: passed.
 - `git diff --check`: passed.
+- Real-root live probe over both stores: 14.4 ms, below the documented 50 ms target.
+- Minimal-PATH watcher test proves children start without `bun` on PATH and repeated missing-root stderr is emitted once.
 
-Working tree:
-- `agent/roles/cto/wish-i-knew.md` is unrelated CTO-owned work.
-- This handoff rewrite is role-owned post-commit state.
+Production state:
+- Restored the pre-backfill DB and reran full history with the audited context filter: 284 missing before, 1 after; 283 inserted, 53 updated, 410 unchanged.
+- The one gap is a rollout with first ID `01a09c2f…` and later repeated metadata for `01a095ee…`; importer must retain the first identity like winner selection.
+- Required DB rows already point correctly: 11 post-switch codex-home rows, all four duplicate IDs have one codex-home row, and `01a0adda…` is present.
+- Four of 11 noted Codex events changed; stale-note count increased from 4 to 20, so 16 notes lost their chunk. Provenance backup remains for `zcy`.
 
-Next checks:
-- In ac's next bundle, confirm the packaged production tree reflects the ~29 MiB reduction and still starts both managed processes.
+Unrelated dirty files belong to CTO/git work and must be excluded from this commit.

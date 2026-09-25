@@ -257,7 +257,7 @@ function writeCodexSession(
   fileName: string,
   sessionId: string,
   cwd: string,
-  opts: { model?: string; userTurns?: number; lastUserText?: string }
+  opts: { model?: string; userTurns?: number; lastUserText?: string; currentFormat?: boolean }
 ) {
   const dir = path.join(sessionsDir, relDir);
   fs.mkdirSync(dir, { recursive: true });
@@ -270,10 +270,20 @@ function writeCodexSession(
   const userCount = opts.userTurns ?? 2;
   for (let i = 0; i < userCount; i++) {
     const isLast = i === userCount - 1;
-    lines.push(JSON.stringify({
+    const userText = isLast && opts.lastUserText ? opts.lastUserText : `codex user ${i + 1}`;
+    lines.push(JSON.stringify(opts.currentFormat ? {
+      type: 'response_item',
+      timestamp: `2026-04-22T19:31:0${i}Z`,
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: userText }],
+        internal_chat_message_metadata_passthrough: { content_item_kinds: ['user.text'] },
+      },
+    } : {
       type: 'event_msg',
       timestamp: `2026-04-22T19:31:0${i}Z`,
-      payload: { type: 'user_message', message: isLast && opts.lastUserText ? opts.lastUserText : `codex user ${i + 1}` },
+      payload: { type: 'user_message', message: userText },
     }));
     lines.push(JSON.stringify({
       type: 'response_item',
@@ -319,15 +329,19 @@ function writeGeminiSession(
 
 describe('getActiveAgentsLive', () => {
   let probeTmp: string;
+  let savedCodexSessionsEnv: string | undefined;
   beforeEach(() => {
     probeTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mm-live-probe-'));
     savedEnv = process.env.MT_AC_DB_PATH;
+    savedCodexSessionsEnv = process.env.MT_CODEX_SESSIONS_DIR;
     // Isolate from real ac db lookups
     process.env.MT_AC_DB_PATH = path.join(probeTmp, 'no-ac.db');
   });
   afterEach(() => {
     if (savedEnv === undefined) delete process.env.MT_AC_DB_PATH;
     else process.env.MT_AC_DB_PATH = savedEnv;
+    if (savedCodexSessionsEnv === undefined) delete process.env.MT_CODEX_SESSIONS_DIR;
+    else process.env.MT_CODEX_SESSIONS_DIR = savedCodexSessionsEnv;
     fs.rmSync(probeTmp, { recursive: true, force: true });
   });
 
@@ -356,7 +370,7 @@ describe('getActiveAgentsLive', () => {
     const codexDir = path.join(probeTmp, 'codex');
     writeCodexSession(codexDir, '2026-04-22', 'rollout-1.jsonl',
       'sess-codex-1', '/test-cwd/mm',
-      { lastUserText: 'hello codex' });
+      { lastUserText: 'hello codex', currentFormat: true });
 
     const rows = getActiveAgentsLive({
       claudeProjectsDir: path.join(probeTmp, 'nope-claude'),
@@ -367,6 +381,83 @@ describe('getActiveAgentsLive', () => {
     expect(rows[0].provider).toBe('codex');
     expect(rows[0].external_id).toBe('sess-codex-1');
     expect(rows[0].project).toBe('mm');
+  });
+
+  test('codex: ordered env roots return only the first copy of a duplicate session', () => {
+    const primaryDir = path.join(probeTmp, 'codex-primary');
+    const fallbackDir = path.join(probeTmp, 'codex-fallback');
+    writeCodexSession(primaryDir, '2026-04-22', 'rollout-primary.jsonl',
+      'sess-codex-duplicate', '/test-cwd/mm',
+      { lastUserText: 'primary winner', model: 'gpt-primary' });
+    writeCodexSession(fallbackDir, '2026-04-22', 'rollout-fallback.jsonl',
+      'sess-codex-duplicate', '/test-cwd/mm',
+      { lastUserText: 'newer fallback loser', model: 'gpt-fallback' });
+    const newer = (Date.now() + 1000) / 1000;
+    const fallbackFile = path.join(fallbackDir, '2026-04-22', 'rollout-fallback.jsonl');
+    fs.utimesSync(fallbackFile, newer, newer);
+    process.env.MT_CODEX_SESSIONS_DIR = `${primaryDir}:${fallbackDir}`;
+
+    const rows = getActiveAgentsLive({
+      claudeProjectsDir: path.join(probeTmp, 'nope-claude'),
+      geminiSessionsDir: path.join(probeTmp, 'nope-gemini'),
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].external_id).toBe('sess-codex-duplicate');
+    expect(rows[0].model).toBe('gpt-primary');
+  });
+
+  test('codex: an inactive primary copy still shadows a resumed fallback copy', () => {
+    const primaryDir = path.join(probeTmp, 'codex-primary');
+    const fallbackDir = path.join(probeTmp, 'codex-fallback');
+    writeCodexSession(primaryDir, '2026-04-22', 'rollout-primary.jsonl',
+      'sess-codex-shadowed', '/test-cwd/mm', { model: 'gpt-primary' });
+    writeCodexSession(fallbackDir, '2026-04-22', 'rollout-fallback.jsonl',
+      'sess-codex-shadowed', '/test-cwd/mm', { model: 'gpt-fallback' });
+    const stale = (Date.now() - 60 * 60 * 1000) / 1000;
+    fs.utimesSync(path.join(primaryDir, '2026-04-22', 'rollout-primary.jsonl'), stale, stale);
+    process.env.MT_CODEX_SESSIONS_DIR = `${primaryDir}:${fallbackDir}`;
+
+    const rows = getActiveAgentsLive({
+      maxAgeSeconds: 300,
+      claudeProjectsDir: path.join(probeTmp, 'nope-claude'),
+      geminiSessionsDir: path.join(probeTmp, 'nope-gemini'),
+    });
+
+    expect(rows).toHaveLength(0);
+  });
+
+  test('codex: unannotated host context does not become the live user snippet', () => {
+    const codexDir = path.join(probeTmp, 'codex-context-only');
+    const sessionFile = path.join(codexDir, '2026-04-22', 'rollout.jsonl');
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(sessionFile, [
+      {
+        type: 'session_meta', timestamp: new Date().toISOString(),
+        payload: { id: 'sess-codex-context-only', cwd: '/test-cwd/mm', model: 'gpt-5' },
+      },
+      {
+        type: 'response_item', timestamp: new Date().toISOString(),
+        payload: {
+          type: 'message', role: 'user',
+          content: [{ type: 'input_text', text: '# AGENTS.md instructions for /test-cwd/mm\n<INSTRUCTIONS>host context</INSTRUCTIONS>' }],
+        },
+      },
+      {
+        type: 'response_item', timestamp: new Date().toISOString(),
+        payload: {
+          type: 'message', role: 'user',
+          content: [{ type: 'input_text', text: '<environment_context>\n<cwd>/test-cwd/mm</cwd>\n</environment_context>' }],
+        },
+      },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+
+    const rows = getActiveAgentsLive({
+      claudeProjectsDir: path.join(probeTmp, 'nope-claude'),
+      codexSessionsDir: codexDir,
+      geminiSessionsDir: path.join(probeTmp, 'nope-gemini'),
+    });
+    expect(rows).toHaveLength(0);
   });
 
   test('gemini: confirmation test — one row from JSON session file', () => {

@@ -1,8 +1,9 @@
 /**
  * Import Codex session transcripts directly into `raw_events`.
  *
- * Walks `~/.codex/sessions/*.jsonl` (or `--sessions-dir <path>` for testing),
- * filters by mtime + min-turns + project substring, flattens each session into
+ * Walks the ordered roots in `MT_CODEX_SESSIONS_DIR` (defaulting to
+ * `~/.codex/sessions`, or `--sessions-dir <path>` for testing), filters by
+ * mtime + min-turns + project substring, flattens each winning session into
  * a single clean transcript, and inserts one row per session. `raw_events`
  * stores `external_id` as `codex:<session_id>` to avoid cross-vendor
  * collisions; `import_state.external_id` intentionally keeps the raw session
@@ -19,8 +20,15 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import { initDb, db, upsertRawEvent } from '../src/core.ts';
+import {
+  codexFirstTurnBoundary,
+  codexRootPriorityForPath,
+  isCodexInjectedUserContext,
+  readCodexSessionId,
+  resolveCodexSessionRoots,
+  selectCodexSessionWinners,
+} from '../src/codex-sessions.ts';
 import { findRawEventIdByExternalId, recordSessionObservation, recordSessionUsage, refreshStoredSessionStates } from '../src/r1/session-index.ts';
 import { extractCodexTokenUsage } from '../src/r1/token-usage.ts';
 
@@ -50,6 +58,13 @@ type Session = {
   cwd: string | null;
   model: string | null;
   turns: Turn[];
+};
+
+type IdentifiedCandidate = {
+  sessionId: string;
+  sourcePath: string;
+  rootPriority: number;
+  mtimeMs: number;
 };
 
 function parseFlags(argv: string[]): Flags {
@@ -107,7 +122,7 @@ Flags:
   --min-age-seconds N     Skip files modified in the last N sec   (default: 0)
   --include-thinking      Include assistant thinking blocks       (default: off)
   --force                 Ignore settled/unchanged checks
-  --sessions-dir <path>   Override ~/.codex/sessions              (testing)
+  --sessions-dir <path>   Override MT_CODEX_SESSIONS_DIR          (testing)
   --dry-run               List what would import, write nothing
   -h, --help              Show this help
 `);
@@ -165,6 +180,18 @@ function extractAssistantText(content: any): string {
   return parts.join('\n\n');
 }
 
+function extractUserText(content: any): string {
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const item of content) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.type === 'input_text' && typeof item.text === 'string' && item.text.trim()) {
+      parts.push(item.text.trim());
+    }
+  }
+  return parts.join('\n\n');
+}
+
 function extractReasoningText(summary: any): string {
   if (!Array.isArray(summary)) return '';
   const parts: string[] = [];
@@ -185,7 +212,13 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
   let cwd: string | null = null;
   let model: string | null = null;
   const turns: Turn[] = [];
+  const legacyUserTurns: Turn[] = [];
+  const currentUserTurns: { turn: Turn; explicitlyUserAuthored: boolean; recordIndex: number }[] = [];
   const pendingThinking: Block[] = [];
+  let recordIndex = -1;
+  let firstCurrentUserRecord = -1;
+  let firstTaskStartedRecord = -1;
+  let firstTurnContextRecord = -1;
 
   const flushPendingThinking = () => {
     pendingThinking.length = 0;
@@ -201,21 +234,28 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
     } catch {
       continue;
     }
+    recordIndex++;
 
     const recordType = rec?.type;
     const timestamp = getRecordTimestamp(rec);
     const payload = rec?.payload || {};
 
     if (recordType === 'session_meta') {
-      if (typeof payload.id === 'string' && payload.id) sessionId = payload.id;
+      if (!sessionId && typeof payload.id === 'string' && payload.id) sessionId = payload.id;
       if (typeof payload.cwd === 'string' && payload.cwd) cwd = payload.cwd;
       if (typeof payload.model === 'string' && payload.model) model = payload.model;
       continue;
     }
 
     if (recordType === 'turn_context') {
+      if (firstTurnContextRecord < 0) firstTurnContextRecord = recordIndex;
       if (!cwd && typeof payload.cwd === 'string' && payload.cwd) cwd = payload.cwd;
       if (!model && typeof payload.model === 'string' && payload.model) model = payload.model;
+      continue;
+    }
+
+    if (recordType === 'event_msg' && payload.type === 'task_started') {
+      if (firstTaskStartedRecord < 0) firstTaskStartedRecord = recordIndex;
       continue;
     }
 
@@ -223,10 +263,31 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
       const message = typeof payload.message === 'string' ? payload.message.trim() : '';
       if (message) {
         flushPendingThinking();
-        turns.push({
+        legacyUserTurns.push({
           role: 'user',
           timestamp,
           blocks: [{ kind: 'text', text: message }],
+        });
+      }
+      continue;
+    }
+
+    if (recordType === 'response_item' && payload.type === 'message' && payload.role === 'user') {
+      const message = extractUserText(payload.content);
+      const contentKinds = payload?.internal_chat_message_metadata_passthrough?.content_item_kinds;
+      const explicitlyClassified = Array.isArray(contentKinds);
+      if (message && firstCurrentUserRecord < 0) firstCurrentUserRecord = recordIndex;
+      const isUserAuthored = !explicitlyClassified || contentKinds.includes('user.text');
+      if (message && isUserAuthored) {
+        flushPendingThinking();
+        currentUserTurns.push({
+          turn: {
+            role: 'user',
+            timestamp,
+            blocks: [{ kind: 'text', text: message }],
+          },
+          explicitlyUserAuthored: explicitlyClassified,
+          recordIndex,
         });
       }
       continue;
@@ -256,6 +317,26 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
   }
 
   if (!sessionId) return null;
+  const legacyKeys = new Set(legacyUserTurns.map(turn => `${turn.timestamp}\0${turn.blocks[0]?.text ?? ''}`));
+  const firstTurnBoundary = codexFirstTurnBoundary(
+    firstCurrentUserRecord,
+    firstTaskStartedRecord,
+    firstTurnContextRecord,
+  );
+  turns.push(...legacyUserTurns);
+  for (const current of currentUserTurns) {
+    const key = `${current.turn.timestamp}\0${current.turn.blocks[0]?.text ?? ''}`;
+    if (legacyKeys.has(key)) continue;
+    if (legacyUserTurns.length > 0 && !current.explicitlyUserAuthored) continue;
+    if (
+      !current.explicitlyUserAuthored
+      && isCodexInjectedUserContext(
+        current.turn.blocks[0]?.text ?? '',
+        firstTurnBoundary >= 0 && current.recordIndex < firstTurnBoundary,
+      )
+    ) continue;
+    turns.push(current.turn);
+  }
   turns.sort((a, b) => (a.timestamp > b.timestamp ? 1 : a.timestamp < b.timestamp ? -1 : 0));
   return { sessionId, cwd, model, turns };
 }
@@ -284,30 +365,80 @@ function flattenSession(session: Session): { title: string; content: string; use
 
 async function main() {
   const flags = parseFlags(process.argv.slice(2));
-  const sessionsDir = flags.sessionsDir || path.join(os.homedir(), '.codex', 'sessions');
-  if (!fs.existsSync(sessionsDir)) {
-    console.error(`Codex sessions dir not found: ${sessionsDir}`);
+  const sessionRoots = resolveCodexSessionRoots(flags.sessionsDir);
+  if (sessionRoots.length === 0) {
+    console.error('No Codex sessions dirs configured.');
     process.exit(1);
   }
 
   initDb();
 
   const cutoffMs = flags.days > 0 ? Date.now() - flags.days * 24 * 60 * 60 * 1000 : 0;
-  const candidateFiles: { path: string; mtimeMs: number }[] = [];
+  const identifiedCandidates: IdentifiedCandidate[] = [];
+  const unparsedCandidates: { sourcePath: string; mtimeMs: number }[] = [];
+  let usableRootCount = 0;
+  let scannedFileCount = 0;
+  let errored = 0;
 
-  for (const filePath of collectRolloutFiles(sessionsDir)) {
+  for (let rootPriority = 0; rootPriority < sessionRoots.length; rootPriority++) {
+    const root = sessionRoots[rootPriority];
     try {
-      const st = fs.statSync(filePath);
-      if (st.mtimeMs < cutoffMs) continue;
-      candidateFiles.push({ path: filePath, mtimeMs: st.mtimeMs });
-    } catch {
+      const stat = fs.statSync(root);
+      if (!stat.isDirectory()) throw new Error('not a directory');
+      fs.accessSync(root, fs.constants.R_OK);
+    } catch (error: any) {
+      console.error(`Codex sessions dir unavailable: ${root} (${error?.message ?? 'unreadable'})`);
       continue;
+    }
+    usableRootCount++;
+
+    for (const filePath of collectRolloutFiles(root)) {
+      let mtimeMs: number;
+      try {
+        mtimeMs = fs.statSync(filePath).mtimeMs;
+      } catch {
+        continue;
+      }
+      try {
+        const sessionId = readCodexSessionId(filePath);
+        if (sessionId) {
+          identifiedCandidates.push({
+            sessionId,
+            sourcePath: filePath,
+            rootPriority,
+            mtimeMs,
+          });
+        } else if (mtimeMs >= cutoffMs) {
+          unparsedCandidates.push({ sourcePath: filePath, mtimeMs });
+        }
+      } catch (error: any) {
+        if (mtimeMs >= cutoffMs) {
+          errored++;
+          console.error(`Codex rollout identity error: ${filePath} (${error?.message ?? 'unknown error'})`);
+        }
+      }
+      if (mtimeMs >= cutoffMs) scannedFileCount++;
     }
   }
 
-  console.log(`Found ${candidateFiles.length} jsonl files within --days ${flags.days}.`);
+  if (usableRootCount === 0) process.exit(1);
+
+  const selected = selectCodexSessionWinners(identifiedCandidates);
+  const winners = selected.winners.filter(candidate => candidate.mtimeMs >= cutoffMs);
+  const shadowedWithinWindow = selected.losers.filter(candidate => candidate.mtimeMs >= cutoffMs).length;
+  console.log(
+    `Found ${scannedFileCount} jsonl files within --days ${flags.days}; `
+    + `${winners.length} session winners, ${shadowedWithinWindow} shadowed copies.`,
+  );
 
   const selectImportState = db.prepare(`SELECT last_mtime FROM import_state WHERE source_path = ?`);
+  const selectIndexedSource = db.prepare(
+    `SELECT source_path FROM session_index WHERE vendor = 'codex' AND session_id = ?`
+  );
+  const deleteLosingImportState = flags.dryRun ? null : db.prepare(
+    `DELETE FROM import_state
+     WHERE provider = 'codex' AND external_id = ? AND source_path <> ?`
+  );
   const upsertImportState = flags.dryRun ? null : db.prepare(`INSERT INTO import_state
     (source_path, last_mtime, last_imported_at, provider, external_id, project, cwd, model, last_user_snippet, min_turns_ok)
     VALUES (?, ?, CURRENT_TIMESTAMP, 'codex', ?, ?, ?, ?, ?, ?)
@@ -328,34 +459,56 @@ async function main() {
   let skippedLive = 0;
   let skippedUnchanged = 0;
   let duplicate = 0;
-  let errored = 0;
+  let blockedLowerPriority = 0;
 
-  for (const { path: filePath, mtimeMs } of candidateFiles) {
-    const isSettled = (Date.now() - mtimeMs) / 1000 >= flags.minAgeSeconds;
-    const state = selectImportState.get(filePath) as { last_mtime: number } | undefined;
-    const isChanged = !state || state.last_mtime !== mtimeMs;
-
-    if (!flags.force && isSettled && !isChanged) {
-      skippedUnchanged++;
-      continue;
+  if (!flags.dryRun) {
+    const duplicatedSessionIds = new Set(selected.losers.map(candidate => candidate.sessionId));
+    for (const winner of selected.winners) {
+      if (duplicatedSessionIds.has(winner.sessionId)) {
+        deleteLosingImportState!.run(winner.sessionId, winner.sourcePath);
+      }
     }
+  }
 
+  for (const { sourcePath: filePath, mtimeMs } of unparsedCandidates) {
+    if (!flags.dryRun) {
+      upsertImportState!.run(filePath, mtimeMs, null, 'unknown', null, null, null, 0);
+    }
+  }
+
+  for (const candidate of winners) {
+    const { sourcePath: filePath, mtimeMs, rootPriority } = candidate;
     let session: Session | null;
     try {
       session = parseRolloutFile(filePath, flags.includeThinking);
-    } catch (e: any) {
+    } catch (error: any) {
       errored++;
-      console.error(`  ✗ parse error: ${filePath}: ${e.message}`);
+      console.error(`Codex rollout parse error: ${filePath} (${error?.message ?? 'unknown error'})`);
       continue;
     }
-
     if (!session) {
-      // Still update sighting if we have a valid path but failed to parse as full session
       if (!flags.dryRun) {
         upsertImportState!.run(filePath, mtimeMs, null, 'unknown', null, null, null, 0);
       }
       continue;
     }
+    const isSettled = (Date.now() - mtimeMs) / 1000 >= flags.minAgeSeconds;
+    const state = selectImportState.get(filePath) as { last_mtime: number } | undefined;
+    const isChanged = !state || state.last_mtime !== mtimeMs;
+    const indexed = selectIndexedSource.get(session.sessionId) as { source_path: string } | undefined;
+    const indexedPriority = indexed
+      ? codexRootPriorityForPath(indexed.source_path, sessionRoots)
+      : Number.POSITIVE_INFINITY;
+    if (
+      indexed
+      && indexedPriority < rootPriority
+      && fs.existsSync(indexed.source_path)
+    ) {
+      if (!flags.dryRun) deleteLosingImportState!.run(session.sessionId, indexed.source_path);
+      blockedLowerPriority++;
+      continue;
+    }
+    const needsSourceRepair = !!indexed && path.resolve(indexed.source_path) !== path.resolve(filePath);
 
     const projectSlug = projectSlugFromCwd(session.cwd);
     const userTurns = session.turns.filter(t => t.role === 'user');
@@ -371,6 +524,12 @@ async function main() {
       if (text) { lastUserSnippet = text.slice(0, 200); break; }
     }
 
+    if (!flags.force && isSettled && !isChanged && !needsSourceRepair) {
+      if (!flags.dryRun) deleteLosingImportState!.run(session.sessionId, filePath);
+      skippedUnchanged++;
+      continue;
+    }
+
     if (!flags.dryRun) {
       upsertImportState!.run(
         filePath, 
@@ -382,6 +541,7 @@ async function main() {
         lastUserSnippet, 
         minTurnsOk
       );
+      deleteLosingImportState!.run(session.sessionId, filePath);
     }
 
     if (flags.project && !(session.cwd || '').includes(flags.project)) {
@@ -428,6 +588,10 @@ async function main() {
       participants: JSON.stringify(['user', 'assistant']),
       metadata,
     });
+    if (needsSourceRepair && res === 'unchanged') {
+      db.prepare(`UPDATE raw_events SET metadata = ? WHERE external_id = ?`)
+        .run(metadata, namespacedExternalId);
+    }
     recordSessionObservation({
       vendor: 'codex',
       session_id: session.sessionId,
@@ -467,6 +631,7 @@ async function main() {
   console.log(`  skipped (turns):   ${skippedMinTurns}`);
   console.log(`  skipped (live):    ${skippedLive}`);
   console.log(`  skipped (unchanged): ${skippedUnchanged}`);
+  console.log(`  blocked (lower-priority): ${blockedLowerPriority}`);
   console.log(`  state refresh:     ${refresh.ran ? `${refresh.changed} changed` : 'not due'}`);
   if (errored > 0) console.log(`  parse errors:      ${errored}`);
   if (!flags.dryRun && imported > 0) {

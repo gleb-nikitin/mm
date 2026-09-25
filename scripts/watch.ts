@@ -7,6 +7,7 @@ import { spawn } from 'bun';
 const INTERVAL_MS = Number(process.env.MM_WATCH_INTERVAL_MS ?? 1000);
 let stopping = false;
 let wakeSleep: (() => void) | null = null;
+const lastDiagnostics = new Map<string, string>();
 
 function stop(): void {
   stopping = true;
@@ -19,11 +20,19 @@ process.on('SIGINT',  stop);
 async function run(script: string): Promise<{ ok: boolean; ms: number }> {
   const start = Date.now();
   const proc = spawn({
-    cmd: ['bun', `scripts/${script}`, '--days', '1'],
+    cmd: [process.execPath, `scripts/${script}`, '--days', '1'],
     stdout: 'ignore',
-    stderr: 'ignore',
+    stderr: 'pipe',
   });
-  const code = await proc.exited;
+  const stderrPromise = new Response(proc.stderr).text();
+  const [code, stderr] = await Promise.all([proc.exited, stderrPromise]);
+  const diagnostic = stderr.trim();
+  const previous = lastDiagnostics.get(script) ?? '';
+  if (diagnostic !== previous) {
+    lastDiagnostics.set(script, diagnostic);
+    if (diagnostic) console.error(`[watch] ${script} stderr:\n${diagnostic}`);
+    else if (previous) console.log(`[watch] ${script} stderr cleared`);
+  }
   return { ok: code === 0, ms: Date.now() - start };
 }
 

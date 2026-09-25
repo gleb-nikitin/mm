@@ -11,6 +11,14 @@
 
 import type { ActiveAgentRow, ActiveAgentsResult } from './core';
 import { resolveParticipantIdsWithStatus } from './core';
+import {
+  codexFirstTurnBoundary,
+  identifyCodexSessionId,
+  isCodexInjectedUserContext,
+  resolveCodexSessionRoots,
+  selectCodexSessionWinners,
+  type CodexSessionCandidate,
+} from './codex-sessions';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -32,6 +40,13 @@ interface SessionSummary {
   last_user_snippet: string | null;
   seconds_ago: number;
   min_turns_ok: boolean;
+}
+
+interface CodexProbeCandidate extends SessionSummary {
+  sessionId: string;
+  sourcePath: string;
+  rootPriority: number;
+  mtimeMs: number;
 }
 
 function projectSlugFromCwd(cwd: string | null): string {
@@ -176,9 +191,19 @@ function extractCodexAssistantText(content: any): string {
   return parts.join(' ').trim();
 }
 
-function probeCodex(dir: string, maxAgeSeconds: number): SessionSummary[] {
+function extractCodexUserText(content: any): string {
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const item of content) {
+    if (item && typeof item === 'object' && item.type === 'input_text' && typeof item.text === 'string') {
+      parts.push(item.text.trim());
+    }
+  }
+  return parts.join(' ').trim();
+}
+
+function collectCodexCandidates(dir: string, rootPriority: number): CodexSessionCandidate[] {
   if (!fs.existsSync(dir)) return [];
-  const cutoffMs = Date.now() - maxAgeSeconds * 1000;
   const files: string[] = [];
   const stack = [dir];
   while (stack.length > 0) {
@@ -196,7 +221,7 @@ function probeCodex(dir: string, maxAgeSeconds: number): SessionSummary[] {
     }
   }
 
-  const out: SessionSummary[] = [];
+  const out: CodexSessionCandidate[] = [];
   for (const filePath of files) {
     let st: fs.Stats;
     try {
@@ -204,76 +229,139 @@ function probeCodex(dir: string, maxAgeSeconds: number): SessionSummary[] {
     } catch {
       continue;
     }
-    if (st.mtimeMs < cutoffMs) continue;
-
-    let content: string;
+    let sessionId: string | null;
     try {
-      content = fs.readFileSync(filePath, 'utf-8');
+      sessionId = identifyCodexSessionId(filePath);
     } catch {
       continue;
     }
-
-    let sessionId: string | null = null;
-    let cwd: string | null = null;
-    let model: string | null = null;
-    let userTurns = 0;
-    let latestTs = '';
-    let latestText: string | null = null;
-
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      let rec: any;
-      try {
-        rec = JSON.parse(trimmed);
-      } catch {
-        continue;
-      }
-      const recordType = rec?.type;
-      const ts = typeof rec?.timestamp === 'string' ? rec.timestamp : '';
-      const payload = rec?.payload || {};
-
-      if (recordType === 'session_meta') {
-        if (typeof payload.id === 'string' && payload.id) sessionId = payload.id;
-        if (typeof payload.cwd === 'string' && payload.cwd) cwd = payload.cwd;
-        if (typeof payload.model === 'string' && payload.model) model = payload.model;
-        continue;
-      }
-
-      if (recordType === 'event_msg' && payload.type === 'user_message') {
-        const text = typeof payload.message === 'string' ? payload.message.trim() : '';
-        if (text) {
-          userTurns++;
-          if (!latestTs || ts >= latestTs) {
-            latestTs = ts;
-            latestText = text.slice(0, 200);
-          }
-        }
-        continue;
-      }
-
-      if (recordType === 'response_item' && payload.type === 'message' && payload.role === 'assistant') {
-        const text = extractCodexAssistantText(payload.content);
-        if (text && (!latestTs || ts >= latestTs)) {
-          latestTs = ts;
-          latestText = text.slice(0, 200);
-        }
-      }
-    }
-
     if (!sessionId) continue;
-    out.push({
-      provider: 'codex',
-      external_id: sessionId,
-      project: projectSlugFromCwd(cwd),
-      cwd,
-      model,
-      last_user_snippet: latestText,
-      seconds_ago: secondsAgoFromMs(st.mtimeMs),
-      min_turns_ok: userTurns >= 2,
-    });
+    out.push({ sessionId, sourcePath: filePath, rootPriority, mtimeMs: st.mtimeMs });
   }
   return out;
+}
+
+function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): CodexProbeCandidate | null {
+  if (candidate.mtimeMs < Date.now() - maxAgeSeconds * 1000) return null;
+  let content: string;
+  try {
+    content = fs.readFileSync(candidate.sourcePath, 'utf-8');
+  } catch {
+    return null;
+  }
+
+  let cwd: string | null = null;
+  let model: string | null = null;
+  const legacyUsers: { timestamp: string; text: string }[] = [];
+  const currentUsers: { timestamp: string; text: string; explicitlyUserAuthored: boolean; recordIndex: number }[] = [];
+  let latestTs = '';
+  let latestText: string | null = null;
+  let recordIndex = -1;
+  let firstCurrentUserRecord = -1;
+  let firstTaskStartedRecord = -1;
+  let firstTurnContextRecord = -1;
+
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let rec: any;
+    try {
+      rec = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    recordIndex++;
+    const recordType = rec?.type;
+    const ts = typeof rec?.timestamp === 'string' ? rec.timestamp : '';
+    const payload = rec?.payload || {};
+
+    if (recordType === 'session_meta') {
+      if (typeof payload.cwd === 'string' && payload.cwd) cwd = payload.cwd;
+      if (typeof payload.model === 'string' && payload.model) model = payload.model;
+      continue;
+    }
+
+    if (recordType === 'turn_context') {
+      if (firstTurnContextRecord < 0) firstTurnContextRecord = recordIndex;
+      if (!cwd && typeof payload.cwd === 'string' && payload.cwd) cwd = payload.cwd;
+      if (!model && typeof payload.model === 'string' && payload.model) model = payload.model;
+      continue;
+    }
+
+    if (recordType === 'event_msg' && payload.type === 'task_started') {
+      if (firstTaskStartedRecord < 0) firstTaskStartedRecord = recordIndex;
+      continue;
+    }
+
+    if (recordType === 'event_msg' && payload.type === 'user_message') {
+      const text = typeof payload.message === 'string' ? payload.message.trim() : '';
+      if (text) {
+        legacyUsers.push({ timestamp: ts, text });
+      }
+      continue;
+    }
+
+    if (recordType === 'response_item' && payload.type === 'message' && payload.role === 'user') {
+      const text = extractCodexUserText(payload.content);
+      const contentKinds = payload?.internal_chat_message_metadata_passthrough?.content_item_kinds;
+      const explicitlyClassified = Array.isArray(contentKinds);
+      if (text && firstCurrentUserRecord < 0) firstCurrentUserRecord = recordIndex;
+      const isUserAuthored = !explicitlyClassified || contentKinds.includes('user.text');
+      if (text && isUserAuthored) {
+        currentUsers.push({
+          timestamp: ts,
+          text,
+          explicitlyUserAuthored: explicitlyClassified,
+          recordIndex,
+        });
+      }
+      continue;
+    }
+
+    if (recordType === 'response_item' && payload.type === 'message' && payload.role === 'assistant') {
+      const text = extractCodexAssistantText(payload.content);
+      if (text && (!latestTs || ts >= latestTs)) {
+        latestTs = ts;
+        latestText = text.slice(0, 200);
+      }
+    }
+  }
+
+  const legacyKeys = new Set(legacyUsers.map(user => `${user.timestamp}\0${user.text}`));
+  const firstTurnBoundary = codexFirstTurnBoundary(
+    firstCurrentUserRecord,
+    firstTaskStartedRecord,
+    firstTurnContextRecord,
+  );
+  const selectedUsers = [
+    ...legacyUsers,
+    ...currentUsers.filter(user => {
+      if (legacyKeys.has(`${user.timestamp}\0${user.text}`)) return false;
+      if (legacyUsers.length > 0 && !user.explicitlyUserAuthored) return false;
+      return user.explicitlyUserAuthored || !isCodexInjectedUserContext(
+        user.text,
+        firstTurnBoundary >= 0 && user.recordIndex < firstTurnBoundary,
+      );
+    }),
+  ];
+  for (const user of selectedUsers) {
+    if (!latestTs || user.timestamp >= latestTs) {
+      latestTs = user.timestamp;
+      latestText = user.text.slice(0, 200);
+    }
+  }
+
+  return {
+    ...candidate,
+    provider: 'codex',
+    external_id: candidate.sessionId,
+    project: projectSlugFromCwd(cwd),
+    cwd,
+    model,
+    last_user_snippet: latestText,
+    seconds_ago: secondsAgoFromMs(candidate.mtimeMs),
+    min_turns_ok: selectedUsers.length >= 2,
+  };
 }
 
 function extractGeminiUserText(content: any): string {
@@ -394,16 +482,21 @@ export function getActiveAgentsLiveWithStatus(opts: LiveProbeOptions = {}): Acti
   const claudeDir = opts.claudeProjectsDir
     ?? process.env.MT_CLAUDE_PROJECTS_DIR
     ?? path.join(os.homedir(), '.claude', 'projects');
-  const codexDir = opts.codexSessionsDir
-    ?? process.env.MT_CODEX_SESSIONS_DIR
-    ?? path.join(os.homedir(), '.codex', 'sessions');
+  const codexRoots = resolveCodexSessionRoots(opts.codexSessionsDir);
   const geminiDir = opts.geminiSessionsDir
     ?? process.env.MT_GEMINI_SESSIONS_DIR
     ?? path.join(os.homedir(), '.gemini', 'tmp');
 
+  const codexCandidates = codexRoots.flatMap((root, rootPriority) =>
+    collectCodexCandidates(root, rootPriority)
+  );
+  const codexSummaries = selectCodexSessionWinners(codexCandidates).winners
+    .map(candidate => probeCodex(candidate, maxAgeSeconds))
+    .filter((summary): summary is CodexProbeCandidate => summary !== null);
+
   const summaries: SessionSummary[] = [
     ...probeClaude(claudeDir, maxAgeSeconds),
-    ...probeCodex(codexDir, maxAgeSeconds),
+    ...codexSummaries,
     ...probeGemini(geminiDir, maxAgeSeconds),
   ];
 

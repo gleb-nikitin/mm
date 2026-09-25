@@ -4,13 +4,16 @@ import * as path from 'path';
 const REPO = path.resolve(import.meta.dir, '..');
 
 describe('plugin process manifest', () => {
-  test('injects the install-local ac DB path into API and watcher processes', async () => {
+  test('injects install-local ac DB and ordered Codex roots into both processes', async () => {
     const manifest = Bun.TOML.parse(
       await Bun.file(path.join(REPO, 'processes.toml')).text(),
     ) as any;
 
-    expect(manifest.process.mm.env.MT_AC_DB_PATH).toBe('$AURORA_DATA/msg.db');
-    expect(manifest.process['mm-watch'].env.MT_AC_DB_PATH).toBe('$AURORA_DATA/msg.db');
+    const codexRoots = '$AURORA_DATA/data/codex-home/sessions:~/.codex/sessions';
+    expect(manifest.process.mm.env.MT_AC_DB_PATH).toBe('$AURORA_DATA/data/msg.db');
+    expect(manifest.process.mm.env.MT_CODEX_SESSIONS_DIR).toBe(codexRoots);
+    expect(manifest.process['mm-watch'].env.MT_AC_DB_PATH).toBe('$AURORA_DATA/data/msg.db');
+    expect(manifest.process['mm-watch'].env.MT_CODEX_SESSIONS_DIR).toBe(codexRoots);
   });
 
   test('operator importer entrypoints declare MT_AC_DB_PATH before importing', async () => {

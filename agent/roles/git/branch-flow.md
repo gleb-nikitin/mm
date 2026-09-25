@@ -26,6 +26,7 @@ agent/roles/git/push-pr.sh --operator-authorized --topic some-topic
 ## Publish Cycle
 - `push-pr.sh` requires clean local `main` ahead of `origin/main`.
 - It creates `publish/<topic-or-sha>`, pushes it, opens a PR, records `.git/git-publish-anchor`, and returns to `main`.
+- A failure after branch creation returns to `main`, keeps the publish branch, and reports its name; existing-branch guards remain fail-safe rather than resuming automatically.
 - The anchor records the PR number and published SHA so cleanup cannot silently discard later local commits.
 - After the operator merges the PR, `merge-done.sh` verifies the merge, synchronizes `main`, deletes the publish branch, and removes the anchor.
 - If local `main` moves after publication, cleanup refuses until the mismatch is resolved explicitly.

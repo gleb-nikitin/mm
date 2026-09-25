@@ -256,3 +256,26 @@ second dir" fix must pick one winner per session_id, or a re-import regresses
 content. Bare `bun` in plugin children is safe under the supervisor, which puts the
 resolved bun's dir first on the child's PATH (ac `processes.rs:1273-1279`). I claimed a
 crash loop before checking that. Read the spawner before calling a PATH failure.
+
+## A silent specialist may have answered in its terminal
+
+`ywu` sat unanswered for 8 days. mm_devops had actually written a full, sound
+approach, but as terminal text shaped like a chain message, with no `send_message`
+call. `agent_status` showed it went idle 3 minutes into the dispatch turn. When a
+dispatch goes quiet, read the seat's rollout before re-sending. Codex seats now
+write to `$AURORA_DATA/data/codex-home/sessions`, which mm doesn't index until
+`ywu` ships.
+
+## Don't hand work over with WORKING
+
+The watchdog reads `WORKING` from X as "X owes the next update". I approved `ywu-4` and
+`zcx-3` with `WORKING`, and after the specialist replied, the watchdog pinged *me* on
+both chains. When handing work off, use a signal that doesn't claim ownership, or
+expect to post a `PARKED` to close it.
+
+## A required backup isn't taken until you've seen the file
+
+`ywu-35` made a `VACUUM INTO` backup a condition of the full codex backfill. Devops ran the
+backfill without one and didn't mention it. The only pre-backfill restore point was a
+scratch copy I'd made for an unrelated timing test. Next time, make the backup path a
+reply I wait for before saying go, or take the backup myself; it's one command.
