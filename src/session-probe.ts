@@ -11,6 +11,12 @@
 
 import type { ActiveAgentRow, ActiveAgentsResult } from './core';
 import { resolveParticipantIdsWithStatus } from './core';
+import {
+  identifyCodexSessionId,
+  resolveCodexSessionRoots,
+  selectCodexSessionWinners,
+  type CodexSessionCandidate,
+} from './codex-sessions';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -32,6 +38,13 @@ interface SessionSummary {
   last_user_snippet: string | null;
   seconds_ago: number;
   min_turns_ok: boolean;
+}
+
+interface CodexProbeCandidate extends SessionSummary {
+  sessionId: string;
+  sourcePath: string;
+  rootPriority: number;
+  mtimeMs: number;
 }
 
 function projectSlugFromCwd(cwd: string | null): string {
@@ -176,9 +189,8 @@ function extractCodexAssistantText(content: any): string {
   return parts.join(' ').trim();
 }
 
-function probeCodex(dir: string, maxAgeSeconds: number): SessionSummary[] {
+function collectCodexCandidates(dir: string, rootPriority: number): CodexSessionCandidate[] {
   if (!fs.existsSync(dir)) return [];
-  const cutoffMs = Date.now() - maxAgeSeconds * 1000;
   const files: string[] = [];
   const stack = [dir];
   while (stack.length > 0) {
@@ -196,7 +208,7 @@ function probeCodex(dir: string, maxAgeSeconds: number): SessionSummary[] {
     }
   }
 
-  const out: SessionSummary[] = [];
+  const out: CodexSessionCandidate[] = [];
   for (const filePath of files) {
     let st: fs.Stats;
     try {
@@ -204,76 +216,84 @@ function probeCodex(dir: string, maxAgeSeconds: number): SessionSummary[] {
     } catch {
       continue;
     }
-    if (st.mtimeMs < cutoffMs) continue;
-
-    let content: string;
+    let sessionId: string | null;
     try {
-      content = fs.readFileSync(filePath, 'utf-8');
+      sessionId = identifyCodexSessionId(filePath);
     } catch {
       continue;
     }
+    if (!sessionId) continue;
+    out.push({ sessionId, sourcePath: filePath, rootPriority, mtimeMs: st.mtimeMs });
+  }
+  return out;
+}
 
-    let sessionId: string | null = null;
-    let cwd: string | null = null;
-    let model: string | null = null;
-    let userTurns = 0;
-    let latestTs = '';
-    let latestText: string | null = null;
+function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): CodexProbeCandidate | null {
+  if (candidate.mtimeMs < Date.now() - maxAgeSeconds * 1000) return null;
+  let content: string;
+  try {
+    content = fs.readFileSync(candidate.sourcePath, 'utf-8');
+  } catch {
+    return null;
+  }
 
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      let rec: any;
-      try {
-        rec = JSON.parse(trimmed);
-      } catch {
-        continue;
-      }
-      const recordType = rec?.type;
-      const ts = typeof rec?.timestamp === 'string' ? rec.timestamp : '';
-      const payload = rec?.payload || {};
+  let cwd: string | null = null;
+  let model: string | null = null;
+  let userTurns = 0;
+  let latestTs = '';
+  let latestText: string | null = null;
 
-      if (recordType === 'session_meta') {
-        if (typeof payload.id === 'string' && payload.id) sessionId = payload.id;
-        if (typeof payload.cwd === 'string' && payload.cwd) cwd = payload.cwd;
-        if (typeof payload.model === 'string' && payload.model) model = payload.model;
-        continue;
-      }
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let rec: any;
+    try {
+      rec = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    const recordType = rec?.type;
+    const ts = typeof rec?.timestamp === 'string' ? rec.timestamp : '';
+    const payload = rec?.payload || {};
 
-      if (recordType === 'event_msg' && payload.type === 'user_message') {
-        const text = typeof payload.message === 'string' ? payload.message.trim() : '';
-        if (text) {
-          userTurns++;
-          if (!latestTs || ts >= latestTs) {
-            latestTs = ts;
-            latestText = text.slice(0, 200);
-          }
-        }
-        continue;
-      }
+    if (recordType === 'session_meta') {
+      if (typeof payload.cwd === 'string' && payload.cwd) cwd = payload.cwd;
+      if (typeof payload.model === 'string' && payload.model) model = payload.model;
+      continue;
+    }
 
-      if (recordType === 'response_item' && payload.type === 'message' && payload.role === 'assistant') {
-        const text = extractCodexAssistantText(payload.content);
-        if (text && (!latestTs || ts >= latestTs)) {
+    if (recordType === 'event_msg' && payload.type === 'user_message') {
+      const text = typeof payload.message === 'string' ? payload.message.trim() : '';
+      if (text) {
+        userTurns++;
+        if (!latestTs || ts >= latestTs) {
           latestTs = ts;
           latestText = text.slice(0, 200);
         }
       }
+      continue;
     }
 
-    if (!sessionId) continue;
-    out.push({
-      provider: 'codex',
-      external_id: sessionId,
-      project: projectSlugFromCwd(cwd),
-      cwd,
-      model,
-      last_user_snippet: latestText,
-      seconds_ago: secondsAgoFromMs(st.mtimeMs),
-      min_turns_ok: userTurns >= 2,
-    });
+    if (recordType === 'response_item' && payload.type === 'message' && payload.role === 'assistant') {
+      const text = extractCodexAssistantText(payload.content);
+      if (text && (!latestTs || ts >= latestTs)) {
+        latestTs = ts;
+        latestText = text.slice(0, 200);
+      }
+    }
   }
-  return out;
+
+  return {
+    ...candidate,
+    provider: 'codex',
+    external_id: candidate.sessionId,
+    project: projectSlugFromCwd(cwd),
+    cwd,
+    model,
+    last_user_snippet: latestText,
+    seconds_ago: secondsAgoFromMs(candidate.mtimeMs),
+    min_turns_ok: userTurns >= 2,
+  };
 }
 
 function extractGeminiUserText(content: any): string {
@@ -394,16 +414,21 @@ export function getActiveAgentsLiveWithStatus(opts: LiveProbeOptions = {}): Acti
   const claudeDir = opts.claudeProjectsDir
     ?? process.env.MT_CLAUDE_PROJECTS_DIR
     ?? path.join(os.homedir(), '.claude', 'projects');
-  const codexDir = opts.codexSessionsDir
-    ?? process.env.MT_CODEX_SESSIONS_DIR
-    ?? path.join(os.homedir(), '.codex', 'sessions');
+  const codexRoots = resolveCodexSessionRoots(opts.codexSessionsDir);
   const geminiDir = opts.geminiSessionsDir
     ?? process.env.MT_GEMINI_SESSIONS_DIR
     ?? path.join(os.homedir(), '.gemini', 'tmp');
 
+  const codexCandidates = codexRoots.flatMap((root, rootPriority) =>
+    collectCodexCandidates(root, rootPriority)
+  );
+  const codexSummaries = selectCodexSessionWinners(codexCandidates).winners
+    .map(candidate => probeCodex(candidate, maxAgeSeconds))
+    .filter((summary): summary is CodexProbeCandidate => summary !== null);
+
   const summaries: SessionSummary[] = [
     ...probeClaude(claudeDir, maxAgeSeconds),
-    ...probeCodex(codexDir, maxAgeSeconds),
+    ...codexSummaries,
     ...probeGemini(geminiDir, maxAgeSeconds),
   ];
 

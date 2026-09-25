@@ -35,3 +35,4 @@
 - **2026-09-12**: fix(plugin): point managed processes at Aurora data database
 - **2026-09-23**: docs(cto): capture moved data-directory import hazards
 - **2026-09-25**: feat(git): add guarded publish workflow
+- **2026-09-25**: feat(codex): support ordered multi-root sessions

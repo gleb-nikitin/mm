@@ -44,6 +44,36 @@ function openBrainDb(): Database {
   return new Database(path.join(tmpRoot, 'meta', 'brain.db'));
 }
 
+function writeCodexRollout(
+  filePath: string,
+  sessionId: string,
+  marker: string,
+  model: string,
+): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, [
+    {
+      timestamp: '2026-09-24T10:00:00Z',
+      type: 'session_meta',
+      payload: { id: sessionId, cwd: '/Users/test/work/mm', model },
+    },
+    {
+      timestamp: '2026-09-24T10:00:01Z',
+      type: 'event_msg',
+      payload: { type: 'user_message', message: marker },
+    },
+    {
+      timestamp: '2026-09-24T10:00:02Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: `${marker} reply` }],
+      },
+    },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n');
+}
+
 describe('R1 session linkage index', () => {
   beforeEach(() => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mm-r1-session-index-'));
@@ -722,6 +752,158 @@ describe('R1 session linkage index', () => {
     } finally {
       fs.rmSync(importRoot, { recursive: true, force: true });
     }
+  });
+
+  test('Codex importer uses configured root order, ignores force for losers, and repairs stale paths', () => {
+    const primaryDir = path.join(tmpRoot, 'codex-primary');
+    const fallbackDir = path.join(tmpRoot, 'codex-fallback');
+    const primaryFile = path.join(primaryDir, '2026', '09', '24', 'rollout-primary.jsonl');
+    const fallbackFile = path.join(fallbackDir, '2026', '09', '24', 'rollout-fallback.jsonl');
+    writeCodexRollout(primaryFile, 'sess-codex-duplicate', 'primary winner', 'gpt-primary');
+    writeCodexRollout(fallbackFile, 'sess-codex-duplicate', 'fallback loser with more text', 'gpt-fallback');
+    fs.appendFileSync(fallbackFile, `${JSON.stringify({
+      timestamp: '2026-09-24T10:00:03Z',
+      type: 'event_msg',
+      payload: { type: 'user_message', message: 'fallback-only extra turn' },
+    })}\n`);
+    const newer = (Date.now() + 1000) / 1000;
+    fs.utimesSync(fallbackFile, newer, newer);
+
+    const runImporter = (extraArgs: string[] = []) => Bun.spawnSync({
+      cmd: [
+        'bun', 'scripts/import-codex.ts', '--days', '365',
+        '--min-turns', '1', '--min-age-seconds', '0', ...extraArgs,
+      ],
+      cwd: REPO,
+      env: {
+        ...process.env,
+        MT_BRAIN_ROOT: tmpRoot,
+        MT_AC_DB_PATH: acDbPath,
+        MT_CODEX_SESSIONS_DIR: `${primaryDir}:${fallbackDir}`,
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    const first = runImporter(['--force']);
+    expect(first.exitCode).toBe(0);
+
+    let db = openBrainDb();
+    let indexed = db.prepare(
+      `SELECT source_path, model FROM session_index WHERE vendor = 'codex' AND session_id = 'sess-codex-duplicate'`
+    ).get() as any;
+    let event = db.prepare(
+      `SELECT content, metadata FROM raw_events WHERE external_id = 'codex:sess-codex-duplicate'`
+    ).get() as any;
+    expect(indexed).toEqual({ source_path: primaryFile, model: 'gpt-primary' });
+    expect(event.content).toContain('primary winner');
+    expect(event.content).not.toContain('fallback-only extra turn');
+    expect(JSON.parse(event.metadata).source_path).toBe(primaryFile);
+    expect(db.prepare(
+      `SELECT source_path FROM import_state WHERE provider = 'codex' AND external_id = 'sess-codex-duplicate'`
+    ).all()).toEqual([{ source_path: primaryFile }]);
+
+    db.prepare(
+      `UPDATE session_index SET source_path = ? WHERE vendor = 'codex' AND session_id = 'sess-codex-duplicate'`
+    ).run(fallbackFile);
+    db.prepare(
+      `INSERT INTO import_state
+         (source_path, last_mtime, provider, external_id, project, cwd, model, last_user_snippet, min_turns_ok)
+       VALUES (?, ?, 'codex', 'sess-codex-duplicate', 'mm', '/Users/test/work/mm', 'gpt-fallback', 'loser', 1)`
+    ).run(fallbackFile, fs.statSync(fallbackFile).mtimeMs);
+    db.close();
+
+    const repaired = runImporter();
+    expect(repaired.exitCode).toBe(0);
+    db = openBrainDb();
+    indexed = db.prepare(
+      `SELECT source_path, model FROM session_index WHERE vendor = 'codex' AND session_id = 'sess-codex-duplicate'`
+    ).get() as any;
+    event = db.prepare(
+      `SELECT metadata FROM raw_events WHERE external_id = 'codex:sess-codex-duplicate'`
+    ).get() as any;
+    expect(indexed).toEqual({ source_path: primaryFile, model: 'gpt-primary' });
+    expect(JSON.parse(event.metadata).source_path).toBe(primaryFile);
+    expect(db.prepare(
+      `SELECT source_path FROM import_state WHERE provider = 'codex' AND external_id = 'sess-codex-duplicate'`
+    ).all()).toEqual([{ source_path: primaryFile }]);
+    db.close();
+  });
+
+  test('Codex importer warns for missing roots, continues with available roots, and fails when all are missing', () => {
+    const missingDir = path.join(tmpRoot, 'missing-codex');
+    const availableDir = path.join(tmpRoot, 'available-codex');
+    const availableFile = path.join(availableDir, '2026', '09', '24', 'rollout.jsonl');
+    writeCodexRollout(availableFile, 'sess-codex-available', 'available winner', 'gpt-available');
+
+    const runWithRoots = (roots: string) => Bun.spawnSync({
+      cmd: ['bun', 'scripts/import-codex.ts', '--days', '365', '--force', '--min-turns', '1'],
+      cwd: REPO,
+      env: {
+        ...process.env,
+        MT_BRAIN_ROOT: tmpRoot,
+        MT_AC_DB_PATH: acDbPath,
+        MT_CODEX_SESSIONS_DIR: roots,
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    const partial = runWithRoots(`${missingDir}:${availableDir}`);
+    expect(partial.exitCode).toBe(0);
+    expect(partial.stderr.toString()).toContain(`Codex sessions dir unavailable: ${missingDir}`);
+    const db = openBrainDb();
+    expect((db.prepare(
+      `SELECT source_path FROM session_index WHERE vendor = 'codex' AND session_id = 'sess-codex-available'`
+    ).get() as any).source_path).toBe(availableFile);
+    db.close();
+
+    const none = runWithRoots(`${missingDir}:${path.join(tmpRoot, 'also-missing')}`);
+    expect(none.exitCode).not.toBe(0);
+    expect(none.stderr.toString()).toContain('Codex sessions dir unavailable');
+  });
+
+  test('Codex importer does not promote a recent fallback when the primary copy is outside the days window', () => {
+    const primaryDir = path.join(tmpRoot, 'codex-primary');
+    const fallbackDir = path.join(tmpRoot, 'codex-fallback');
+    const primaryFile = path.join(primaryDir, '2026', '09', '22', 'rollout-primary.jsonl');
+    const fallbackFile = path.join(fallbackDir, '2026', '09', '24', 'rollout-fallback.jsonl');
+    writeCodexRollout(primaryFile, 'sess-codex-stale-primary', 'primary', 'gpt-primary');
+    writeCodexRollout(fallbackFile, 'sess-codex-stale-primary', 'fallback', 'gpt-fallback');
+    const stale = (Date.now() - 2 * 24 * 60 * 60 * 1000) / 1000;
+    fs.utimesSync(primaryFile, stale, stale);
+    const seeded = runEval(`
+      import { initDb, db } from './src/core.ts';
+      initDb();
+      db.prepare(\`INSERT INTO import_state
+        (source_path, last_mtime, provider, external_id, project, cwd, model, last_user_snippet, min_turns_ok)
+        VALUES (?, ?, 'codex', 'sess-codex-stale-primary', 'mm', '/Users/test/work/mm', 'gpt-fallback', 'loser', 1)\`)
+        .run(${JSON.stringify(fallbackFile)}, ${fs.statSync(fallbackFile).mtimeMs});
+    `);
+    expect(seeded.exitCode).toBe(0);
+
+    const imported = Bun.spawnSync({
+      cmd: ['bun', 'scripts/import-codex.ts', '--days', '1', '--force', '--min-turns', '1'],
+      cwd: REPO,
+      env: {
+        ...process.env,
+        MT_BRAIN_ROOT: tmpRoot,
+        MT_AC_DB_PATH: acDbPath,
+        MT_CODEX_SESSIONS_DIR: `${primaryDir}:${fallbackDir}`,
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    expect(imported.exitCode).toBe(0);
+    const db = openBrainDb();
+    expect(db.prepare(
+      `SELECT source_path FROM session_index WHERE vendor = 'codex' AND session_id = 'sess-codex-stale-primary'`
+    ).get()).toBeNull();
+    expect(db.prepare(
+      `SELECT source_path FROM import_state WHERE provider = 'codex' AND external_id = 'sess-codex-stale-primary'`
+    ).get()).toBeNull();
+    db.close();
   });
 
   test('backfill migrates old raw_events external_id before changed importer pass', () => {

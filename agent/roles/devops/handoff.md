@@ -1,28 +1,32 @@
 # Devops Handoff
 
-Current state:
-- `yjn-45` landed locally at `353e583 chore(deps): move type tooling to dev dependencies` after audit PASS `yjn-47`.
-- No active devops implementation task remains.
+Current state: `ywu` Codex multi-root import and watcher reliability passed audit at `ywu-11` and is included in HEAD; no active devops implementation remains.
 
-Dependency contract:
-- `typescript`, `@types/node`, and `bun-types` are devDependencies only.
-- Production dependencies remain `@modelcontextprotocol/sdk`, `commander`, `js-yaml`, and `smol-toml`; each has a runtime import in ac's shipped allow-list.
+Contract implemented:
+- `MT_CODEX_SESSIONS_DIR` is an ordered `:` list with leading `~/` expansion and default `~/.codex/sessions`.
+- Explicit importer/probe overrides replace the environment list.
+- Root order selects one winner per session before mutation; force, mtime, scan order, and days filtering cannot promote a fallback.
+- Winner imports self-heal stale `session_index.source_path`; losing Codex `import_state` rows are removed.
+- Missing roots warn while available roots continue; all missing roots fail.
+- Live probe uses the same winner order, including inactive-primary shadowing.
+- Watch uses `process.execPath` and emits child stderr only when diagnostics change.
+- Both managed processes receive `$AURORA_DATA/data/codex-home/sessions:~/.codex/sessions`.
 
-Production-stage evidence:
-- Staged exactly `src/`, `scripts/`, `meta/skills/`, `meta/schema.md`, `pricing.toml`, and `package.json`.
-- Before: 56,120 KiB production `node_modules`; after: 26,228 KiB.
-- Saving: 29,892 KiB (~29.2 MiB); moved packages were absent from the changed production install.
-- API served `/stats` and `/api/v1/tokens/active`; all importers completed; watcher emitted a full tick; MCP answered initialize over stdio.
+Audit/commit scope:
+- `src/codex-sessions.ts`, `src/session-probe.ts`
+- `scripts/import-codex.ts`, `scripts/watch.ts`, `processes.toml`
+- `tests/codex-sessions.test.ts`, `tests/active-agents.test.ts`, `tests/r1-session-index.test.ts`, `tests/watch.test.ts`, `tests/processes-manifest.test.ts`
+- `README.md`, `human-how-it-works.md`, `agent/docs/how-to-import.md`, this handoff
 
-Repository gates:
-- `bun test`: 137 pass, 0 fail, 680 expectations.
-- `bun run typecheck` (`tsc --noEmit`): passed.
-- `bun install --frozen-lockfile --dry-run`: passed.
+Verification:
+- `bun test`: 146 pass, 0 fail, 715 expectations.
+- `bun run typecheck`: passed.
 - `git diff --check`: passed.
+- Real-root live probe over both stores: 14.4 ms, below the documented 50 ms target.
+- Minimal-PATH watcher test proves children start without `bun` on PATH and repeated missing-root stderr is emitted once.
 
-Working tree:
-- `agent/roles/cto/wish-i-knew.md` is unrelated CTO-owned work.
-- This handoff rewrite is role-owned post-commit state.
+Production backfill gate:
+- Running `mm-watch` PID 38653 has no `MT_CODEX_SESSIONS_DIR`; do not backfill until managed processes reload the new manifest.
+- After reload, import from 2026-09-12 onward and verify post-switch codex-home rows plus duplicate IDs `01a0930f…`, `01a0951f…`, `01a095ee…`, `01a09cbf…` in `meta/brain.db`.
 
-Next checks:
-- In ac's next bundle, confirm the packaged production tree reflects the ~29 MiB reduction and still starts both managed processes.
+Unrelated dirty files belong to CTO/git work and must be excluded from this commit.
