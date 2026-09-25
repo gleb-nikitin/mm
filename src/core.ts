@@ -30,6 +30,7 @@ for (const p of [PATHS.raw, PATHS.wiki, PATHS.meta]) {
 
 // --- Database ---
 export const db = new Database(PATHS.db);
+const NOTES_FTS_REBUILD_MIGRATION = '2026-09-25-notes-fts-atomic-rebuild';
 try {
   db.exec('PRAGMA busy_timeout = 5000;');
   db.exec('PRAGMA journal_mode = WAL;');
@@ -38,6 +39,10 @@ try {
 
 export function initDb() {
   db.run(`CREATE TABLE IF NOT EXISTS schema_version (id INTEGER PRIMARY KEY CHECK(id = 1), version INTEGER NOT NULL);`);
+  db.run(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    name       TEXT PRIMARY KEY,
+    applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );`);
   
   let currentVersion = 0;
   try {
@@ -327,6 +332,9 @@ export function initDb() {
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_note_hashes_project ON note_title_hashes(project, title_hash)`);
 
+  const notesFtsExisted = Boolean(db.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'notes_fts'`
+  ).get());
   try {
     db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
       note_id        UNINDEXED,
@@ -337,8 +345,11 @@ export function initDb() {
       body
     )`);
   } catch (e) {}
-  healStaleNotesSourceChunkFk();
-  rebuildNotesFtsFromNotes();
+  const notesFtsRecreated = healStaleNotesSourceChunkFk();
+  if (!notesFtsExisted || notesFtsRecreated) {
+    db.prepare('DELETE FROM schema_migrations WHERE name = ?').run(NOTES_FTS_REBUILD_MIGRATION);
+  }
+  migrateNotesFtsOnce();
 
   db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 15)');
 }
@@ -1452,25 +1463,44 @@ function boundedOffset(offset: number | undefined): number {
   return Math.floor(offset);
 }
 
-function rebuildNotesFtsFromNotes() {
-  try {
+function migrateNotesFtsOnce() {
+  const notesFtsAvailable = Boolean(db.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'notes_fts'`
+  ).get());
+  if (!notesFtsAvailable) return;
+
+  // The immediate transaction serializes concurrent initDb callers. Readers
+  // see the complete old or new index, never the rebuild in between.
+  const migrate = db.transaction(() => {
+    const applied = db.prepare('SELECT 1 FROM schema_migrations WHERE name = ?')
+      .get(NOTES_FTS_REBUILD_MIGRATION);
+    if (applied) return;
+
     db.prepare('DELETE FROM notes_fts').run();
     const rows = db.prepare('SELECT id, project, summary, artifacts FROM notes ORDER BY id ASC').all() as any[];
+    const insert = db.prepare(
+      `INSERT INTO notes_fts (note_id, project, artifact_index, summary, title, body)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    );
     for (const row of rows) {
-      syncNoteFts(row.id, row.project, row.summary, parseNoteArtifacts(row.artifacts));
+      parseNoteArtifacts(row.artifacts).forEach((artifact, index) => {
+        insert.run(row.id, row.project, index, row.summary, artifact.title, artifact.body);
+      });
     }
-  } catch (e) { /* FTS optional */ }
+    db.prepare('INSERT INTO schema_migrations (name) VALUES (?)').run(NOTES_FTS_REBUILD_MIGRATION);
+  });
+  migrate.immediate();
 }
 
-function healStaleNotesSourceChunkFk() {
+function healStaleNotesSourceChunkFk(): boolean {
   let stale = false;
   try {
     const fks = db.prepare('PRAGMA foreign_key_list(notes)').all() as any[];
     stale = fks.some(fk => fk.from === 'source_chunk_id');
   } catch (e) {
-    return;
+    return false;
   }
-  if (!stale) return;
+  if (!stale) return false;
 
   const previousForeignKeys = (db.prepare('PRAGMA foreign_keys').get() as any)?.foreign_keys === 1;
   db.exec('PRAGMA foreign_keys = OFF');
@@ -1531,6 +1561,7 @@ function healStaleNotesSourceChunkFk() {
   } finally {
     db.exec(`PRAGMA foreign_keys = ${previousForeignKeys ? 'ON' : 'OFF'}`);
   }
+  return true;
 }
 
 function resolveChunkProject(sourceChunkId: number): string {

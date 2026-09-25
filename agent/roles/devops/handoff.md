@@ -1,34 +1,29 @@
 # Devops Handoff
 
-Current state: the repeated-`session_meta` identity fix passed audit at `ywu-47` and is included in HEAD; final production import verification remains.
+Current task: `zcy`, shipped as three ordered commits. Part (a), notes FTS initialization, passed audit at `zcy-7` and is included in HEAD.
 
-Contract implemented:
-- `MT_CODEX_SESSIONS_DIR` is an ordered `:` list with leading `~/` expansion and default `~/.codex/sessions`.
-- Explicit importer/probe overrides replace the environment list.
-- Root order selects one winner per session before mutation; force, mtime, scan order, and days filtering cannot promote a fallback.
-- Winner imports self-heal stale `session_index.source_path`; losing Codex `import_state` rows are removed.
-- Missing roots warn while available roots continue; all missing roots fail.
-- Live probe uses the same winner order, including inactive-primary shadowing.
-- Watch uses `process.execPath` and emits child stderr only when diagnostics change.
-- Both managed processes receive `$AURORA_DATA/data/codex-home/sessions:~/.codex/sessions`.
-- Current Codex `response_item` user messages with `input_text` are parsed alongside legacy `event_msg` prompts.
-- Classified non-`user.text` and recognizable unannotated AGENTS/environment/plugin context records are excluded symmetrically by importer and probe.
+Part (a) behavior:
+- `initDb()` records named migrations in `schema_migrations` while leaving schema version 15 available for the approved v16 provenance work.
+- Existing databases rebuild `notes_fts` once under an immediate transaction; concurrent readers see the complete old or new index.
+- Fresh databases and a stale-FK repair invalidate the marker and populate the recreated FTS table once.
+- Later `initDb()` calls do not delete or reinsert FTS rows.
+- A failed rebuild rolls back both the delete and partial inserts and leaves the migration unapplied for retry.
+- Normal note creation continues to maintain its own FTS rows transactionally.
 
-Current audit/commit scope:
-- `scripts/import-codex.ts`, `tests/r1-session-index.test.ts`, this handoff
+Audit/commit scope for `zcy(a)` only:
+- `src/core.ts`
+- `tests/behavior.test.ts`
+- `agent/roles/devops/handoff.md`
 
 Verification:
-- `bun test`: 152 pass, 0 fail, 738 expectations.
-- Targeted repeated-metadata suite: 21 pass, 0 fail, 104 expectations.
+- Focused schema migration tests: 4 pass, 0 fail, 77 expectations.
+- Full `bun test`: 154 pass, 0 fail, 747 expectations.
 - `bun run typecheck`: passed.
 - `git diff --check`: passed.
-- Real-root live probe over both stores: 14.4 ms, below the documented 50 ms target.
-- Minimal-PATH watcher test proves children start without `bun` on PATH and repeated missing-root stderr is emitted once.
 
-Production state:
-- Restored the pre-backfill DB and reran full history with the audited context filter: 284 missing before, 1 after; 283 inserted, 53 updated, 410 unchanged.
-- The one gap is a rollout with first ID `01a09c2f…` and later repeated metadata for `01a095ee…`; importer must retain the first identity like winner selection.
-- Required DB rows already point correctly: 11 post-switch codex-home rows, all four duplicate IDs have one codex-home row, and `01a0adda…` is present.
-- Four of 11 noted Codex events changed; stale-note count increased from 4 to 20, so 16 notes lost their chunk. Provenance backup remains for `zcy`.
+Next after commit:
+- Reload production onto the committed code and verify the migration remains a no-op. The running watcher already loaded the dirty tree before audit and applied the marker at 2026-09-25 03:46:40 UTC; production has 94 notes, 205 valid artifacts, 205 `notes_fts` rows, one marker, and no stale notes FK.
+- Begin `zcy(b)`: prefix-append chunk retention, v16 durable note provenance with span hash, backup-backed repair script, production VACUUM backup, and dry-run evidence.
+- `zcy(c)` remains notes in hybrid retrieval after part (b) lands.
 
-Unrelated dirty files belong to CTO/git work and must be excluded from this commit.
+Do not include unrelated work in the commit.

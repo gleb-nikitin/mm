@@ -175,7 +175,7 @@ describe.serial('schema migration', () => {
     for (const name of [
       'raw_entries', 'raw_events', 'wiki_pages', 'claims', 'claim_sources', 'claim_sources_event', 'import_state',
       'artifacts', 'artifact_sources', 'chunks_virtual', 'session_index', 'session_message_links', 'session_usage', 'session_events',
-      'notes', 'note_title_hashes', 'notes_fts',
+      'notes', 'note_title_hashes', 'notes_fts', 'schema_migrations',
     ]) {
       expect(tbls).toContain(name);
     }
@@ -268,6 +268,81 @@ describe.serial('schema migration', () => {
     } finally {
       healed.close();
     }
+  });
+
+  test.serial('notes FTS rebuild runs once and later initDb calls leave it untouched', async () => {
+    await brain(['queue']);
+    seedNote('mm', 101, 'First migration summary.', [
+      { title: 'First migration artifact', body: 'Atomic rebuild alpha.' },
+    ]);
+    seedNote('mm', 102, 'Second migration summary.', [
+      { title: 'Second migration artifact', body: 'Atomic rebuild beta.' },
+    ]);
+
+    const before = openDb();
+    before.exec(`
+      DELETE FROM schema_migrations
+      WHERE name = '2026-09-25-notes-fts-atomic-rebuild';
+      DELETE FROM notes_fts;
+    `);
+    before.close();
+
+    const migrated = await brain(['queue']);
+    expect(migrated.code).toBe(0);
+
+    const afterMigration = openDb();
+    expect((afterMigration.prepare('SELECT COUNT(*) AS c FROM notes_fts').get() as any).c).toBe(2);
+    expect((afterMigration.prepare(
+      `SELECT COUNT(*) AS c FROM schema_migrations
+       WHERE name = '2026-09-25-notes-fts-atomic-rebuild'`
+    ).get() as any).c).toBe(1);
+    afterMigration.exec('DELETE FROM notes_fts');
+    afterMigration.close();
+
+    const repeated = await brain(['queue']);
+    expect(repeated.code).toBe(0);
+    const afterRepeat = openDb();
+    expect((afterRepeat.prepare('SELECT COUNT(*) AS c FROM notes_fts').get() as any).c).toBe(0);
+    afterRepeat.close();
+  });
+
+  test.serial('notes FTS migration rolls back the delete when a rebuild row fails', async () => {
+    await brain(['queue']);
+    seedNote('mm', 201, 'First rollback summary.', [
+      { title: 'First rollback artifact', body: 'Must not replace the old index alone.' },
+    ]);
+    const rejectedNoteId = seedNote('mm', 202, 'Second rollback summary.', [
+      { title: 'Second rollback artifact', body: 'Forces the simulated migration failure.' },
+    ]);
+
+    const setup = openDb();
+    setup.exec(`
+      DELETE FROM schema_migrations
+      WHERE name = '2026-09-25-notes-fts-atomic-rebuild';
+      DROP TABLE notes_fts;
+      CREATE TABLE notes_fts (
+        note_id INTEGER CHECK(note_id != ${rejectedNoteId}),
+        project TEXT,
+        artifact_index INTEGER,
+        summary TEXT,
+        title TEXT,
+        body TEXT
+      );
+      INSERT INTO notes_fts (note_id, project, artifact_index, summary, title, body)
+      VALUES (999, 'mm', 0, 'old complete index', 'sentinel', 'must survive rollback');
+    `);
+    setup.close();
+
+    const failed = await brain(['queue']);
+    expect(failed.code).not.toBe(0);
+
+    const after = openDb();
+    expect(after.prepare('SELECT note_id FROM notes_fts').all()).toEqual([{ note_id: 999 }]);
+    expect((after.prepare(
+      `SELECT COUNT(*) AS c FROM schema_migrations
+       WHERE name = '2026-09-25-notes-fts-atomic-rebuild'`
+    ).get() as any).c).toBe(0);
+    after.close();
   });
 });
 

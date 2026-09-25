@@ -42,3 +42,4 @@
 - **2026-09-25**: fix(codex): filter unannotated host context
 - **2026-09-25**: fix(codex): retain first session metadata identity
 - **2026-09-25**: docs(cto): capture coordination and backup lessons
+- **2026-09-25**: fix(notes): migrate FTS rebuild once atomically
