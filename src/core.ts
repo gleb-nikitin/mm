@@ -303,11 +303,10 @@ export function initDb() {
   db.run(`CREATE INDEX IF NOT EXISTS idx_session_events_id ON session_events(id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_session_events_project_role ON session_events(project_role, id)`);
 
-  // v15: distilled notes for intent-driven librarian extraction. Additive only:
-  // no existing tables are altered, and embeddings are populated later by
-  // `brain embed`. source_chunk_id records the chunks_virtual.id consumed by
-  // the librarian, but does not FK to that ephemeral queue row: re-importing
-  // a grown raw_event deletes stale chunks_virtual rows before rechunking.
+  // v15: distilled notes for intent-driven librarian extraction. Embeddings
+  // are populated later by `brain embed`. source_chunk_id retains the queue
+  // identity consumed by the librarian; v16 snapshots durable event/span
+  // provenance independently of that queue row.
   db.run(`CREATE TABLE IF NOT EXISTS notes (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     project         TEXT NOT NULL,
@@ -350,8 +349,7 @@ export function initDb() {
     db.prepare('DELETE FROM schema_migrations WHERE name = ?').run(NOTES_FTS_REBUILD_MIGRATION);
   }
   migrateNotesFtsOnce();
-
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 15)');
+  migrateNotesProvenanceV16(currentVersion);
 }
 
 // --- Common Logic ---
@@ -1368,6 +1366,13 @@ export type NoteListRow = {
   id: number;
   project: string;
   source_chunk_id: number;
+  source_event_id: number | null;
+  source_external_id: string | null;
+  source_segment_start: number | null;
+  source_segment_end: number | null;
+  source_filter_version: number | null;
+  source_span_hash: string | null;
+  source_provenance_status: 'valid' | 'stale' | 'missing' | 'unresolved';
   summary: string;
   artifact_count: number;
   created_at: string;
@@ -1434,10 +1439,31 @@ function parseNoteArtifacts(raw: string | null | undefined): NoteArtifactInput[]
 
 function noteListRow(row: any): NoteListRow {
   const artifacts = parseNoteArtifacts(row.artifacts);
+  let sourceProvenanceStatus: NoteListRow['source_provenance_status'] = 'unresolved';
+  if (
+    row.source_external_id
+    && Number.isInteger(row.source_segment_start)
+    && Number.isInteger(row.source_segment_end)
+    && row.source_span_hash
+  ) {
+    if (typeof row.source_content !== 'string') {
+      sourceProvenanceStatus = 'missing';
+    } else {
+      const currentSpan = row.source_content.slice(row.source_segment_start, row.source_segment_end);
+      sourceProvenanceStatus = getHash(currentSpan) === row.source_span_hash ? 'valid' : 'stale';
+    }
+  }
   return {
     id: row.id,
     project: row.project,
     source_chunk_id: row.source_chunk_id,
+    source_event_id: row.source_event_id ?? null,
+    source_external_id: row.source_external_id ?? null,
+    source_segment_start: row.source_segment_start ?? null,
+    source_segment_end: row.source_segment_end ?? null,
+    source_filter_version: row.source_filter_version ?? null,
+    source_span_hash: row.source_span_hash ?? null,
+    source_provenance_status: sourceProvenanceStatus,
     summary: row.summary,
     artifact_count: artifacts.length,
     created_at: row.created_at,
@@ -1488,6 +1514,66 @@ function migrateNotesFtsOnce() {
       });
     }
     db.prepare('INSERT INTO schema_migrations (name) VALUES (?)').run(NOTES_FTS_REBUILD_MIGRATION);
+  });
+  migrate.immediate();
+}
+
+function migrateNotesProvenanceV16(currentVersion: number) {
+  const requiredColumns = [
+    'source_event_id',
+    'source_external_id',
+    'source_segment_start',
+    'source_segment_end',
+    'source_filter_version',
+    'source_span_hash',
+  ];
+  const existingColumns = new Set(
+    (db.prepare('PRAGMA table_info(notes)').all() as Array<{ name: string }>).map(c => c.name)
+  );
+  if (currentVersion >= 16 && requiredColumns.every(name => existingColumns.has(name))) return;
+
+  const migrate = db.transaction(() => {
+    const columns = new Set((db.prepare('PRAGMA table_info(notes)').all() as Array<{ name: string }>).map(c => c.name));
+    const additions: Array<[string, string]> = [
+      ['source_event_id', 'INTEGER'],
+      ['source_external_id', 'TEXT'],
+      ['source_segment_start', 'INTEGER'],
+      ['source_segment_end', 'INTEGER'],
+      ['source_filter_version', 'INTEGER'],
+      ['source_span_hash', 'TEXT'],
+    ];
+    for (const [name, type] of additions) {
+      if (!columns.has(name)) db.run(`ALTER TABLE notes ADD COLUMN ${name} ${type}`);
+    }
+
+    const rows = db.prepare(
+      `SELECT n.id AS note_id, cv.source_event_id, re.external_id,
+              cv.segment_start, cv.segment_end, cv.filter_version, re.content
+       FROM notes n
+       JOIN chunks_virtual cv ON cv.id = n.source_chunk_id
+       JOIN raw_events re ON re.id = cv.source_event_id
+       WHERE n.source_span_hash IS NULL`
+    ).all() as any[];
+    const update = db.prepare(
+      `UPDATE notes
+       SET source_event_id = ?, source_external_id = ?,
+           source_segment_start = ?, source_segment_end = ?,
+           source_filter_version = ?, source_span_hash = ?
+       WHERE id = ?`
+    );
+    for (const row of rows) {
+      const span = String(row.content).slice(row.segment_start, row.segment_end);
+      update.run(
+        row.source_event_id,
+        row.external_id,
+        row.segment_start,
+        row.segment_end,
+        row.filter_version,
+        getHash(span),
+        row.note_id,
+      );
+    }
+    db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 16)');
   });
   migrate.immediate();
 }
@@ -1564,14 +1650,37 @@ function healStaleNotesSourceChunkFk(): boolean {
   return true;
 }
 
-function resolveChunkProject(sourceChunkId: number): string {
+type NoteSourceProvenance = {
+  project: string;
+  source_event_id: number;
+  source_external_id: string;
+  source_segment_start: number;
+  source_segment_end: number;
+  source_filter_version: number;
+  source_span_hash: string;
+};
+
+function resolveChunkProvenance(sourceChunkId: number): NoteSourceProvenance {
   const row = db.prepare(
-    `SELECT project
-     FROM chunks_virtual
-     WHERE id = ?`
-  ).get(sourceChunkId) as { project: string } | undefined;
+    `SELECT cv.project, cv.source_event_id, re.external_id,
+            cv.segment_start, cv.segment_end, cv.filter_version, re.content
+     FROM chunks_virtual cv
+     JOIN raw_events re ON re.id = cv.source_event_id
+     WHERE cv.id = ?`
+  ).get(sourceChunkId) as any;
   if (!row) throw new NoteValidationError({ error: 'source_chunk_not_found', source_chunk_id: sourceChunkId });
-  return row.project || 'unknown';
+  // Chunk coordinates and append detection both use raw_events.content. The
+  // narrative filter is applied only after slicing in readChunk().
+  const span = String(row.content).slice(row.segment_start, row.segment_end);
+  return {
+    project: row.project || 'unknown',
+    source_event_id: row.source_event_id,
+    source_external_id: row.external_id,
+    source_segment_start: row.segment_start,
+    source_segment_end: row.segment_end,
+    source_filter_version: row.filter_version,
+    source_span_hash: getHash(span),
+  };
 }
 
 function validateNoteInput(input: unknown): NoteAddInput {
@@ -1613,78 +1722,97 @@ function validateNoteInput(input: unknown): NoteAddInput {
 
 export function addNote(rawInput: unknown): NoteAddResult {
   const input = validateNoteInput(rawInput);
-  const project = resolveChunkProject(input.source_chunk_id);
-  const existing = db.prepare('SELECT id FROM notes WHERE project = ? AND source_chunk_id = ?')
-    .get(project, input.source_chunk_id) as { id: number } | undefined;
-  if (existing) {
-    throw new NoteValidationError({ error: 'duplicate_chunk', existing_note_id: existing.id });
-  }
-
-  const candidates = input.artifacts.map((artifact, inputIndex) => ({
-    artifact,
-    inputIndex,
-    title_hash: noteTitleHash(artifact.title),
-  }));
-  const seenInRequest = new Set<string>();
-  const surviving: Array<{ artifact: NoteArtifactInput; inputIndex: number; title_hash: string }> = [];
-  let skipped = 0;
-  for (const candidate of candidates) {
-    if (seenInRequest.has(candidate.title_hash)) {
-      skipped++;
-      continue;
+  const add = db.transaction((): NoteAddResult => {
+    const source = resolveChunkProvenance(input.source_chunk_id);
+    const existing = db.prepare('SELECT id FROM notes WHERE project = ? AND source_chunk_id = ?')
+      .get(source.project, input.source_chunk_id) as { id: number } | undefined;
+    if (existing) {
+      throw new NoteValidationError({ error: 'duplicate_chunk', existing_note_id: existing.id });
     }
-    seenInRequest.add(candidate.title_hash);
-    const duplicate = db.prepare('SELECT 1 FROM note_title_hashes WHERE project = ? AND title_hash = ?')
-      .get(project, candidate.title_hash);
-    if (duplicate) {
-      skipped++;
-      continue;
+
+    const candidates = input.artifacts.map((artifact, inputIndex) => ({
+      artifact,
+      inputIndex,
+      title_hash: noteTitleHash(artifact.title),
+    }));
+    const seenInRequest = new Set<string>();
+    const surviving: Array<{ artifact: NoteArtifactInput; inputIndex: number; title_hash: string }> = [];
+    let skipped = 0;
+    for (const candidate of candidates) {
+      if (seenInRequest.has(candidate.title_hash)) {
+        skipped++;
+        continue;
+      }
+      seenInRequest.add(candidate.title_hash);
+      const duplicate = db.prepare('SELECT 1 FROM note_title_hashes WHERE project = ? AND title_hash = ?')
+        .get(source.project, candidate.title_hash);
+      if (duplicate) {
+        skipped++;
+        continue;
+      }
+      surviving.push(candidate);
     }
-    surviving.push(candidate);
-  }
 
-  if (surviving.length === 0) {
-    return {
-      note_id: null,
-      inserted_artifact_count: 0,
-      skipped_count: input.artifacts.length,
-      reason: 'all_artifacts_deduped',
-    };
-  }
+    if (surviving.length === 0) {
+      return {
+        note_id: null,
+        inserted_artifact_count: 0,
+        skipped_count: input.artifacts.length,
+        reason: 'all_artifacts_deduped',
+      };
+    }
 
-  return db.transaction(() => {
     const noteRes = db.prepare(
-      'INSERT INTO notes (project, source_chunk_id, summary, artifacts) VALUES (?, ?, ?, ?)'
-    ).run(project, input.source_chunk_id, input.summary, JSON.stringify(surviving.map(s => s.artifact)));
+      `INSERT INTO notes
+       (project, source_chunk_id, source_event_id, source_external_id,
+        source_segment_start, source_segment_end, source_filter_version, source_span_hash,
+        summary, artifacts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      source.project,
+      input.source_chunk_id,
+      source.source_event_id,
+      source.source_external_id,
+      source.source_segment_start,
+      source.source_segment_end,
+      source.source_filter_version,
+      source.source_span_hash,
+      input.summary,
+      JSON.stringify(surviving.map(s => s.artifact)),
+    );
     const noteId = Number(noteRes.lastInsertRowid);
     const hashInsert = db.prepare(
       'INSERT INTO note_title_hashes (note_id, artifact_index, title_hash, project) VALUES (?, ?, ?, ?)'
     );
     surviving.forEach((survivor, index) => {
-      hashInsert.run(noteId, index, survivor.title_hash, project);
+      hashInsert.run(noteId, index, survivor.title_hash, source.project);
     });
-    syncNoteFts(noteId, project, input.summary, surviving.map(s => s.artifact));
+    syncNoteFts(noteId, source.project, input.summary, surviving.map(s => s.artifact));
     return {
       note_id: noteId,
       inserted_artifact_count: surviving.length,
       skipped_count: skipped,
     };
-  })();
+  });
+  return add.immediate();
 }
 
 export function listNotes(opts: NoteListOpts = {}): NoteListRow[] {
   const clauses: string[] = [];
   const params: any[] = [];
-  if (opts.project) { clauses.push('project = ?'); params.push(opts.project); }
-  if (opts.source_chunk_id) { clauses.push('source_chunk_id = ?'); params.push(opts.source_chunk_id); }
+  if (opts.project) { clauses.push('n.project = ?'); params.push(opts.project); }
+  if (opts.source_chunk_id) { clauses.push('n.source_chunk_id = ?'); params.push(opts.source_chunk_id); }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const limit = boundedLimit(opts.limit);
   const offset = boundedOffset(opts.offset);
   const rows = db.prepare(
-    `SELECT id, project, source_chunk_id, summary, artifacts, created_at
-     FROM notes
+    `SELECT n.id, n.project, n.source_chunk_id, n.source_event_id, n.source_external_id,
+            n.source_segment_start, n.source_segment_end, n.source_filter_version, n.source_span_hash,
+            n.summary, n.artifacts, n.created_at, re.content AS source_content
+     FROM notes n
+     LEFT JOIN raw_events re ON re.external_id = n.source_external_id
      ${where}
-     ORDER BY id DESC
+     ORDER BY n.id DESC
      LIMIT ? OFFSET ?`
   ).all(...params, limit, offset) as any[];
   return rows.map(noteListRow);
@@ -1692,9 +1820,12 @@ export function listNotes(opts: NoteListOpts = {}): NoteListRow[] {
 
 export function getNote(id: number): NoteDetailRow | null {
   const row = db.prepare(
-    `SELECT id, project, source_chunk_id, summary, artifacts, created_at
-     FROM notes
-     WHERE id = ?`
+    `SELECT n.id, n.project, n.source_chunk_id, n.source_event_id, n.source_external_id,
+            n.source_segment_start, n.source_segment_end, n.source_filter_version, n.source_span_hash,
+            n.summary, n.artifacts, n.created_at, re.content AS source_content
+     FROM notes n
+     LEFT JOIN raw_events re ON re.external_id = n.source_external_id
+     WHERE n.id = ?`
   ).get(id) as any;
   return row ? noteDetailRow(row) : null;
 }
@@ -1730,9 +1861,12 @@ export function searchNotes(query: string, opts: NoteSearchOpts = {}): NoteSearc
     }
     if (selected.length === 0) return [];
     const get = db.prepare(
-      `SELECT id, project, source_chunk_id, summary, artifacts, created_at
-       FROM notes
-       WHERE id = ?`
+      `SELECT n.id, n.project, n.source_chunk_id, n.source_event_id, n.source_external_id,
+              n.source_segment_start, n.source_segment_end, n.source_filter_version, n.source_span_hash,
+              n.summary, n.artifacts, n.created_at, re.content AS source_content
+       FROM notes n
+       LEFT JOIN raw_events re ON re.external_id = n.source_external_id
+       WHERE n.id = ?`
     );
     return selected.flatMap(match => {
       const row = get.get(match.note_id) as any;
@@ -2054,8 +2188,8 @@ export type UpsertRawEventResult = 'inserted' | 'updated' | 'unchanged';
 function upsertRawEventInner(e: RawEventInput): UpsertRawEventResult {
   const content_hash = getHash(e.content);
   const existing = db.prepare(
-    `SELECT id, content_hash FROM raw_events WHERE external_id = ?`
-  ).get(e.external_id) as { id: number; content_hash: string | null } | undefined;
+    `SELECT id, content, content_hash FROM raw_events WHERE external_id = ?`
+  ).get(e.external_id) as { id: number; content: string; content_hash: string | null } | undefined;
 
   if (!existing) {
     db.prepare(
@@ -2078,14 +2212,15 @@ function upsertRawEventInner(e: RawEventInput): UpsertRawEventResult {
   // Compute + store the hash; if content really matches, return 'unchanged'
   // after writing just the hash (no chunks_virtual clear, no processed reset).
   if (!existing.content_hash) {
-    const current = db.prepare(`SELECT content FROM raw_events WHERE id = ?`).get(existing.id) as any;
-    if (current && current.content === e.content) {
+    if (existing.content === e.content) {
       db.prepare(`UPDATE raw_events SET content_hash = ? WHERE id = ?`).run(content_hash, existing.id);
       return 'unchanged';
     }
   } else if (existing.content_hash === content_hash) {
     return 'unchanged';
   }
+
+  const isPrefixAppend = e.content.startsWith(existing.content);
 
   // Hash differs — re-classify + reset pipeline state. processed=0 so the
   // chunker/ingester sees this as fresh work.
@@ -2101,8 +2236,17 @@ function upsertRawEventInner(e: RawEventInput): UpsertRawEventResult {
     content_hash, existing.id,
   );
 
-  // Clear stale narrative chunks so the chunker re-emits against new content.
-  db.prepare(`DELETE FROM chunks_virtual WHERE source_event_id = ?`).run(existing.id);
+  // Chunk coordinates index raw_events.content. Exact prefix growth leaves all
+  // existing spans valid, so the chunker can append only the new suffix while
+  // retaining stable IDs and processed state. A rewrite invalidates every span.
+  if (isPrefixAppend) {
+    // Project classification may improve as a session grows. Keep the retained
+    // partition in the same project as its raw event and future suffix chunks.
+    db.prepare(`UPDATE chunks_virtual SET project = ? WHERE source_event_id = ?`)
+      .run(e.project, existing.id);
+  } else {
+    db.prepare(`DELETE FROM chunks_virtual WHERE source_event_id = ?`).run(existing.id);
+  }
 
   // Refresh events_fts projection — if this throws, tx rolls back the UPDATE.
   db.prepare(`DELETE FROM events_fts WHERE external_id = ?`).run(e.external_id);

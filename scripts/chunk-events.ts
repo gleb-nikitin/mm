@@ -184,14 +184,39 @@ if (rows.length === 0) {
 
 const markChunked = db.prepare(`UPDATE raw_events SET chunked = 1 WHERE id = ?`);
 const clearExistingChunks = db.prepare(`DELETE FROM chunks_virtual WHERE source_event_id = ?`);
+const existingChunks = db.prepare(
+  `SELECT id, chunk_index, segment_end, processed
+   FROM chunks_virtual
+   WHERE source_event_id = ?
+   ORDER BY chunk_index, id`
+);
+const updateChunkTotal = db.prepare(`UPDATE chunks_virtual SET chunk_total = ? WHERE source_event_id = ?`);
 
 let eventsProcessed = 0;
 let chunksWritten = 0;
 
 const tx = db.transaction(() => {
   for (const row of rows) {
-    const rawSegments = splitOnTurnsWithOffsets(row.content);
-    if (rawSegments.length === 0) continue;
+    const retained = rechunk ? [] : existingChunks.all(row.id) as Array<{
+      id: number;
+      chunk_index: number;
+      segment_end: number;
+      processed: number;
+    }>;
+    const prefixEnd = retained.reduce((max, chunk) => Math.max(max, chunk.segment_end), 0);
+    if (prefixEnd > row.content.length) {
+      throw new Error(`chunks_virtual for event ${row.id} extend beyond raw content`);
+    }
+
+    // Prefix-appended events retain the complete old partition. Both these
+    // offsets and upsertRawEvent's prefix check use raw_events.content; the
+    // narrative filter is applied only when a stored span is read.
+    const suffix = row.content.slice(prefixEnd);
+    const rawSegments = splitOnTurnsWithOffsets(suffix).map(segment => ({
+      start: segment.start + prefixEnd,
+      end: segment.end + prefixEnd,
+    }));
+    if (rawSegments.length === 0 && retained.length === 0) continue;
 
     const segments: Span[] = [];
     for (const seg of rawSegments) {
@@ -201,21 +226,22 @@ const tx = db.transaction(() => {
     }
 
     const groups = groupIntoChunks(segments);
-    const total = groups.length;
+    const total = retained.length + groups.length;
 
-    if (!dryRun) clearExistingChunks.run(row.id);
+    if (!dryRun && rechunk) clearExistingChunks.run(row.id);
+    if (!dryRun && !rechunk && retained.length > 0) updateChunkTotal.run(total, row.id);
 
     for (let i = 0; i < groups.length; i++) {
       const group = groups[i];
       const segmentStart = group[0].start;
       const segmentEnd = group[group.length - 1].end;
       if (dryRun) {
-        console.log(`[dry-run] event ${row.id} chunk ${i + 1}/${total} span=[${segmentStart}, ${segmentEnd}] (${segmentEnd - segmentStart} chars)`);
+        console.log(`[dry-run] event ${row.id} chunk ${retained.length + i + 1}/${total} span=[${segmentStart}, ${segmentEnd}] (${segmentEnd - segmentStart} chars)`);
       } else {
         insertChunkVirtual({
           project: row.project,
           source_event_id: row.id,
-          chunk_index: i + 1,
+          chunk_index: retained.length + i + 1,
           chunk_total: total,
           segment_start: segmentStart,
           segment_end: segmentEnd,

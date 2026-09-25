@@ -1,29 +1,31 @@
 # Devops Handoff
 
-Current task: `zcy`, shipped as three ordered commits. Part (a), notes FTS initialization, passed audit at `zcy-7` and is included in HEAD.
+Current task: `zcy`, shipped as three ordered commits. Part (a) landed as `61b21c9`; part (b) passed audit at `zcy-13` and is included in HEAD.
 
-Part (a) behavior:
-- `initDb()` records named migrations in `schema_migrations` while leaving schema version 15 available for the approved v16 provenance work.
-- Existing databases rebuild `notes_fts` once under an immediate transaction; concurrent readers see the complete old or new index.
-- Fresh databases and a stale-FK repair invalidate the marker and populate the recreated FTS table once.
-- Later `initDb()` calls do not delete or reinsert FTS rows.
-- A failed rebuild rolls back both the delete and partial inserts and leaves the migration unapplied for retry.
-- Normal note creation continues to maintain its own FTS rows transactionally.
+Part (b) behavior:
+- Exact raw-content prefix growth retains every existing chunk ID and processed bit, reconciles retained chunks to the event's current project, and emits only the raw suffix. Non-prefix rewrites and explicit `--rechunk` invalidate queue chunks.
+- Schema v16 snapshots each note's source event/external ID, raw character span, filter version, and SHA-256 span hash. Note reads report `valid`, `stale`, `missing`, or `unresolved` by checking the current raw span.
+- `addNote()` captures provenance atomically with the note. The v15→v16 migration backfills notes whose live chunk remains.
+- `scripts/repair-note-provenance.ts` derives old span text from the backup DB, accepts same-offset matches, uniquely relocates exact spans, and refuses missing/ambiguous spans. Apply mode revalidates inside an immediate transaction.
+- Chunk coordinates, prefix detection, and span hashes all use `raw_events.content`; `filterMechanical` runs only after slicing in `readChunk()`.
 
-Audit/commit scope for `zcy(a)` only:
+Production safety/evidence:
+- Watcher is intentionally stopped; API remains healthy on committed part (a).
+- Pre-repair VACUUM backup exists and passed integrity check: `/Users/glebnikitin/Library/Application Support/com.aurora.core/data/backups/mm-brain-pre-note-provenance-repair-20260925T0355Z.db`.
+- Dry-run against the pre-Codex-backfill DB + saved CSV: 94 rows; 88 resolved (84 same offset, 4 relocated); 6 unresolved (notes 48/57 span not found, notes 78–81 lacked backup coordinates). No repair writes applied.
+
+Audit/commit scope for `zcy(b)` only:
+- `scripts/chunk-events.ts`
+- `scripts/repair-note-provenance.ts`
+- `src/api.ts`
 - `src/core.ts`
 - `tests/behavior.test.ts`
+- `tests/brief.test.ts`
 - `agent/roles/devops/handoff.md`
 
 Verification:
-- Focused schema migration tests: 4 pass, 0 fail, 77 expectations.
-- Full `bun test`: 154 pass, 0 fail, 747 expectations.
-- `bun run typecheck`: passed.
-- `git diff --check`: passed.
+- Focused behavior tests: 25 pass, 0 fail, 216 expectations.
+- Full `bun test`: 163 pass, 0 fail, 818 expectations.
+- `bun run typecheck` and `git diff --check`: passed.
 
-Next after commit:
-- Reload production onto the committed code and verify the migration remains a no-op. The running watcher already loaded the dirty tree before audit and applied the marker at 2026-09-25 03:46:40 UTC; production has 94 notes, 205 valid artifacts, 205 `notes_fts` rows, one marker, and no stale notes FK.
-- Begin `zcy(b)`: prefix-append chunk retention, v16 durable note provenance with span hash, backup-backed repair script, production VACUUM backup, and dry-run evidence.
-- `zcy(c)` remains notes in hybrid retrieval after part (b) lands.
-
-Do not include unrelated work in the commit.
+After commit: migrate production, run repair `--apply`, verify 88 valid / 6 unresolved, restart watcher, then begin `zcy(c)` notes retrieval. Exclude every other dirty path.
