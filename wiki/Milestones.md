@@ -45,3 +45,4 @@
 - **2026-09-25**: fix(notes): migrate FTS rebuild once atomically
 - **2026-09-25**: fix(codex): normalize mixed turns and session identity
 - **2026-09-25**: feat(notes): retain chunks and hash source provenance
+- **2026-09-25**: feat(notes): add notes to hybrid retrieval

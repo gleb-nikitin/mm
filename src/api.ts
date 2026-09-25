@@ -84,9 +84,9 @@ Endpoints:
 - \`/sessions\`: Browse all imported sessions and open session transcripts.
 
 Scoping params:
-- \`source\`: comma-separated source_types (claude, telegram, chains, docs, research, knowledge).
+- \`source\`: comma-separated source_types (claude, telegram, chains, docs, research, knowledge, note).
 - \`project\`: comma-separated project slugs (mm, ac, ...).
-When either filter is set, wiki search is skipped — results come from raw-entry chunks only.
+Source filters select raw/event types plus the special \`wiki\` and \`note\` sources. Project filters apply to raw, event, and note results; compiled wiki pages remain global.
 `;
 
 function parseSearchOpts(url: URL) {
@@ -452,6 +452,12 @@ const serveOptions = {
             : '';
           md += `- [${r.source.toUpperCase()}]${provenance} [[${r.slug || r.title}|${r.title}]] (score: ${r.score.toFixed(3)})\n`;
           md += `  > ${r.snippet.replace(/\n/g, ' ')}\n\n`;
+          if (r.source === 'note') {
+            const source = r.source_provenance_status === 'valid' && r.external_id
+              ? `event:${r.external_id} (characters ${r.source_segment_start}-${r.source_segment_end})`
+              : r.source_provenance_status || 'unresolved';
+            md += `  > Provenance: ${source}\n\n`;
+          }
         });
       }
       return new Response(md, { headers: { "Content-Type": "text/markdown" } });

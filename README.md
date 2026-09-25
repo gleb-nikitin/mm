@@ -61,7 +61,7 @@ Responses are mostly **markdown**. **`GET /`** serves the **web UI** (`ui/index.
 - `GET /` — web UI (Aurora-themed index)
 - `GET /monitor` — Active Agents + R1 Monitor HTML view
 - `GET /stats` — brain health and schema version
-- `GET /search?q=...` — hybrid search (FTS5 + vector + events); optional `source` / `project` filters
+- `GET /search?q=...` — hybrid search (wiki/raw/events/distilled notes, FTS5 + vector); optional `source` / `project` filters (`source=note` selects notes)
 - `GET /query?q=...` — synthesized answer with citations
 - `GET /validate?q=...` — fact-check a specific claim
 - `GET /wiki/:slug` — read a wiki page

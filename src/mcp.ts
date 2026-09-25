@@ -36,7 +36,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             query: { type: "string", description: "The search term." },
             limit: { type: "number", description: "Max results." },
-            source_types: { type: "array", items: { type: "string" }, description: "Optional source filter (e.g. ['claude','docs'])." },
+            source_types: { type: "array", items: { type: "string" }, description: "Optional source filter (e.g. ['claude','docs','note'])." },
             projects:     { type: "array", items: { type: "string" }, description: "Optional project filter (e.g. ['mm','ac'])." }
           },
           required: ["query"],

@@ -506,6 +506,64 @@ describe.serial('hybridSearch — events surface via reserved lane', () => {
   });
 });
 
+describe.serial('hybridSearch — distilled notes join RRF', () => {
+  test.serial('fuses note FTS/vector hits, honors filters, and exposes verified source provenance', async () => {
+    const proc = Bun.spawn(['bun', '-e', `
+      globalThis.fetch = async () => new Response(JSON.stringify({ embedding: [1, 0] }), {
+        headers: { 'content-type': 'application/json' },
+      });
+      const core = await import('${path.join(REPO, 'src', 'core.ts')}');
+      core.initDb();
+      const content = 'User: semantic compass evidence\\n\\nAssistant: captured';
+      core.upsertRawEvent({
+        source_type: 'llm_chat', project: 'mm', external_id: 'evt-note-search',
+        timestamp: '2026-09-25T00:00:00Z', content, title: 'Search source',
+      });
+      const event = core.db.prepare('SELECT id FROM raw_events WHERE external_id = ?').get('evt-note-search');
+      const chunkId = core.insertChunkVirtual({
+        project: 'mm', source_event_id: event.id, chunk_index: 1, chunk_total: 1,
+        segment_start: 0, segment_end: content.length,
+      });
+      const added = core.addNote({
+        source_chunk_id: chunkId,
+        summary: 'The semantic compass keeps retrieval grounded.',
+        artifacts: [{ type: 'decision', title: 'Semantic Compass', body: 'Prefer distilled evidence.' }],
+      });
+      core.db.prepare('UPDATE notes SET embedding = ? WHERE id = ?')
+        .run(Buffer.from(new Float32Array([1, 0]).buffer), added.note_id);
+
+      const all = await core.hybridSearch('semantic compass', 10);
+      const noteOnly = await core.hybridSearch('semantic compass', 10, { sourceTypes: ['note'], projects: ['mm'] });
+      const excluded = await core.hybridSearch('semantic compass', 10, { sourceTypes: ['event'] });
+      const wrongProject = await core.hybridSearch('semantic compass', 10, { sourceTypes: ['note'], projects: ['other'] });
+      core.upsertRawEvent({
+        source_type: 'llm_chat', project: 'mm', external_id: 'evt-note-search',
+        timestamp: '2026-09-25T00:01:00Z', content: 'rewritten source', title: 'Search source',
+      });
+      const stale = await core.hybridSearch('semantic compass', 10, { sourceTypes: ['note'] });
+      console.log(JSON.stringify({ all, noteOnly, excluded, wrongProject, stale }));
+    `], {
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
+      stdout: 'pipe', stderr: 'pipe',
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+    ]);
+    expect(code || 0).toBe(0);
+    expect(stderr).toBe('');
+    const result = JSON.parse(stdout.trim());
+    const note = result.all.find((row: any) => row.source === 'note');
+    expect(note).toBeDefined();
+    expect(note.score).toBeGreaterThan(0.03); // one RRF contribution from each arm
+    expect(note.external_id).toBe('evt-note-search');
+    expect(note.source_provenance_status).toBe('valid');
+    expect(result.noteOnly.map((row: any) => row.source)).toEqual(['note']);
+    expect(result.excluded.some((row: any) => row.source === 'note')).toBe(false);
+    expect(result.wrongProject.some((row: any) => row.source === 'note')).toBe(false);
+    expect(result.stale.find((row: any) => row.source === 'note').source_provenance_status).toBe('stale');
+  });
+});
+
 // ---------- /active endpoint shape ----------
 
 describe.serial('GET /active markdown shape', () => {

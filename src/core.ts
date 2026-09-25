@@ -693,11 +693,17 @@ export type SearchResult = {
   title: string;
   score: number;
   snippet: string;
-  source: 'wiki' | 'raw' | 'event';
+  source: 'wiki' | 'raw' | 'event' | 'note';
   source_type?: string;
   project?: string;
   external_id?: string;
+  note_id?: number;
+  source_segment_start?: number | null;
+  source_segment_end?: number | null;
+  source_provenance_status?: NoteProvenanceStatus;
 };
+
+export type NoteProvenanceStatus = 'valid' | 'stale' | 'missing' | 'unresolved';
 
 export type SearchOpts = {
   sourceTypes?: string[];
@@ -761,6 +767,35 @@ function applyEventLane(results: SearchResult[], limit: number): SearchResult[] 
   return selected;
 }
 
+function noteProvenanceStatus(row: any): NoteProvenanceStatus {
+  if (
+    !row.source_external_id
+    || !Number.isInteger(row.source_segment_start)
+    || !Number.isInteger(row.source_segment_end)
+    || !row.source_span_hash
+  ) return 'unresolved';
+  if (typeof row.source_content !== 'string') return 'missing';
+  const currentSpan = row.source_content.slice(row.source_segment_start, row.source_segment_end);
+  return getHash(currentSpan) === row.source_span_hash ? 'valid' : 'stale';
+}
+
+function noteSearchResult(row: any, title: string, text: string): SearchResult {
+  return {
+    slug: null,
+    title,
+    score: 0,
+    snippet: text.length > 400 ? `${text.substring(0, 400)}...` : text,
+    source: 'note',
+    source_type: 'note',
+    project: row.project || undefined,
+    external_id: row.source_external_id || undefined,
+    note_id: row.note_id,
+    source_segment_start: row.source_segment_start ?? null,
+    source_segment_end: row.source_segment_end ?? null,
+    source_provenance_status: noteProvenanceStatus(row),
+  };
+}
+
 export async function hybridSearch(query: string, limit: number = 10, opts: SearchOpts = {}): Promise<SearchResult[]> {
   const sourceTypes = opts.sourceTypes && opts.sourceTypes.length > 0 ? opts.sourceTypes : null;
   const projects    = opts.projects    && opts.projects.length    > 0 ? opts.projects    : null;
@@ -772,7 +807,10 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
   const hasEmbeddedChunks = (db.prepare(
     `SELECT 1 FROM chunks WHERE embedding IS NOT NULL LIMIT 1`
   ).get() as unknown) !== null;
-  const queryEmbedding = hasEmbeddedChunks ? await embed(query) : null;
+  const hasEmbeddedNotes = (db.prepare(
+    `SELECT 1 FROM notes WHERE embedding IS NOT NULL LIMIT 1`
+  ).get() as unknown) !== null;
+  const queryEmbedding = hasEmbeddedChunks || hasEmbeddedNotes ? await embed(query) : null;
 
   // FTS runs over the wiki search_index. Skip only when source_types is set
   // and 'wiki' is not among them; project filters don't apply to wiki pages.
@@ -780,6 +818,34 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
   const ftsResults: any[] = wikiExcluded
     ? []
     : db.prepare(`SELECT slug, title, content, bm25(search_index) as rank FROM search_index WHERE search_index MATCH ? ORDER BY rank LIMIT 50`).all(ftsQuery) as any[];
+
+  // Distilled notes are their own retrieval source. Source filters use the
+  // literal `note`; project filters apply to the note's project.
+  const notesExcluded = sourceTypes !== null && !sourceTypes.includes('note');
+  let noteFtsResults: any[] = [];
+  if (!notesExcluded) {
+    let noteFtsSql = `SELECT nf.note_id, nf.title, nf.body, nf.summary, n.artifacts,
+                             n.project, n.source_external_id, n.source_segment_start,
+                             n.source_segment_end, n.source_span_hash,
+                             re.content AS source_content, bm25(notes_fts) AS rank
+                      FROM notes_fts nf
+                      JOIN notes n ON n.id = nf.note_id
+                      LEFT JOIN raw_events re ON re.external_id = n.source_external_id
+                      WHERE notes_fts MATCH ?`;
+    const noteFtsParams: any[] = [ftsQuery];
+    if (projects) {
+      noteFtsSql += ` AND n.project IN (${projects.map(() => '?').join(',')})`;
+      noteFtsParams.push(...projects);
+    }
+    noteFtsSql += ` ORDER BY rank LIMIT 50`;
+    const seen = new Set<number>();
+    noteFtsResults = (db.prepare(noteFtsSql).all(...noteFtsParams) as any[])
+      .filter(row => {
+        if (seen.has(row.note_id)) return false;
+        seen.add(row.note_id);
+        return true;
+      });
+  }
 
   let vectorResults: any[] = [];
   if (queryEmbedding) {
@@ -828,6 +894,28 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
     }).sort((a, b) => b.cos_score - a.cos_score).slice(0, 50);
   }
 
+  let noteVectorResults: any[] = [];
+  if (queryEmbedding && !notesExcluded) {
+    const queryBuffer = Buffer.from(queryEmbedding.buffer);
+    let noteVectorSql = `SELECT n.id AS note_id, n.summary, n.artifacts, n.embedding,
+                                n.project, n.source_external_id, n.source_segment_start,
+                                n.source_segment_end, n.source_span_hash,
+                                re.content AS source_content
+                         FROM notes n
+                         LEFT JOIN raw_events re ON re.external_id = n.source_external_id
+                         WHERE n.embedding IS NOT NULL`;
+    const noteVectorParams: any[] = [];
+    if (projects) {
+      noteVectorSql += ` AND n.project IN (${projects.map(() => '?').join(',')})`;
+      noteVectorParams.push(...projects);
+    }
+    const notes = db.prepare(noteVectorSql).all(...noteVectorParams) as any[];
+    noteVectorResults = notes.map(note => ({
+      ...note,
+      cos_score: cosine_sim(note.embedding, queryBuffer),
+    })).sort((a, b) => b.cos_score - a.cos_score).slice(0, 50);
+  }
+
   // Events FTS — raw-tier provenance-scoped streaming data (sessions, chains).
   // Always participates; honors source_type and project filters when set.
   let eventSql = `SELECT external_id, title, content, source_type, project, bm25(events_fts) as rank
@@ -857,6 +945,15 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
     rrfScores.get(uid)!.score += score;
   });
 
+  noteFtsResults.forEach((r, index) => {
+    const uid = `note:${r.note_id}`;
+    const score = 1 / (60 + index + 1);
+    if (!rrfScores.has(uid)) {
+      rrfScores.set(uid, noteSearchResult(r, r.title || `Note ${r.note_id}`, [r.summary, r.body].filter(Boolean).join('\n')));
+    }
+    rrfScores.get(uid)!.score += score;
+  });
+
   vectorResults.forEach((r, index) => {
     const uid = getUid(r.owner_type, r.page_slug, r.raw_id);
     const score = 1 / (60 + index + 1);
@@ -874,6 +971,16 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
     const current = rrfScores.get(uid)!;
     current.score += score;
     if (index === 0 || current.snippet.length > 300) current.snippet = r.text;
+  });
+
+  noteVectorResults.forEach((r, index) => {
+    const uid = `note:${r.note_id}`;
+    const score = 1 / (60 + index + 1);
+    if (!rrfScores.has(uid)) {
+      const artifacts = parseNoteArtifacts(r.artifacts);
+      rrfScores.set(uid, noteSearchResult(r, artifacts[0]?.title || `Note ${r.note_id}`, r.summary));
+    }
+    rrfScores.get(uid)!.score += score;
   });
 
   eventResults.forEach((r, index) => {
@@ -984,12 +1091,16 @@ export async function runGeminiInteractive(prompt: string, yolo: boolean = false
 }
 
 export async function queryBrain(question: string, opts: SearchOpts = {}) {
-  const hasEmbeddings = (db.prepare('SELECT COUNT(*) as count FROM chunks WHERE embedding IS NOT NULL').get() as any).count > 0;
+  const hasHybridData = (db.prepare(
+    `SELECT EXISTS(SELECT 1 FROM chunks WHERE embedding IS NOT NULL)
+          OR EXISTS(SELECT 1 FROM notes) AS present`
+  ).get() as any).present > 0;
   let context = "";
-  if (hasEmbeddings) {
+  if (hasHybridData) {
     const results = await hybridSearch(question, 10, opts);
     const wikiHits = results.filter(r => r.source === 'wiki');
     const rawHits = results.filter(r => r.source === 'raw');
+    const noteHits = results.filter(r => r.source === 'note');
     if (wikiHits.length > 0) {
       context += "## RELEVANT WIKI PAGES\n\n";
       for (let i = 0; i < Math.min(wikiHits.length, 3); i++) {
@@ -1002,6 +1113,16 @@ export async function queryBrain(question: string, opts: SearchOpts = {}) {
     if (rawHits.length > 0) {
       context += "\n## RAW EVIDENCE\n\n";
       for (let i = 0; i < Math.min(rawHits.length, 5); i++) context += `### ${rawHits[i].title}\n${rawHits[i].snippet}\n---\n`;
+    }
+    if (noteHits.length > 0) {
+      context += "\n## DISTILLED NOTES\n\n";
+      for (let i = 0; i < Math.min(noteHits.length, 5); i++) {
+        const note = noteHits[i];
+        const provenance = note.source_provenance_status === 'valid' && note.external_id
+          ? `Source: event:${note.external_id} (characters ${note.source_segment_start}-${note.source_segment_end})`
+          : `Source provenance: ${note.source_provenance_status || 'unresolved'}; do not cite as current evidence.`;
+        context += `### ${note.title}\n${note.snippet}\n${provenance}\n---\n`;
+      }
     }
   } else {
     const results = db.prepare('SELECT slug, title FROM search_index WHERE search_index MATCH ? LIMIT 5').all(`"${question}"`) as any[];
@@ -1026,6 +1147,11 @@ export async function validateClaim(claim: string, opts: SearchOpts = {}) {
     if (r.source === 'wiki' && r.slug) {
       const body = fs.readFileSync(path.join(PATHS.wiki, `${r.slug}.md`), 'utf-8');
       context += `### [[${r.slug}|${r.title}]]\n${body}\n---\n`;
+    } else if (r.source === 'note') {
+      const provenance = r.source_provenance_status === 'valid' && r.external_id
+        ? `Source: event:${r.external_id} (characters ${r.source_segment_start}-${r.source_segment_end})`
+        : `Source provenance: ${r.source_provenance_status || 'unresolved'}; do not cite as current evidence.`;
+      context += `### ${r.title}\n${r.snippet}\n${provenance}\n---\n`;
     } else {
       context += `### ${r.title}\n${r.snippet}\n---\n`;
     }
@@ -1372,7 +1498,7 @@ export type NoteListRow = {
   source_segment_end: number | null;
   source_filter_version: number | null;
   source_span_hash: string | null;
-  source_provenance_status: 'valid' | 'stale' | 'missing' | 'unresolved';
+  source_provenance_status: NoteProvenanceStatus;
   summary: string;
   artifact_count: number;
   created_at: string;
@@ -1439,20 +1565,6 @@ function parseNoteArtifacts(raw: string | null | undefined): NoteArtifactInput[]
 
 function noteListRow(row: any): NoteListRow {
   const artifacts = parseNoteArtifacts(row.artifacts);
-  let sourceProvenanceStatus: NoteListRow['source_provenance_status'] = 'unresolved';
-  if (
-    row.source_external_id
-    && Number.isInteger(row.source_segment_start)
-    && Number.isInteger(row.source_segment_end)
-    && row.source_span_hash
-  ) {
-    if (typeof row.source_content !== 'string') {
-      sourceProvenanceStatus = 'missing';
-    } else {
-      const currentSpan = row.source_content.slice(row.source_segment_start, row.source_segment_end);
-      sourceProvenanceStatus = getHash(currentSpan) === row.source_span_hash ? 'valid' : 'stale';
-    }
-  }
   return {
     id: row.id,
     project: row.project,
@@ -1463,7 +1575,7 @@ function noteListRow(row: any): NoteListRow {
     source_segment_end: row.source_segment_end ?? null,
     source_filter_version: row.source_filter_version ?? null,
     source_span_hash: row.source_span_hash ?? null,
-    source_provenance_status: sourceProvenanceStatus,
+    source_provenance_status: noteProvenanceStatus(row),
     summary: row.summary,
     artifact_count: artifacts.length,
     created_at: row.created_at,
