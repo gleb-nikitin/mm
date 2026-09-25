@@ -14,8 +14,8 @@ import { resolveParticipantIdsWithStatus } from './core';
 import {
   codexFirstTurnBoundary,
   identifyCodexSessionId,
-  isCodexInjectedUserContext,
   resolveCodexSessionRoots,
+  selectCodexCurrentUserRecords,
   selectCodexSessionWinners,
   type CodexSessionCandidate,
 } from './codex-sessions';
@@ -252,7 +252,7 @@ function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): Co
 
   let cwd: string | null = null;
   let model: string | null = null;
-  const legacyUsers: { timestamp: string; text: string }[] = [];
+  const legacyUsers: { timestamp: string; text: string; recordIndex: number }[] = [];
   const currentUsers: { timestamp: string; text: string; explicitlyUserAuthored: boolean; recordIndex: number }[] = [];
   let latestTs = '';
   let latestText: string | null = null;
@@ -296,7 +296,7 @@ function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): Co
     if (recordType === 'event_msg' && payload.type === 'user_message') {
       const text = typeof payload.message === 'string' ? payload.message.trim() : '';
       if (text) {
-        legacyUsers.push({ timestamp: ts, text });
+        legacyUsers.push({ timestamp: ts, text, recordIndex });
       }
       continue;
     }
@@ -327,7 +327,6 @@ function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): Co
     }
   }
 
-  const legacyKeys = new Set(legacyUsers.map(user => `${user.timestamp}\0${user.text}`));
   const firstTurnBoundary = codexFirstTurnBoundary(
     firstCurrentUserRecord,
     firstTaskStartedRecord,
@@ -335,14 +334,7 @@ function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): Co
   );
   const selectedUsers = [
     ...legacyUsers,
-    ...currentUsers.filter(user => {
-      if (legacyKeys.has(`${user.timestamp}\0${user.text}`)) return false;
-      if (legacyUsers.length > 0 && !user.explicitlyUserAuthored) return false;
-      return user.explicitlyUserAuthored || !isCodexInjectedUserContext(
-        user.text,
-        firstTurnBoundary >= 0 && user.recordIndex < firstTurnBoundary,
-      );
-    }),
+    ...selectCodexCurrentUserRecords(legacyUsers, currentUsers, firstTurnBoundary),
   ];
   for (const user of selectedUsers) {
     if (!latestTs || user.timestamp >= latestTs) {

@@ -43,3 +43,4 @@
 - **2026-09-25**: fix(codex): retain first session metadata identity
 - **2026-09-25**: docs(cto): capture coordination and backup lessons
 - **2026-09-25**: fix(notes): migrate FTS rebuild once atomically
+- **2026-09-25**: fix(codex): normalize mixed turns and session identity

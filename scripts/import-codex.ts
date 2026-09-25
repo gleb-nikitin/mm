@@ -24,9 +24,9 @@ import { initDb, db, upsertRawEvent } from '../src/core.ts';
 import {
   codexFirstTurnBoundary,
   codexRootPriorityForPath,
-  isCodexInjectedUserContext,
-  readCodexSessionId,
+  identifyCodexSessionId,
   resolveCodexSessionRoots,
+  selectCodexCurrentUserRecords,
   selectCodexSessionWinners,
 } from '../src/codex-sessions.ts';
 import { findRawEventIdByExternalId, recordSessionObservation, recordSessionUsage, refreshStoredSessionStates } from '../src/r1/session-index.ts';
@@ -204,15 +204,14 @@ function extractReasoningText(summary: any): string {
   return parts.join('\n\n');
 }
 
-function parseRolloutFile(filePath: string, includeThinking: boolean): Session | null {
+function parseRolloutFile(filePath: string, includeThinking: boolean, sessionId: string): Session {
   const content = fs.readFileSync(filePath, 'utf-8');
   const lines = content.split('\n');
 
-  let sessionId: string | null = null;
   let cwd: string | null = null;
   let model: string | null = null;
   const turns: Turn[] = [];
-  const legacyUserTurns: Turn[] = [];
+  const legacyUserTurns: { turn: Turn; recordIndex: number }[] = [];
   const currentUserTurns: { turn: Turn; explicitlyUserAuthored: boolean; recordIndex: number }[] = [];
   const pendingThinking: Block[] = [];
   let recordIndex = -1;
@@ -241,7 +240,6 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
     const payload = rec?.payload || {};
 
     if (recordType === 'session_meta') {
-      if (!sessionId && typeof payload.id === 'string' && payload.id) sessionId = payload.id;
       if (typeof payload.cwd === 'string' && payload.cwd) cwd = payload.cwd;
       if (typeof payload.model === 'string' && payload.model) model = payload.model;
       continue;
@@ -264,9 +262,12 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
       if (message) {
         flushPendingThinking();
         legacyUserTurns.push({
-          role: 'user',
-          timestamp,
-          blocks: [{ kind: 'text', text: message }],
+          turn: {
+            role: 'user',
+            timestamp,
+            blocks: [{ kind: 'text', text: message }],
+          },
+          recordIndex,
         });
       }
       continue;
@@ -316,25 +317,26 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
     }
   }
 
-  if (!sessionId) return null;
-  const legacyKeys = new Set(legacyUserTurns.map(turn => `${turn.timestamp}\0${turn.blocks[0]?.text ?? ''}`));
   const firstTurnBoundary = codexFirstTurnBoundary(
     firstCurrentUserRecord,
     firstTaskStartedRecord,
     firstTurnContextRecord,
   );
-  turns.push(...legacyUserTurns);
-  for (const current of currentUserTurns) {
-    const key = `${current.turn.timestamp}\0${current.turn.blocks[0]?.text ?? ''}`;
-    if (legacyKeys.has(key)) continue;
-    if (legacyUserTurns.length > 0 && !current.explicitlyUserAuthored) continue;
-    if (
-      !current.explicitlyUserAuthored
-      && isCodexInjectedUserContext(
-        current.turn.blocks[0]?.text ?? '',
-        firstTurnBoundary >= 0 && current.recordIndex < firstTurnBoundary,
-      )
-    ) continue;
+  turns.push(...legacyUserTurns.map(user => user.turn));
+  const selectedCurrentUsers = selectCodexCurrentUserRecords(
+    legacyUserTurns.map(user => ({
+      timestamp: user.turn.timestamp,
+      text: user.turn.blocks[0]?.text ?? '',
+      recordIndex: user.recordIndex,
+    })),
+    currentUserTurns.map(user => ({
+      ...user,
+      timestamp: user.turn.timestamp,
+      text: user.turn.blocks[0]?.text ?? '',
+    })),
+    firstTurnBoundary,
+  );
+  for (const current of selectedCurrentUsers) {
     turns.push(current.turn);
   }
   turns.sort((a, b) => (a.timestamp > b.timestamp ? 1 : a.timestamp < b.timestamp ? -1 : 0));
@@ -400,7 +402,7 @@ async function main() {
         continue;
       }
       try {
-        const sessionId = readCodexSessionId(filePath);
+        const sessionId = identifyCodexSessionId(filePath);
         if (sessionId) {
           identifiedCandidates.push({
             sessionId,
@@ -480,7 +482,7 @@ async function main() {
     const { sourcePath: filePath, mtimeMs, rootPriority } = candidate;
     let session: Session | null;
     try {
-      session = parseRolloutFile(filePath, flags.includeThinking);
+      session = parseRolloutFile(filePath, flags.includeThinking, candidate.sessionId);
     } catch (error: any) {
       errored++;
       console.error(`Codex rollout parse error: ${filePath} (${error?.message ?? 'unknown error'})`);

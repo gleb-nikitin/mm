@@ -460,6 +460,51 @@ describe('getActiveAgentsLive', () => {
     expect(rows).toHaveLength(0);
   });
 
+  test('codex: mixed formats keep a distinct turn and collapse an adjacent skewed duplicate', () => {
+    const codexDir = path.join(probeTmp, 'codex-mixed-transition');
+    const sessionFile = path.join(codexDir, '2026-04-22', 'rollout.jsonl');
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    const now = Date.now();
+    fs.writeFileSync(sessionFile, [
+      { type: 'session_meta', timestamp: new Date(now).toISOString(), payload: { id: 'sess-codex-mixed-transition', cwd: '/test-cwd/mm', model: 'gpt-5' } },
+      { type: 'response_item', timestamp: new Date(now + 1).toISOString(), payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'future host bootstrap shape' }] } },
+      { type: 'event_msg', timestamp: new Date(now + 2).toISOString(), payload: { type: 'task_started' } },
+      { type: 'response_item', timestamp: new Date(now + 10).toISOString(), payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'legacy prompt' }] } },
+      { type: 'event_msg', timestamp: new Date(now + 20).toISOString(), payload: { type: 'user_message', message: 'legacy prompt' } },
+      { type: 'response_item', timestamp: new Date(now + 30).toISOString(), payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'distinct transition prompt' }] } },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+
+    const rows = getActiveAgentsLive({
+      claudeProjectsDir: path.join(probeTmp, 'nope-claude'),
+      codexSessionsDir: codexDir,
+      geminiSessionsDir: path.join(probeTmp, 'nope-gemini'),
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].external_id).toBe('sess-codex-mixed-transition');
+    expect(rows[0].last_user_snippet).toBe('distinct transition prompt');
+  });
+
+  test('codex: filename UUID identifies a rollout with unreadable session metadata', () => {
+    const codexDir = path.join(probeTmp, 'codex-filename-fallback');
+    const sessionId = '01a095ee-d2ad-7283-8398-90b17447b415';
+    const sessionFile = path.join(codexDir, '2026-04-22', `rollout-${sessionId}.jsonl`);
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(sessionFile, [
+      '{malformed session metadata}',
+      JSON.stringify({ type: 'turn_context', timestamp: new Date().toISOString(), payload: { cwd: '/test-cwd/mm', model: 'gpt-5' } }),
+      JSON.stringify({ type: 'event_msg', timestamp: new Date().toISOString(), payload: { type: 'user_message', message: 'first prompt' } }),
+      JSON.stringify({ type: 'event_msg', timestamp: new Date().toISOString(), payload: { type: 'user_message', message: 'second prompt' } }),
+    ].join('\n') + '\n');
+
+    const rows = getActiveAgentsLive({
+      claudeProjectsDir: path.join(probeTmp, 'nope-claude'),
+      codexSessionsDir: codexDir,
+      geminiSessionsDir: path.join(probeTmp, 'nope-gemini'),
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].external_id).toBe(sessionId);
+  });
+
   test('gemini: confirmation test — one row from JSON session file', () => {
     const geminiDir = path.join(probeTmp, 'gemini');
     writeGeminiSession(geminiDir, 'mm', 'session-g1.json',
