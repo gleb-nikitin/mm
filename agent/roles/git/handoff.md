@@ -1,15 +1,17 @@
 # Handoff — mm_git
 
 ## Current Status
-- No active task after chain `zcg-1`.
-- Current HEAD contains the CTO note about duplicate session rollouts after data-directory moves; use `git log -1` for its SHA.
-- No push, PR, or remote operation occurred.
+- No active task after chain `zcv-5` completes.
+- Current HEAD contains the mm-native git role workflow adapted from the read-only `ac` donor.
+- Chain `zcv-5` authorizes immediate PR publication through the role-local helper.
 
 ## Included in HEAD
-- The CTO knowledge base records that moved Codex data directories can leave stale duplicate session IDs behind and require deterministic winner selection during import.
-- The same note records the verified supervisor behavior that makes bare `bun` safe in plugin child processes.
-- This handoff and the automated milestone entry are included; no product documentation changes were needed for the role-note-only update.
+- Compact role, procedures, and branch-flow docs distinguish work, integration, and publish branches.
+- Commit helpers retain milestone automation while adding detached-HEAD refusal, explicit staging, safety filters, and version-free attribution.
+- Publish, direct-push, merge-cleanup, review-check, branch-report, and helper-test scripts are available under `agent/roles/git/`.
+- Preflight reports `origin/main`, unpushed commits, active publish anchors, and relevant Codex review comments.
 
 ## Verification
-- The documentation diff passed whitespace checks before commit.
-- HEAD, empty stash state, and final tree cleanliness were verified after the sweep commit.
+- All role shell scripts passed `bash -n`; commit helpers passed disposable-repository behavioral tests.
+- The donor repository remained untouched.
+- HEAD, stash state, and tree cleanliness are verified before PR publication; the publish helper returns to clean local `main`.
