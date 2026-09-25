@@ -13,11 +13,16 @@ Files live under `raw/<source_type>/<project>/<timestamp>.md`. Filters at query 
 
 The current session importers — **`scripts/import-claude.ts`**, **`import-codex.ts`**, **`import-gemini.ts`** — read JSONL/JSON under the vendor’s app directories (`~/.claude/projects`, `~/.codex/sessions`, `~/.gemini/tmp`, …). They insert **one row per session** into **`raw_events`** and **`events_fts`**, update **`import_state`** for the Active Agents dashboard, and upsert **`session_index`** / **`session_message_links`** / **`session_usage`** for R1 session observability and cost attribution. They **do not** write markdown under `raw/claude/...` by default.
 
+On normal reruns, unchanged settled files are not reparsed. At most once per 30 seconds per vendor, every existing `session_index` row is checked from its stored transcript timestamp plus current Aurora active/retired link provenance, including rows older than the scan’s `--days` window. This lets `working` age to `idle` and Valhalla-retired sessions become `completed` without a transcript write; unchanged rows are not rewritten. `MT_R1_STATE_REFRESH_SECONDS` overrides the interval when operational testing needs a different cadence.
+
 Session cost attribution uses token counts extracted from the vendor transcript and rates from operator-editable **`pricing.toml`**. Re-running an importer recomputes the `session_usage` row from the current transcript rather than accumulating old totals.
 
 `raw_events.external_id` is vendor-prefixed (`claude:<session_id>`, `codex:<session_id>`, `gemini:<session_id>`) so global uniqueness survives cross-vendor session-id collisions. `import_state.external_id` intentionally remains the raw vendor session id because `/active` and ac `participants.active_session_id` matching depend on that raw id.
 
 ```sh
+# Required outside the Aurora supervisor; use the path for your installation.
+export MT_AC_DB_PATH="$HOME/Library/Application Support/com.aurora.core/data/msg.db"
+
 # Default: last 30 days, min user turns, no thinking blocks, etc.
 bun scripts/import-claude.ts
 

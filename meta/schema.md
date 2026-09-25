@@ -12,7 +12,7 @@ The agent should treat markdown as the source of truth. SQLite is an index and j
 
 ## SQLite Operational Tables
 
-`schema_version` is currently `14`.
+`schema_version` is currently `15`.
 
 Session transcript importers write one `raw_events` row per vendor session with a vendor-prefixed `external_id` such as `claude:<session_id>`, `codex:<session_id>`, or `gemini:<session_id>`. `import_state.external_id` keeps the raw vendor session id so the Active Agents surface and ac `participants.active_session_id` matching remain compatible.
 
@@ -24,6 +24,16 @@ R1 session tracking adds four derived tables:
 - `session_events`: durable state-transition stream for session lifecycle events, replayable over `/api/v1/sessions/events` and filtered through `session_index` project/role linkage.
 
 Existing DBs can populate these tables and migrate old unprefixed `raw_events.external_id` values in place with `bun scripts/backfill-r1.ts`.
+
+## Distilled notes
+
+Schema v15 adds an additive note surface for the intent-driven librarian flow:
+
+- `notes`: one note per `(project, source_chunk_id)` where `source_chunk_id` records the consumed `chunks_virtual.id`, with a short `summary`, JSON `artifacts` array, and nullable `embedding`. It intentionally does not foreign-key to `chunks_virtual`: queued chunk rows are deleted and recreated when imported raw events grow.
+- `note_title_hashes`: per-artifact normalized title hashes for project-local deduplication.
+- `notes_fts`: FTS5 projection over `notes.summary` and each artifact's title/body.
+
+`brain note add` inserts notes from JSON on stdin. It does not compute embeddings synchronously; the existing `brain embed` batch path fills `notes.embedding` from the summary using `nomic-embed-text`.
 
 ## Raw-entry provenance
 

@@ -9,6 +9,9 @@ set -u
 
 cd "$(dirname "$0")"
 export PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+# mm no longer guesses ac's database location. Operator scripts declare it;
+# library code never falls back. Override by exporting before running.
+export MT_AC_DB_PATH="${MT_AC_DB_PATH:-$HOME/Library/Application Support/com.aurora.core/data/msg.db}"
 
 if ! command -v bun >/dev/null 2>&1; then
   echo "✗ bun not found on PATH."

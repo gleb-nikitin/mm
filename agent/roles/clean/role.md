@@ -12,9 +12,10 @@ Your role folder is `agent/roles/clean/`.
 
 - `agent/roles/clean/role.md` — this file
 - `agent/roles/clean/soul.md` — portable seeds
-- `agent/roles/clean/handoff.md` — current sharp edges
+- `agent/roles/clean/state.md` — current sharp edges (rewrite on handoff)
+- `agent/roles/clean/set.md` — provider/transport config reference; consult before any `upsert_participant` or `via`-flip
 
-On session start: read `agent/roles/global.md`, then `soul.md`, then `handoff.md` from your role folder.
+On session start: read `soul.md`, then `state.md` from your role folder.
 
 ## Mission
 

@@ -20,3 +20,18 @@
 - **2026-05-03**: feat(api): support configurable base-path for UI and API
 - **2026-05-03**: feat(api/ui): support configurable base-path for plugin integration
 - **2026-05-03**: chore: scrub user-coupled paths and gitignore session content for public push
+- **2026-05-05**: feat(brain): add distilled notes surface
+- **2026-05-06**: feat(notes): add browser UI and API
+- **2026-08-26**: chore(ops): refresh agent workflows and pricing data
+- **2026-08-26**: fix(r1): make session reconciliation provenance-safe
+- **2026-08-26**: fix(git): correct attribution and clean-stop handoff
+- **2026-08-27**: fix(ac-db): centralize resolution and expose status
+- **2026-08-27**: docs(roles): refresh cto notes and devops handoff
+- **2026-08-27**: docs(roles): remove dangling global-doc references
+- **2026-08-27**: chore(deps): move type tooling to dev dependencies
+- **2026-08-27**: docs(roles): capture dependency landing handoffs
+- **2026-08-27**: fix(roles): make devops handoff clean-stop safe
+- **2026-08-27**: fix(librarian): report dirty tree after runs
+- **2026-09-12**: fix(plugin): point managed processes at Aurora data database
+- **2026-09-23**: docs(cto): capture moved data-directory import hazards
+- **2026-09-25**: feat(git): add guarded publish workflow

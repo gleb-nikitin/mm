@@ -13,6 +13,7 @@ import {
   backfillClaimsFromTimeline, backfillClaimsFromTimelineEvent, refreshSourceCount,
   walkWiki, wikiPath,
   batchArtifacts, listArtifacts, listArtifactKeys, searchArtifacts, supersedeArtifact, bumpCorrection,
+  addNote, NoteValidationError,
   readChunk, queueChunks, markChunkProcessed, vacuumBackup,
   getBrief, renderBrief,
   type ArtifactInput,
@@ -524,7 +525,7 @@ program.command('embed').description('Embed brain content').option('--all', 'Re-
   console.log('🧠 Generating Embeddings...');
   const ollamaCheck = await fetch('http://localhost:11434/api/tags').catch(() => null);
   if (!ollamaCheck || !ollamaCheck.ok) { console.error('❌ Ollama not running at localhost:11434'); process.exit(1); }
-  if (options.all) { db.run('DELETE FROM chunks'); } 
+  if (options.all) { db.run('DELETE FROM chunks'); db.run('UPDATE notes SET embedding = NULL'); }
   else if (slug) db.prepare('DELETE FROM chunks WHERE page_slug = ? AND owner_type = "wiki"').run(slug);
   const res = await embedBrain(slug);
   console.log(`\n✅ Embedded ${res.count} chunks.`);
@@ -677,6 +678,37 @@ artifactCmd.command('bump-correction')
   .action((id) => {
     const row = bumpCorrection(parseInt(id, 10));
     console.log(JSON.stringify({ id: row.id, count: (row.data as any).count, last_seen: (row.data as any).last_seen }, null, 2));
+  });
+
+const noteCmd = program.command('note');
+
+noteCmd.command('add')
+  .description('Insert a distilled note from JSON on stdin; embeddings are populated later by brain embed.')
+  .action(async () => {
+    const raw = await readAllStdin();
+    if (!raw.trim()) {
+      console.error(JSON.stringify({ error: 'empty_stdin' }));
+      process.exit(1);
+    }
+    let input: unknown;
+    try {
+      input = JSON.parse(raw);
+    } catch (e: any) {
+      console.error(JSON.stringify({ error: 'invalid_json', message: e.message }));
+      process.exit(1);
+      return;
+    }
+    try {
+      const result = addNote(input);
+      console.log(JSON.stringify(result, null, 2));
+    } catch (e: any) {
+      if (e instanceof NoteValidationError) {
+        console.error(JSON.stringify(e.payload));
+      } else {
+        console.error(JSON.stringify({ error: 'note_add_failed', message: e.message || String(e) }));
+      }
+      process.exit(1);
+    }
   });
 
 const chunkCmd = program.command('chunk');

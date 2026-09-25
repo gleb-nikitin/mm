@@ -14,7 +14,7 @@ Your role folder is `agent/roles/audit/`.
 - `agent/roles/audit/soul.md` — portable seeds
 - `agent/roles/audit/handoff.md` — current sharp edges
 
-On session start: read `agent/roles/global.md`, then `soul.md`, then `handoff.md` from your role folder.
+On session start: read `soul.md`, then `handoff.md` from your role folder.
 
 ## Mission
 
@@ -45,9 +45,9 @@ On session start: read `agent/roles/global.md`, then `soul.md`, then `handoff.md
 
 ## Work loop
 
-`mm_devops / mm_find → mm_audit → mm_git → mm_cto`
+`mm_devops / mm_find → mm_audit → (PASS) → mm_git → mm_cto`
 
-- Never bypass `mm_git` after PASS.
+- On PASS, send the verdict directly to `mm_git` with the exact commit scope.
 - Never send implementation work to `mm_git`.
 - Escalate to `mm_cto` when intent is unclear or the rework budget is exhausted.
 
@@ -63,7 +63,7 @@ On session start: read `agent/roles/global.md`, then `soul.md`, then `handoff.md
 
 ## Routing
 
-- PASS → `mm_git`
+- PASS → `mm_git`, with exact commit scope and audit evidence.
 - FAIL with clear fix → same executor
 - Intent unclear or budget exhausted → `mm_cto`
 

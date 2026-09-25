@@ -16,6 +16,7 @@ import {
   SESSION_EVENT_CATCHUP_INTERVAL_MS,
   subscribeSessionEvents,
 } from './session-events.ts';
+import { resolveAcDbPath } from '../ac-db.ts';
 import type { ApiError, CostBreakdown, SessionEventRow, SessionIndexRow, SessionState, SessionUsage, Vendor } from './types.ts';
 
 const STATES: readonly SessionState[] = ['working', 'idle', 'wedged', 'completed', 'orphan'];
@@ -33,10 +34,10 @@ class ValidationError extends Error {
   }
 }
 
-export function json(body: unknown, status = 200): Response {
+export function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
   });
 }
 
@@ -399,10 +400,12 @@ export function handleActiveSessions(url: URL): Response {
     const sessions = fields === 'full'
       ? rows.map(rowToActiveSession)
       : rows.map(row => rowToCompactSession(row, now));
+    const acDbStatus = resolveAcDbPath();
     return json({
       sessions,
       generated_at: generatedAt.toISOString(),
-    });
+      ac_db: acDbStatus,
+    }, 200, { 'X-MM-AC-DB-Status': acDbStatus.status });
   } catch (error) {
     if (error instanceof ValidationError) {
       return apiError('validation', error.message, error.details ?? {}, 400);
@@ -608,10 +611,12 @@ export function handleActiveTokens(url: URL): Response {
         };
       });
 
+    const acDbStatus = resolveAcDbPath();
     return json({
       participants,
       generated_at: generatedAt.toISOString(),
-    });
+      ac_db: acDbStatus,
+    }, 200, { 'X-MM-AC-DB-Status': acDbStatus.status });
   } catch (error) {
     if (error instanceof ValidationError) {
       return apiError('validation', error.message, error.details ?? {}, 400);

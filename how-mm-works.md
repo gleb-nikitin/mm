@@ -66,7 +66,7 @@ To make MM a "living" system, you should automate the import and processing step
 ### Example Crontab (`crontab -e`)
 ```bash
 # 1. Import new Claude sessions every hour
-0 * * * * cd /path/to/mm && /usr/local/bin/bun scripts/import-claude.ts --days 1 --project mm >> meta/import.log 2>&1
+0 * * * * cd /path/to/mm && MT_AC_DB_PATH="$HOME/Library/Application Support/com.aurora.core/data/msg.db" /usr/local/bin/bun scripts/import-claude.ts --days 1 --project mm >> meta/import.log 2>&1
 
 # 2. Chunk sessions into raw/events/ (optional; before index + process)
 15 * * * * cd /path/to/mm && /usr/local/bin/bun scripts/chunk-events.ts --project mm >> meta/chunk.log 2>&1

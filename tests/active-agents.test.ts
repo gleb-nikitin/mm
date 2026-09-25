@@ -3,8 +3,9 @@ import { Database } from 'bun:sqlite';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { resolveParticipantIds, resolveAcDbPath } from '../src/core';
+import { resolveParticipantIds, resolveParticipantIdsWithStatus, resolveAcDbPath } from '../src/core';
 import { getActiveAgentsLive } from '../src/session-probe';
+import { reportAcDbStatus, type AcDbStatus } from '../src/ac-db.ts';
 
 let tmpDir: string;
 let savedEnv: string | undefined;
@@ -71,6 +72,23 @@ describe('resolveParticipantIds', () => {
     expect(out.size).toBe(0);
   });
 
+  test('validates ac schema even when no external ids are passed', () => {
+    const wrongSchemaPath = path.join(tmpDir, 'wrong-schema.db');
+    const wrongDb = new Database(wrongSchemaPath);
+    wrongDb.exec('CREATE TABLE unrelated (id TEXT)');
+    wrongDb.close();
+    process.env.MT_AC_DB_PATH = wrongSchemaPath;
+
+    const out = resolveParticipantIdsWithStatus([]);
+    expect(out.participantIds.size).toBe(0);
+    expect(out.acDbStatus).toMatchObject({
+      status: 'unreadable',
+      source: 'mt_ac_db_path',
+      path: wrongSchemaPath,
+    });
+    expect(out.acDbStatus.message).toContain('no such table');
+  });
+
   test('partial resolution: unknown ids are simply absent', () => {
     const acDbPath = path.join(tmpDir, 'msg.db');
     const acDb = makeAcShapeDb(acDbPath);
@@ -115,56 +133,81 @@ describe('resolveAcDbPath', () => {
     fs.rmSync(pathTmp, { recursive: true, force: true });
   });
 
-  test('env value wins — returned even if target does not exist', () => {
-    const envOverride = path.join(pathTmp, 'does-not-exist.db');
+  test('MT_AC_DB_PATH resolves the configured database', () => {
+    const envOverride = path.join(pathTmp, 'override.db');
+    makeAcShapeDb(envOverride).close();
     const resolved = resolveAcDbPath({
-      envValue: envOverride,
-      prodPath: path.join(pathTmp, 'prod.db'),
-      workspacePath: path.join(pathTmp, 'workspace.db'),
+      env: { MT_AC_DB_PATH: envOverride },
     });
-    expect(resolved).toBe(envOverride);
+    expect(resolved).toEqual({
+      status: 'available',
+      source: 'mt_ac_db_path',
+      path: envOverride,
+      message: null,
+    });
   });
 
-  test('prod preferred over workspace when both exist', () => {
-    const prodPath = path.join(pathTmp, 'prod.db');
-    const workspacePath = path.join(pathTmp, 'workspace.db');
-    fs.writeFileSync(prodPath, '');
-    fs.writeFileSync(workspacePath, '');
-    const resolved = resolveAcDbPath({ prodPath, workspacePath });
-    expect(resolved).toBe(prodPath);
+  test('configured MT_AC_DB_PATH that does not exist is distinguishably missing', () => {
+    const missing = path.join(pathTmp, 'missing.db');
+    const resolved = resolveAcDbPath({ env: { MT_AC_DB_PATH: missing } });
+    expect(resolved.status).toBe('missing');
+    expect(resolved.source).toBe('mt_ac_db_path');
+    expect(resolved.path).toBe(missing);
+    expect(resolved.message).toContain('does not exist');
   });
 
-  test('workspace fallback when prod absent', () => {
-    const prodPath = path.join(pathTmp, 'prod.db');
-    const workspacePath = path.join(pathTmp, 'workspace.db');
-    fs.writeFileSync(workspacePath, '');
-    // prodPath intentionally not created
-    const resolved = resolveAcDbPath({ prodPath, workspacePath });
-    expect(resolved).toBe(workspacePath);
+  test('no MT_AC_DB_PATH is unresolved even if AURORA_DATA is present', () => {
+    const resolved = resolveAcDbPath({ env: { AURORA_DATA: pathTmp } });
+    expect(resolved).toEqual({
+      status: 'unresolved',
+      source: null,
+      path: null,
+      message: 'Aurora database is not configured; set MT_AC_DB_PATH',
+    });
   });
 
-  test('neither exists → workspace returned (caller existsSync handles final gap)', () => {
-    const prodPath = path.join(pathTmp, 'prod.db');
-    const workspacePath = path.join(pathTmp, 'workspace.db');
-    const resolved = resolveAcDbPath({ prodPath, workspacePath });
-    expect(resolved).toBe(workspacePath);
+  test('no configured path is unresolved without discovering developer DBs', () => {
+    expect(resolveAcDbPath({ env: {} })).toMatchObject({
+      status: 'unresolved',
+      source: null,
+      path: null,
+    });
   });
 
-  test('integration: resolveParticipantIds reads through prod when prod DB is seeded', () => {
-    const prodPath = path.join(pathTmp, 'prod.db');
-    const workspacePath = path.join(pathTmp, 'workspace.db');
-    // Prod has the live data
-    const prodDb = makeAcShapeDb(prodPath);
-    prodDb.exec(`INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_cto', 'mm', 'cto', 'sess-prod')`);
-    prodDb.close();
-    // Workspace is empty (realistic: workspace DB exists but has no active sessions)
-    const wsDb = makeAcShapeDb(workspacePath);
-    wsDb.close();
+  test('failure logging deduplicates until a validated recovery', () => {
+    const lines: string[] = [];
+    const write = (line: string) => lines.push(line);
+    const available: AcDbStatus = {
+      status: 'available',
+      source: 'mt_ac_db_path',
+      path: '/validated/msg.db',
+      message: null,
+    };
+    const unreadable: AcDbStatus = {
+      status: 'unreadable',
+      source: 'mt_ac_db_path',
+      path: '/broken/msg.db',
+      message: 'Aurora database could not be read',
+    };
 
-    // Point env at prod via the env-var surface (integration contract)
-    process.env.MT_AC_DB_PATH = prodPath;
-    const out = resolveParticipantIds(['sess-prod']);
-    expect(out.get('sess-prod')).toBe('mm_cto');
+    reportAcDbStatus(available, write);
+    reportAcDbStatus(unreadable, write);
+    reportAcDbStatus(unreadable, write);
+    expect(lines).toHaveLength(1);
+
+    reportAcDbStatus(available, write);
+    reportAcDbStatus(unreadable, write);
+    expect(lines).toHaveLength(2);
+  });
+
+  test('integration: resolveParticipantIds reads through MT_AC_DB_PATH', () => {
+    const configuredPath = path.join(pathTmp, 'configured.db');
+    const configuredDb = makeAcShapeDb(configuredPath);
+    configuredDb.exec(`INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_cto', 'mm', 'cto', 'sess-configured')`);
+    configuredDb.close();
+    process.env.MT_AC_DB_PATH = configuredPath;
+    const out = resolveParticipantIds(['sess-configured']);
+    expect(out.get('sess-configured')).toBe('mm_cto');
   });
 });
 
@@ -423,11 +466,15 @@ describe('getActiveAgentsLive', () => {
 
 // ---------- /active ROUTE ----------
 
-async function spawnApi(env: Record<string, string>): Promise<{ port: number; kill: () => void }> {
+async function spawnApi(env: Record<string, string | undefined>): Promise<{ port: number; kill: () => void }> {
   const port = 30000 + Math.floor(Math.random() * 5000);
+  const childEnv: Record<string, string | undefined> = { ...process.env, ...env, MT_PORT: String(port) };
+  for (const [key, value] of Object.entries(childEnv)) {
+    if (value === undefined) delete childEnv[key];
+  }
   const proc = Bun.spawn(['bun', 'src/api.ts'], {
     cwd: path.resolve(import.meta.dir, '..'),
-    env: { ...process.env, ...env, MT_PORT: String(port) },
+    env: childEnv as Record<string, string>,
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -487,6 +534,122 @@ describe('/active route', () => {
       expect(Array.isArray(body.agents)).toBe(true);
       expect(body.agents.length).toBe(0);
       expect(typeof body.generated_at).toBe('string');
+    } finally {
+      api.kill();
+    }
+  });
+
+  test('configured missing DB is visibly different from an unconfigured DB', async () => {
+    const missingPath = path.join(apiTmp, 'missing-msg.db');
+    const api = await spawnApi({ MT_BRAIN_ROOT: apiTmp, MT_AC_DB_PATH: missingPath });
+    try {
+      const response = await fetch(`http://127.0.0.1:${api.port}/active?format=json`);
+      expect(response.headers.get('x-mm-ac-db-status')).toBe('missing');
+      const body = await response.json() as any;
+      expect(body.ac_db).toMatchObject({
+        status: 'missing',
+        source: 'mt_ac_db_path',
+        path: missingPath,
+      });
+      expect(body.ac_db.message).toContain('does not exist');
+    } finally {
+      api.kill();
+    }
+  });
+
+  test('wrong-schema DB is unreadable on /active and both R1 active surfaces', async () => {
+    const wrongSchemaPath = path.join(apiTmp, 'wrong-schema.db');
+    const wrongDb = new Database(wrongSchemaPath);
+    wrongDb.exec('CREATE TABLE unrelated (id TEXT)');
+    wrongDb.close();
+    const api = await spawnApi({ MT_BRAIN_ROOT: apiTmp, MT_AC_DB_PATH: wrongSchemaPath });
+    try {
+      const json = await fetch(`http://127.0.0.1:${api.port}/active?format=json`);
+      expect(json.headers.get('x-mm-ac-db-status')).toBe('unreadable');
+      expect((await json.json() as any).ac_db).toMatchObject({
+        status: 'unreadable',
+        source: 'mt_ac_db_path',
+        path: wrongSchemaPath,
+      });
+
+      const markdown = await fetch(`http://127.0.0.1:${api.port}/active`);
+      expect(markdown.headers.get('x-mm-ac-db-status')).toBe('unreadable');
+      expect(await markdown.text()).toContain('participant resolution is unavailable (unreadable)');
+
+      for (const endpoint of ['/api/v1/sessions/active', '/api/v1/tokens/active']) {
+        const active = await fetch(`http://127.0.0.1:${api.port}${endpoint}`);
+        expect(active.headers.get('x-mm-ac-db-status')).toBe('unreadable');
+        expect((await active.json() as any).ac_db).toMatchObject({
+          status: 'unreadable',
+          source: 'mt_ac_db_path',
+          path: wrongSchemaPath,
+        });
+      }
+    } finally {
+      api.kill();
+    }
+  });
+
+  test('no configured DB is loud and distinguishable on active surfaces', async () => {
+    const api = await spawnApi({
+      MT_BRAIN_ROOT: apiTmp,
+      MT_AC_DB_PATH: undefined,
+    });
+    try {
+      const json = await fetch(`http://127.0.0.1:${api.port}/active?format=json`);
+      expect(json.status).toBe(200);
+      expect(json.headers.get('x-mm-ac-db-status')).toBe('unresolved');
+      const body = await json.json() as any;
+      expect(body.agents).toEqual([]);
+      expect(body.ac_db).toMatchObject({ status: 'unresolved', source: null, path: null });
+      expect(body.ac_db.message).toContain('not configured');
+
+      const markdown = await fetch(`http://127.0.0.1:${api.port}/active`);
+      expect(markdown.headers.get('x-mm-ac-db-status')).toBe('unresolved');
+      expect(await markdown.text()).toContain('**Warning:** participant resolution is unavailable (unresolved)');
+
+      for (const endpoint of ['/api/v1/sessions/active', '/api/v1/tokens/active']) {
+        const active = await fetch(`http://127.0.0.1:${api.port}${endpoint}`);
+        expect(active.headers.get('x-mm-ac-db-status')).toBe('unresolved');
+        expect((await active.json() as any).ac_db).toMatchObject({
+          status: 'unresolved',
+          source: null,
+          path: null,
+        });
+      }
+    } finally {
+      api.kill();
+    }
+  });
+
+  test('/active participant naming uses MT_AC_DB_PATH through the shared resolver', async () => {
+    const configuredPath = path.join(apiTmp, 'install-msg.db');
+    const acDb = makeAcShapeDb(configuredPath);
+    acDb.exec(`INSERT INTO participants (id, project, role, active_session_id) VALUES ('mm_cto', 'mm', 'cto', 'sess-configured')`);
+    acDb.close();
+
+    const api = await spawnApi({
+      MT_BRAIN_ROOT: apiTmp,
+      MT_AC_DB_PATH: configuredPath,
+    });
+    try {
+      const brainDb = new Database(path.join(apiTmp, 'meta', 'brain.db'));
+      brainDb.prepare(`INSERT INTO import_state
+        (source_path, last_mtime, last_imported_at, provider, external_id, project, cwd, model, last_user_snippet, min_turns_ok)
+        VALUES (?, ?, CURRENT_TIMESTAMP, 'claude', 'sess-configured', 'mm', '/tmp/mm', 'claude-opus', 'hello', 1)`
+      ).run('/tmp/sess-configured.jsonl', Date.now());
+      brainDb.close();
+
+      const response = await fetch(`http://127.0.0.1:${api.port}/active?format=json`);
+      expect(response.headers.get('x-mm-ac-db-status')).toBe('available');
+      const body = await response.json() as any;
+      expect(body.ac_db).toMatchObject({
+        status: 'available',
+        source: 'mt_ac_db_path',
+        path: configuredPath,
+      });
+      expect(body.agents).toHaveLength(1);
+      expect(body.agents[0].participant_id).toBe('mm_cto');
     } finally {
       api.kill();
     }

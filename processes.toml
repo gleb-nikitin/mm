@@ -1,0 +1,26 @@
+# mm plugin manifest. Loaded via the user_root's processes.toml `include`.
+# Supervisor expands `$AURORA_DATA` inside manifest values; it does not export
+# that variable to child processes. Both processes therefore receive the
+# install-local ac DB through the explicit override below.
+#
+# mm runs two managed processes:
+# - process.mm        — HTTP API server, binds the unix socket
+# - process.mm-watch  — importer loop (3 vendors every 1s); no socket
+
+[process.mm]
+command = "bun"
+args = ["src/api.ts"]
+cwd = "plugins/mm"
+env = { MT_AC_DB_PATH = "$AURORA_DATA/data/msg.db" }
+socket = "$AURORA_DATA/sockets/mm.sock"
+auto_start = true
+restart_policy = "on-failure"
+
+[process.mm-watch]
+command = "bun"
+args = ["scripts/watch.ts"]
+cwd = "plugins/mm"
+env = { MT_AC_DB_PATH = "$AURORA_DATA/data/msg.db" }
+auto_start = true
+restart_policy = "on-failure"
+# No socket — non-HTTP background importer loop. Logs structured per-tick lines.

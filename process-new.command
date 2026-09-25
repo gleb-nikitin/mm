@@ -6,6 +6,9 @@ set -e
 cd "$(dirname "$0")"
 
 export PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+# mm no longer guesses ac's database location. Operator scripts declare it;
+# library code never falls back. Override by exporting before running.
+export MT_AC_DB_PATH="${MT_AC_DB_PATH:-$HOME/Library/Application Support/com.aurora.core/data/msg.db}"
 
 if ! command -v bun >/dev/null 2>&1; then
   echo "✗ bun not found on PATH."
@@ -76,6 +79,17 @@ echo "\n✅ Step 5/5: Librarian finished."
 # NB: skipping `brain embed` — v11 artifacts aren't embedded yet and there
 # should be no new wiki pages for the embedder to touch. Re-enable if/when
 # artifact embedding lands.
+
+# The librarian rewrites its tracked handoff.md when it stops at context
+# saturation, and the relaunch loop above can fire that repeatedly. Nothing
+# here commits it, so a run can leave the tree dirty — which silently blocks
+# ac's release gate, since that requires a reproducible (clean) snapshot.
+# Surface it now rather than at the next build.
+if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+  echo "\n⚠️  Working tree is dirty after this run:"
+  git status --short
+  echo "\nCommit before cutting a build — a dirty tree fails the release gate."
+fi
 
 echo "\nDone. Press any key to close..."
 read -k 1

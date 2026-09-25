@@ -2,10 +2,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   initDb, hybridSearch, getStats, queryBrain, validateClaim, addToBrain, PATHS,
-  renderActiveAgentsMarkdown, getActiveAgents, listArtifacts, queueChunks, readChunk, db,
-  searchArtifacts, getBrief, renderBrief,
+  renderActiveAgentsMarkdown, getActiveAgentsWithStatus, listArtifacts, queueChunks, readChunk, db,
+  searchArtifacts, listNotes, getNote, searchNotes, getBrief, renderBrief,
 } from './core.ts';
-import { getActiveAgentsLive } from './session-probe.ts';
+import { getActiveAgentsLiveWithStatus } from './session-probe.ts';
 import { filterMechanical } from './narrative.ts';
 import { apiError, handleActiveSessions, handleActiveTokens, handleCostByMessage, handleCostBySession, handleSessionContent, handleSessionEvents, handleSessions, handleTokensByParticipant } from './r1/api.ts';
 
@@ -22,6 +22,7 @@ const uiHref = (href: string) => BASE_PATH + href;
 const NAV_LINKS: { label: string; href: string }[] = [
   { label: 'home',      href: uiHref('/') },
   { label: 'artifacts', href: uiHref('/artifacts-ui') },
+  { label: 'notes',     href: uiHref('/notes-ui') },
   { label: 'chunks',    href: uiHref('/chunks-ui') },
   { label: 'raw',       href: uiHref('/raw-ui') },
   { label: 'active',    href: uiHref('/active-ui') },
@@ -46,7 +47,7 @@ const NAV_HTML = (() => {
     `<script>(function(){var p=location.pathname;document.querySelectorAll('[data-mm-nav] a').forEach(function(a){var h=a.getAttribute('data-nav-href');if(h===p||(h.length>1&&p===h)){a.classList.add('active');}});})();</script>`;
 })();
 
-const HELP_MD = `# Brain API v0.9.0 (v14 schema)
+const HELP_MD = `# Brain API v0.9.0 (v15 schema)
 
 Endpoints:
 - \`/\`: Web UI (aurora theme).
@@ -68,11 +69,15 @@ Endpoints:
 - \`/search?q=<query>[&source=a,b&project=x,y]\`: Hybrid search, optionally scoped.
 - \`/add\`: POST { content, title, source_type?, project? } or GET ?c=...&t=...&source=...&project=...
 - \`/artifacts?project=&type=&status=&limit=\`: JSON list of artifacts (status default: active; 'all' to disable).
+- \`/notes?project=&limit=&offset=&source_chunk_id=\`: JSON list of distilled notes.
+- \`/note/:id\`: JSON — one distilled note with full artifacts payload.
+- \`/notes-search?q=&project=&limit=&offset=\`: FTS over distilled notes.
 - \`/chunks?project=&limit=\`: JSON list of pending chunks_virtual.
 - \`/chunk/:id\`: JSON — reconstructed chunk content + metadata.
 - \`/artifact/:id\`: JSON — artifact row + enriched sources (each with reconstructed text span).
 - \`/artifacts-search?q=&project=&type=&status=&limit=\`: FTS over artifact data, returns rows + snippet (status default: active).
 - \`/artifacts-ui\`: Artifacts browser UI.
+- \`/notes-ui\`: Distilled notes browser UI.
 - \`/chunks-ui\`: Chunks browser UI.
 - \`/raw-ui\`: Plain HTML dump of every table. No filters, no JS.
 - \`/monitor\`: R1 JSON/SSE monitor index.
@@ -209,16 +214,18 @@ const serveOptions = {
       const maxAge = parseInt(url.searchParams.get("max_age_seconds") || "300", 10);
       const live = url.searchParams.get("probe") === "live";
       const wantJson = url.searchParams.get("format") === "json";
-      const agents = live
-        ? getActiveAgentsLive({ maxAgeSeconds: maxAge })
-        : getActiveAgents({ maxAgeSeconds: maxAge });
+      const { agents, acDbStatus } = live
+        ? getActiveAgentsLiveWithStatus({ maxAgeSeconds: maxAge })
+        : getActiveAgentsWithStatus({ maxAgeSeconds: maxAge });
+      const headers = {
+        "Content-Type": wantJson ? "application/json" : "text/markdown",
+        "X-MM-AC-DB-Status": acDbStatus.status,
+      };
       if (wantJson) {
-        const body = JSON.stringify({ agents, generated_at: new Date().toISOString() });
-        return new Response(body, { headers: { "Content-Type": "application/json" } });
+        const body = JSON.stringify({ agents, generated_at: new Date().toISOString(), ac_db: acDbStatus });
+        return new Response(body, { headers });
       }
-      return new Response(renderActiveAgentsMarkdown(agents, maxAge), {
-        headers: { "Content-Type": "text/markdown" },
-      });
+      return new Response(renderActiveAgentsMarkdown(agents, maxAge, acDbStatus), { headers });
     }
 
     if (url.pathname === "/brief") {
@@ -302,6 +309,32 @@ const serveOptions = {
       return new Response(JSON.stringify(enriched), { headers: { "Content-Type": "application/json" } });
     }
 
+    if (url.pathname === "/notes-search") {
+      const q = url.searchParams.get("q") || "";
+      if (!q) return new Response(JSON.stringify([]), { headers: { "Content-Type": "application/json" } });
+      const results = searchNotes(q, {
+        project: url.searchParams.get("project") || null,
+        limit:   parseInt(url.searchParams.get("limit") || "50", 10),
+        offset:  parseInt(url.searchParams.get("offset") || "0", 10),
+      });
+      return new Response(JSON.stringify(results), { headers: { "Content-Type": "application/json" } });
+    }
+
+    if (url.pathname === "/notes") {
+      const sourceChunkParam = url.searchParams.get("source_chunk_id");
+      const sourceChunkId = sourceChunkParam ? parseInt(sourceChunkParam, 10) : null;
+      if (sourceChunkParam && (!sourceChunkId || sourceChunkId <= 0)) {
+        return new Response("Bad source_chunk_id", { status: 400 });
+      }
+      const rows = listNotes({
+        project: url.searchParams.get("project") || null,
+        source_chunk_id: sourceChunkId,
+        limit:  parseInt(url.searchParams.get("limit") || "50", 10),
+        offset: parseInt(url.searchParams.get("offset") || "0", 10),
+      });
+      return new Response(JSON.stringify(rows), { headers: { "Content-Type": "application/json" } });
+    }
+
     if (url.pathname === "/chunks") {
       const project = url.searchParams.get("project");
       const processed = url.searchParams.get("processed"); // 'pending' | 'processed' | 'all' | null
@@ -338,6 +371,10 @@ const serveOptions = {
 
     if (url.pathname === "/artifacts-ui") {
       return serveUiFile("/artifacts.html");
+    }
+
+    if (url.pathname === "/notes-ui") {
+      return serveUiFile("/notes.html");
     }
 
     if (url.pathname === "/chunks-ui") {
@@ -383,6 +420,14 @@ const serveOptions = {
         artifact: { ...row, data: JSON.parse(row.data) },
         sources: enrichedSources,
       }), { headers: { "Content-Type": "application/json" } });
+    }
+
+    if (url.pathname.startsWith("/note/")) {
+      const id = parseInt(url.pathname.replace("/note/", ""), 10);
+      if (!id) return new Response("Bad note id", { status: 400 });
+      const note = getNote(id);
+      if (!note) return new Response("Not found", { status: 404 });
+      return new Response(JSON.stringify(note), { headers: { "Content-Type": "application/json" } });
     }
 
     if (url.pathname.startsWith("/wiki/")) {

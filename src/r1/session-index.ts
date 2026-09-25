@@ -87,6 +87,16 @@ export type RawSessionEventRow = {
   metadata: string | null;
 };
 
+export type SessionStateRefreshResult = {
+  ran: boolean;
+  changed: number;
+};
+
+const configuredRefreshSeconds = Number(process.env.MT_R1_STATE_REFRESH_SECONDS ?? 30);
+export const DEFAULT_SESSION_STATE_REFRESH_SECONDS = Number.isFinite(configuredRefreshSeconds) && configuredRefreshSeconds >= 0
+  ? configuredRefreshSeconds
+  : 30;
+
 function runImmediateTransaction<T>(fn: () => T): T {
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -99,17 +109,21 @@ function runImmediateTransaction<T>(fn: () => T): T {
   }
 }
 
-function stateForObservation(observation: SessionObservation, link: SessionLink | null, acDbAvailable: boolean) {
+function stateForObservation(
+  observation: SessionObservation,
+  link: SessionLink | null,
+  acDbFailureReason: string | null,
+) {
   const state = deriveSessionState({
     linked: Boolean(link),
-    completed: observation.state === 'completed',
+    completed: link?.kind === 'retired' || observation.state === 'completed',
     explicitState: observation.state ?? null,
     last_activity_at: observation.last_activity_at,
   });
   if (state !== 'orphan') return { state, orphan_reason: null };
   return {
     state: 'orphan' as const,
-    orphan_reason: observation.orphan_reason ?? (acDbAvailable ? 'participant_not_found' : 'ac_db_unavailable'),
+    orphan_reason: observation.orphan_reason ?? acDbFailureReason ?? 'participant_not_found',
   };
 }
 
@@ -121,8 +135,8 @@ export function findRawEventIdByExternalId(externalId: string): number | null {
 export function upsertSessionObservation(
   observation: SessionObservation,
   link: SessionLink | null = null,
-  acDbAvailable = true,
-  derivedState = stateForObservation(observation, link, acDbAvailable),
+  acDbFailureReason: string | null = null,
+  derivedState = stateForObservation(observation, link, acDbFailureReason),
 ): void {
   db.prepare(
     `INSERT INTO session_index
@@ -169,16 +183,26 @@ export function upsertSessionObservation(
 }
 
 export function linkSession(observation: SessionObservation, link: SessionLink): void {
-  upsertSessionObservation(observation, link, true);
+  upsertSessionObservation(observation, link);
 }
 
 export function recordSessionObservation(observation: SessionObservation, messageText?: string): void {
-  const { links, acDbAvailable } = resolveSessionLinks([observation.session_id]);
+  const { links, acDbFailureReason } = resolveSessionLinks([observation.session_id]);
   const link = links.get(observation.session_id) ?? null;
+  recordResolvedSessionObservation(observation, link, acDbFailureReason, messageText);
+}
+
+function recordResolvedSessionObservation(
+  observation: SessionObservation,
+  link: SessionLink | null,
+  acDbFailureReason: string | null,
+  messageText?: string,
+  reconciledState?: ReturnType<typeof stateForObservation>,
+): void {
   const events = runImmediateTransaction(() => {
     const previous = getSessionByVendorAndId(observation.vendor, observation.session_id);
-    const derivedState = stateForObservation(observation, link, acDbAvailable);
-    upsertSessionObservation(observation, link, acDbAvailable, derivedState);
+    const derivedState = reconciledState ?? stateForObservation(observation, link, acDbFailureReason);
+    upsertSessionObservation(observation, link, acDbFailureReason, derivedState);
     const event = recordStateTransition({
       previous,
       observation,
@@ -200,6 +224,98 @@ export function recordSessionObservation(observation: SessionObservation, messag
   for (const event of events as SessionEventRow[]) notifySessionEvent(event);
 }
 
+/**
+ * Refresh age and Aurora link provenance without reparsing source files.
+ * Importers call this for their vendor from the normal watcher cadence, so
+ * rows outside the transcript --days window still observe later retirement.
+ * An unavailable Aurora DB is not evidence that a link disappeared, so those
+ * rows are left untouched until a later refresh can resolve authoritatively.
+ */
+export function refreshStoredSessionStates(
+  vendor: Vendor,
+  options: { nowMs?: number; intervalSeconds?: number } = {},
+): SessionStateRefreshResult {
+  const nowMs = options.nowMs ?? Date.now();
+  const intervalSeconds = options.intervalSeconds ?? DEFAULT_SESSION_STATE_REFRESH_SECONDS;
+  const markerPath = `r1:session-state-refresh:${vendor}`;
+  const claimed = runImmediateTransaction(() => {
+    const marker = db.prepare(
+      `SELECT last_mtime FROM import_state WHERE source_path = ?`
+    ).get(markerPath) as { last_mtime: number } | undefined;
+    if (marker && nowMs - marker.last_mtime < intervalSeconds * 1000) return false;
+    db.prepare(
+      `INSERT INTO import_state (source_path, last_mtime, last_imported_at)
+       VALUES (?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(source_path) DO UPDATE SET
+         last_mtime = excluded.last_mtime,
+         last_imported_at = excluded.last_imported_at`
+    ).run(markerPath, nowMs);
+    return true;
+  });
+  if (!claimed) return { ran: false, changed: 0 };
+
+  const rows = db.prepare(
+    `SELECT * FROM session_index WHERE vendor = ? ORDER BY session_id`
+  ).all(vendor) as SessionIndexRow[];
+  if (rows.length === 0) return { ran: true, changed: 0 };
+
+  const batchSize = 400;
+  let refreshed = 0;
+  for (let offset = 0; offset < rows.length; offset += batchSize) {
+    const batch = rows.slice(offset, offset + batchSize);
+    const { links, acDbAvailable } = resolveSessionLinks(batch.map(row => row.session_id));
+    if (!acDbAvailable) continue;
+
+    for (const row of batch) {
+      const link = links.get(row.session_id) ?? null;
+      const observation: SessionObservation = {
+        vendor: row.vendor,
+        session_id: row.session_id,
+        source_path: row.source_path,
+        raw_event_id: row.raw_event_id,
+        project: row.project,
+        cwd: row.cwd,
+        model: row.model,
+        started_at: row.started_at,
+        last_activity_at: row.last_activity_at,
+        last_mtime: row.last_mtime,
+        last_log_line: row.last_log_line,
+        state: undefined,
+        orphan_reason: row.orphan_reason === 'metadata_parse_error' ? row.orphan_reason : null,
+        metadata: row.metadata,
+      };
+      // Reconciliation has no new transcript evidence. Preserve terminal
+      // states whose evidence exists only in the stored row; a genuine new
+      // importer observation may still reactivate them through the normal path.
+      const derived = row.state === 'completed' || row.state === 'wedged'
+        ? { state: row.state, orphan_reason: null }
+        : stateForObservation(observation, link, null);
+      const participantId = link?.participant_id ?? null;
+      const project = link?.project ?? observation.project;
+      const role = link?.role ?? null;
+      const projectRole = link?.project_role ?? null;
+      if (
+        row.state === derived.state
+        && row.orphan_reason === derived.orphan_reason
+        && row.participant_id === participantId
+        && row.project === project
+        && row.role === role
+        && row.project_role === projectRole
+      ) continue;
+
+      recordResolvedSessionObservation(
+        observation,
+        link,
+        null,
+        undefined,
+        derived,
+      );
+      refreshed++;
+    }
+  }
+  return { ran: true, changed: refreshed };
+}
+
 export function getSessionByVendorAndId(vendor: Vendor, sessionId: string): SessionIndexRow | null {
   const row = db.prepare(
     `SELECT * FROM session_index WHERE vendor = ? AND session_id = ?`
@@ -211,16 +327,6 @@ export function listSessionsBySessionId(sessionId: string): SessionIndexRow[] {
   return db.prepare(
     `SELECT * FROM session_index WHERE session_id = ? ORDER BY vendor`
   ).all(sessionId) as SessionIndexRow[];
-}
-
-function deriveStateForIndexRow(row: SessionIndexRow, nowMs: number): SessionState {
-  return deriveSessionState({
-    linked: row.state === 'completed' ? true : row.state === 'orphan' ? false : Boolean(row.participant_id),
-    completed: row.state === 'completed',
-    explicitState: row.state === 'completed' ? 'completed' : null,
-    last_activity_at: row.last_activity_at,
-    nowMs,
-  });
 }
 
 export function listActiveSessions(filter: ActiveSessionFilter = {}): SessionIndexRow[] {
@@ -238,15 +344,15 @@ export function listActiveSessions(filter: ActiveSessionFilter = {}): SessionInd
     params.push(...filter.roles);
   }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-  const nowMs = Date.now();
   const rows = db.prepare(
     `SELECT * FROM session_index
      ${where}
      ORDER BY last_activity_at DESC`
   ).all(...params) as SessionIndexRow[];
   const allowed = new Set(states);
+  // stateForObservation is the single derivation path. Re-aging rows here
+  // would make direct DB readers and API readers disagree about one session.
   return rows
-    .map(row => ({ ...row, state: deriveStateForIndexRow(row, nowMs) }))
     .filter(row => allowed.has(row.state))
     .slice(0, filter.limit ?? 50);
 }
@@ -300,7 +406,6 @@ export function listSessions(filter: SessionBrowserFilter = {}): SessionBrowserP
   }
 
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-  const nowMs = Date.now();
   let rows = db.prepare(
     `SELECT
        si.*,
@@ -316,7 +421,7 @@ export function listSessions(filter: SessionBrowserFilter = {}): SessionBrowserP
   // can be added later if this page becomes hot.
   rows = rows.map(row => ({
     ...row,
-    state: deriveStateForIndexRow(row, nowMs),
+    // Preserve the stored state; observation ingestion owns derivation.
     tokens: contextTokensFor(row.vendor, row.source_path, row.session_id),
   }));
   if (filter.state) rows = rows.filter(row => row.state === filter.state);

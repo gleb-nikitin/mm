@@ -169,7 +169,8 @@ These files are **part of the product**: runtime code **reads** several of them 
 
 - **`MT_BRAIN_ROOT`** — Directory containing `raw/`, `wiki/`, `meta/`.
 - **`MT_PORT`** — HTTP port for **`bun run api`**.
-- **`.mcp.json`** — e.g. Cursor: **`mm`** → `bun` + `src/mcp.ts` (stdio). Other entries (e.g. **aurora** HTTP) are **not** implemented in this repo’s `src/`.
+- **`MT_AC_DB_PATH`** — Aurora `msg.db` used for participant/session linking. The plugin manifest supplies `$AURORA_DATA/data/msg.db` to managed API and watcher processes; set it explicitly for standalone importers, API, or MCP runs.
+- **`.mcp.json`** — e.g. Cursor: **`mm`** → `bun` + `src/mcp.ts` (stdio). Other entries (e.g. **aurora** HTTP) are **not** implemented in this repo's `src/`.
 
 ---
 
@@ -193,7 +194,7 @@ MCP stdio server: `search_brain`, `query_brain`, `add_to_brain`, `validate_claim
 
 ### `scripts/import-claude.ts` · `import-codex.ts` · `import-gemini.ts`
 
-Walk vendor dirs; flatten sessions; insert **`raw_events`** + **`events_fts`** + **`import_state`**; dedup by **`external_id`**.
+Walk vendor dirs; flatten sessions; insert **`raw_events`** + **`events_fts`** + **`import_state`**; dedup by **`external_id`**. Normal runs also reconcile stored session age and active/retired Aurora links without reparsing transcripts, including rows older than `--days`; a durable per-vendor gate limits this scan to once per 30 seconds.
 
 ### `scripts/chunk-events.ts`
 

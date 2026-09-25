@@ -14,7 +14,7 @@ Your role folder is `agent/roles/find/`.
 - `agent/roles/find/soul.md` — portable seeds
 - `agent/roles/find/handoff.md` — current sharp edges
 
-On session start: read `agent/roles/global.md`, then `soul.md`, then `handoff.md` from your role folder.
+On session start: read `soul.md`, then `handoff.md` from your role folder.
 
 ## Mission
 

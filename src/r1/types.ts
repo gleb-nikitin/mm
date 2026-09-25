@@ -12,7 +12,10 @@ export type SessionEventType =
 
 export type LinkConfidence = 'exact' | 'footer' | 'none';
 
+export type SessionLinkKind = 'active' | 'retired';
+
 export type SessionLink = {
+  kind: SessionLinkKind;
   participant_id: string;
   project: string | null;
   role: string | null;
