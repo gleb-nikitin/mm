@@ -38,3 +38,4 @@
 - **2026-09-25**: feat(codex): support ordered multi-root sessions
 - **2026-09-25**: fix(git): harden sweep and publish recovery
 - **2026-09-25**: fix(codex): normalize current prompt records
+- **2026-09-25**: docs(devops): correct Codex backfill handoff

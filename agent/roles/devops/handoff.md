@@ -1,6 +1,6 @@
 # Devops Handoff
 
-Current state: the `ywu` current Codex prompt parser follow-up passed audit at `ywu-19` and is included in HEAD; no active devops implementation remains.
+Current state: the `ywu` current Codex prompt parser follow-up landed at HEAD (`d14565a`); production reload/backfill remains.
 
 Contract implemented:
 - `MT_CODEX_SESSIONS_DIR` is an ordered `:` list with leading `~/` expansion and default `~/.codex/sessions`.
@@ -28,6 +28,6 @@ Verification:
 Production state:
 - Root-manifest reconciliation replaced both old processes; exactly one API and watcher run with the ordered env, and the plugin symlink remains intact.
 - First backfill found 180 winners / 4 shadowed copies but exposed the current-format gap: 179 skipped for min-turns. Do not treat that run as complete.
-- After this follow-up lands, rerun from 2026-09-12 and verify post-switch codex-home rows, four duplicate IDs, and `01a0adda…` in `meta/brain.db`.
+- Reload HEAD, rerun the measured backfill range, and verify post-switch codex-home rows, four duplicate IDs, and `01a0adda…` in `meta/brain.db`.
 
 Unrelated dirty files belong to CTO/git work and must be excluded from this commit.
