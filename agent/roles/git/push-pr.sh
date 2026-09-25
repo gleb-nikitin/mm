@@ -3,7 +3,8 @@ set -euo pipefail
 
 # push-pr.sh — publish clean local main ahead of origin/main through a PR.
 
-REPO="${MM_GIT_REPO:-/Users/glebnikitin/work/code/mm}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO="${MM_GIT_REPO:-$(cd -- "$SCRIPT_DIR/../../.." && pwd -P)}"
 ANCHOR=".git/git-publish-anchor"
 
 die() { echo "error: $1" >&2; exit 1; }
@@ -60,11 +61,30 @@ git ls-remote --exit-code --heads origin "$branch_name" >/dev/null 2>&1 && die "
 
 title="$(git log -1 --pretty=%s)"
 git switch --quiet -c "$branch_name"
+pr_created=0
+cleanup_publish_failure() {
+  rc=$?
+  trap - EXIT
+  if [[ $rc -ne 0 ]]; then
+    if git switch --quiet main; then
+      echo "publish failed; returned to main; branch kept: $branch_name" >&2
+    else
+      echo "publish failed; could not return to main; branch kept: $branch_name" >&2
+    fi
+    if [[ $pr_created -eq 1 ]]; then
+      echo "PR may exist; inspect with: gh pr list --head $branch_name" >&2
+    fi
+  fi
+  exit "$rc"
+}
+trap cleanup_publish_failure EXIT
+
 git push --quiet -u origin "$branch_name"
 
 if ! pr_url="$(gh pr create --base main --head "$branch_name" --title "$title" --body "")"; then
   die "branch '$branch_name' was pushed but PR creation failed"
 fi
+pr_created=1
 
 if [[ "$pr_url" =~ /pull/([0-9]+)$ ]]; then
   pr_number="${BASH_REMATCH[1]}"
@@ -79,6 +99,7 @@ fi
 } > "$ANCHOR"
 
 git switch --quiet main
+trap - EXIT
 echo "pushed $branch_name"
 echo "pr: $pr_url"
 echo "pr-number: $pr_number"
