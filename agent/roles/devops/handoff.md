@@ -1,6 +1,6 @@
 # Devops Handoff
 
-Current state: `ywu` Codex multi-root import and watcher reliability passed audit at `ywu-11` and is included in HEAD; no active devops implementation remains.
+Current state: the `ywu` current Codex prompt parser follow-up passed audit at `ywu-19` and is included in HEAD; no active devops implementation remains.
 
 Contract implemented:
 - `MT_CODEX_SESSIONS_DIR` is an ordered `:` list with leading `~/` expansion and default `~/.codex/sessions`.
@@ -11,22 +11,23 @@ Contract implemented:
 - Live probe uses the same winner order, including inactive-primary shadowing.
 - Watch uses `process.execPath` and emits child stderr only when diagnostics change.
 - Both managed processes receive `$AURORA_DATA/data/codex-home/sessions:~/.codex/sessions`.
+- Current Codex `response_item` user messages with `input_text` are parsed alongside legacy `event_msg` prompts.
 
-Audit/commit scope:
-- `src/codex-sessions.ts`, `src/session-probe.ts`
-- `scripts/import-codex.ts`, `scripts/watch.ts`, `processes.toml`
-- `tests/codex-sessions.test.ts`, `tests/active-agents.test.ts`, `tests/r1-session-index.test.ts`, `tests/watch.test.ts`, `tests/processes-manifest.test.ts`
-- `README.md`, `human-how-it-works.md`, `agent/docs/how-to-import.md`, this handoff
+Incremental audit/commit scope:
+- `scripts/import-codex.ts`, `src/session-probe.ts`
+- `tests/active-agents.test.ts`, `tests/r1-session-index.test.ts`, this handoff
 
 Verification:
-- `bun test`: 146 pass, 0 fail, 715 expectations.
+- `bun test`: 147 pass, 0 fail, 721 expectations.
+- Targeted tests: 46 pass, 0 fail, 179 expectations.
 - `bun run typecheck`: passed.
 - `git diff --check`: passed.
 - Real-root live probe over both stores: 14.4 ms, below the documented 50 ms target.
 - Minimal-PATH watcher test proves children start without `bun` on PATH and repeated missing-root stderr is emitted once.
 
-Production backfill gate:
-- Running `mm-watch` PID 38653 has no `MT_CODEX_SESSIONS_DIR`; do not backfill until managed processes reload the new manifest.
-- After reload, import from 2026-09-12 onward and verify post-switch codex-home rows plus duplicate IDs `01a0930f…`, `01a0951f…`, `01a095ee…`, `01a09cbf…` in `meta/brain.db`.
+Production state:
+- Root-manifest reconciliation replaced both old processes; exactly one API and watcher run with the ordered env, and the plugin symlink remains intact.
+- First backfill found 180 winners / 4 shadowed copies but exposed the current-format gap: 179 skipped for min-turns. Do not treat that run as complete.
+- After this follow-up lands, rerun from 2026-09-12 and verify post-switch codex-home rows, four duplicate IDs, and `01a0adda…` in `meta/brain.db`.
 
 Unrelated dirty files belong to CTO/git work and must be excluded from this commit.

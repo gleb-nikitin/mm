@@ -178,6 +178,18 @@ function extractAssistantText(content: any): string {
   return parts.join('\n\n');
 }
 
+function extractUserText(content: any): string {
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const item of content) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.type === 'input_text' && typeof item.text === 'string' && item.text.trim()) {
+      parts.push(item.text.trim());
+    }
+  }
+  return parts.join('\n\n');
+}
+
 function extractReasoningText(summary: any): string {
   if (!Array.isArray(summary)) return '';
   const parts: string[] = [];
@@ -198,6 +210,8 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
   let cwd: string | null = null;
   let model: string | null = null;
   const turns: Turn[] = [];
+  const legacyUserTurns: Turn[] = [];
+  const currentUserTurns: { turn: Turn; explicitlyUserAuthored: boolean }[] = [];
   const pendingThinking: Block[] = [];
 
   const flushPendingThinking = () => {
@@ -236,10 +250,28 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
       const message = typeof payload.message === 'string' ? payload.message.trim() : '';
       if (message) {
         flushPendingThinking();
-        turns.push({
+        legacyUserTurns.push({
           role: 'user',
           timestamp,
           blocks: [{ kind: 'text', text: message }],
+        });
+      }
+      continue;
+    }
+
+    if (recordType === 'response_item' && payload.type === 'message' && payload.role === 'user') {
+      const message = extractUserText(payload.content);
+      const contentKinds = payload?.internal_chat_message_metadata_passthrough?.content_item_kinds;
+      const isUserAuthored = !Array.isArray(contentKinds) || contentKinds.includes('user.text');
+      if (message && isUserAuthored) {
+        flushPendingThinking();
+        currentUserTurns.push({
+          turn: {
+            role: 'user',
+            timestamp,
+            blocks: [{ kind: 'text', text: message }],
+          },
+          explicitlyUserAuthored: Array.isArray(contentKinds),
         });
       }
       continue;
@@ -269,6 +301,14 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
   }
 
   if (!sessionId) return null;
+  const legacyKeys = new Set(legacyUserTurns.map(turn => `${turn.timestamp}\0${turn.blocks[0]?.text ?? ''}`));
+  turns.push(...legacyUserTurns);
+  for (const current of currentUserTurns) {
+    const key = `${current.turn.timestamp}\0${current.turn.blocks[0]?.text ?? ''}`;
+    if (legacyKeys.has(key)) continue;
+    if (legacyUserTurns.length > 0 && !current.explicitlyUserAuthored) continue;
+    turns.push(current.turn);
+  }
   turns.sort((a, b) => (a.timestamp > b.timestamp ? 1 : a.timestamp < b.timestamp ? -1 : 0));
   return { sessionId, cwd, model, turns };
 }

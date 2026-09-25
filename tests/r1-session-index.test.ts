@@ -59,6 +59,15 @@ function writeCodexRollout(
     },
     {
       timestamp: '2026-09-24T10:00:01Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: marker }],
+      },
+    },
+    {
+      timestamp: '2026-09-24T10:00:01Z',
       type: 'event_msg',
       payload: { type: 'user_message', message: marker },
     },
@@ -678,9 +687,23 @@ describe('R1 session linkage index', () => {
           payload: { cwd: '/Users/test/work/mm', model: 'gpt-5.4' },
         },
         {
+          timestamp: '2026-04-22T10:00:01.5Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: 'injected developer context' }],
+          },
+        },
+        {
           timestamp: '2026-04-22T10:00:02Z',
-          type: 'event_msg',
-          payload: { type: 'user_message', message: 'hello codex' },
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'hello codex' }],
+            internal_chat_message_metadata_passthrough: { content_item_kinds: ['user.text'] },
+          },
         },
         {
           timestamp: '2026-04-22T10:00:03Z',
@@ -726,6 +749,7 @@ describe('R1 session linkage index', () => {
 
       const db = new Database(path.join(importRoot, 'meta', 'brain.db'));
       const session = db.prepare(`SELECT vendor, session_id, participant_id, model FROM session_index`).get() as any;
+      const event = db.prepare(`SELECT content, metadata FROM raw_events WHERE external_id = 'codex:sess-codex-import'`).get() as any;
       const usage = db.prepare(`SELECT input_tokens, output_tokens, cached_tokens, reasoning_tokens, cost_usd, pricing_source, cost_breakdown FROM session_usage`).get() as any;
       expect(session).toEqual({
         vendor: 'codex',
@@ -733,6 +757,9 @@ describe('R1 session linkage index', () => {
         participant_id: 'mm_devops',
         model: 'gpt-5.4',
       });
+      expect(event.content).toContain('User: hello codex');
+      expect(event.content).not.toContain('injected developer context');
+      expect(JSON.parse(event.metadata).user_turn_count).toBe(1);
       const breakdown = JSON.parse(usage.cost_breakdown);
       delete usage.cost_breakdown;
       expect(usage).toEqual({
@@ -861,6 +888,33 @@ describe('R1 session linkage index', () => {
     const none = runWithRoots(`${missingDir}:${path.join(tmpRoot, 'also-missing')}`);
     expect(none.exitCode).not.toBe(0);
     expect(none.stderr.toString()).toContain('Codex sessions dir unavailable');
+  });
+
+  test('Codex importer counts dual-format copies as one logical user turn', () => {
+    const codexDir = path.join(tmpRoot, 'codex-dual-format');
+    const sessionFile = path.join(codexDir, '2026', '09', '24', 'rollout.jsonl');
+    writeCodexRollout(sessionFile, 'sess-codex-dual-format', 'one logical prompt', 'gpt-dual');
+
+    const imported = Bun.spawnSync({
+      cmd: [
+        'bun', 'scripts/import-codex.ts', '--sessions-dir', codexDir,
+        '--days', '365', '--force', '--min-turns', '2',
+      ],
+      cwd: REPO,
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot, MT_AC_DB_PATH: acDbPath },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    expect(imported.exitCode).toBe(0);
+    const db = openBrainDb();
+    expect(db.prepare(
+      `SELECT id FROM raw_events WHERE external_id = 'codex:sess-codex-dual-format'`
+    ).get()).toBeNull();
+    expect((db.prepare(
+      `SELECT min_turns_ok FROM import_state WHERE provider = 'codex' AND external_id = 'sess-codex-dual-format'`
+    ).get() as any).min_turns_ok).toBe(0);
+    db.close();
   });
 
   test('Codex importer does not promote a recent fallback when the primary copy is outside the days window', () => {

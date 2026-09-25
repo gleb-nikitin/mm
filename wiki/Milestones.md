@@ -37,3 +37,4 @@
 - **2026-09-25**: feat(git): add guarded publish workflow
 - **2026-09-25**: feat(codex): support ordered multi-root sessions
 - **2026-09-25**: fix(git): harden sweep and publish recovery
+- **2026-09-25**: fix(codex): normalize current prompt records

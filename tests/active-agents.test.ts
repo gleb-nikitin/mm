@@ -257,7 +257,7 @@ function writeCodexSession(
   fileName: string,
   sessionId: string,
   cwd: string,
-  opts: { model?: string; userTurns?: number; lastUserText?: string }
+  opts: { model?: string; userTurns?: number; lastUserText?: string; currentFormat?: boolean }
 ) {
   const dir = path.join(sessionsDir, relDir);
   fs.mkdirSync(dir, { recursive: true });
@@ -270,10 +270,20 @@ function writeCodexSession(
   const userCount = opts.userTurns ?? 2;
   for (let i = 0; i < userCount; i++) {
     const isLast = i === userCount - 1;
-    lines.push(JSON.stringify({
+    const userText = isLast && opts.lastUserText ? opts.lastUserText : `codex user ${i + 1}`;
+    lines.push(JSON.stringify(opts.currentFormat ? {
+      type: 'response_item',
+      timestamp: `2026-04-22T19:31:0${i}Z`,
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: userText }],
+        internal_chat_message_metadata_passthrough: { content_item_kinds: ['user.text'] },
+      },
+    } : {
       type: 'event_msg',
       timestamp: `2026-04-22T19:31:0${i}Z`,
-      payload: { type: 'user_message', message: isLast && opts.lastUserText ? opts.lastUserText : `codex user ${i + 1}` },
+      payload: { type: 'user_message', message: userText },
     }));
     lines.push(JSON.stringify({
       type: 'response_item',
@@ -360,7 +370,7 @@ describe('getActiveAgentsLive', () => {
     const codexDir = path.join(probeTmp, 'codex');
     writeCodexSession(codexDir, '2026-04-22', 'rollout-1.jsonl',
       'sess-codex-1', '/test-cwd/mm',
-      { lastUserText: 'hello codex' });
+      { lastUserText: 'hello codex', currentFormat: true });
 
     const rows = getActiveAgentsLive({
       claudeProjectsDir: path.join(probeTmp, 'nope-claude'),

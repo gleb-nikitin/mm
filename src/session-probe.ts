@@ -189,6 +189,17 @@ function extractCodexAssistantText(content: any): string {
   return parts.join(' ').trim();
 }
 
+function extractCodexUserText(content: any): string {
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const item of content) {
+    if (item && typeof item === 'object' && item.type === 'input_text' && typeof item.text === 'string') {
+      parts.push(item.text.trim());
+    }
+  }
+  return parts.join(' ').trim();
+}
+
 function collectCodexCandidates(dir: string, rootPriority: number): CodexSessionCandidate[] {
   if (!fs.existsSync(dir)) return [];
   const files: string[] = [];
@@ -239,7 +250,8 @@ function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): Co
 
   let cwd: string | null = null;
   let model: string | null = null;
-  let userTurns = 0;
+  const legacyUsers: { timestamp: string; text: string }[] = [];
+  const currentUsers: { timestamp: string; text: string; explicitlyUserAuthored: boolean }[] = [];
   let latestTs = '';
   let latestText: string | null = null;
 
@@ -265,11 +277,21 @@ function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): Co
     if (recordType === 'event_msg' && payload.type === 'user_message') {
       const text = typeof payload.message === 'string' ? payload.message.trim() : '';
       if (text) {
-        userTurns++;
-        if (!latestTs || ts >= latestTs) {
-          latestTs = ts;
-          latestText = text.slice(0, 200);
-        }
+        legacyUsers.push({ timestamp: ts, text });
+      }
+      continue;
+    }
+
+    if (recordType === 'response_item' && payload.type === 'message' && payload.role === 'user') {
+      const text = extractCodexUserText(payload.content);
+      const contentKinds = payload?.internal_chat_message_metadata_passthrough?.content_item_kinds;
+      const isUserAuthored = !Array.isArray(contentKinds) || contentKinds.includes('user.text');
+      if (text && isUserAuthored) {
+        currentUsers.push({
+          timestamp: ts,
+          text,
+          explicitlyUserAuthored: Array.isArray(contentKinds),
+        });
       }
       continue;
     }
@@ -283,6 +305,21 @@ function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): Co
     }
   }
 
+  const legacyKeys = new Set(legacyUsers.map(user => `${user.timestamp}\0${user.text}`));
+  const selectedUsers = [
+    ...legacyUsers,
+    ...currentUsers.filter(user => {
+      if (legacyKeys.has(`${user.timestamp}\0${user.text}`)) return false;
+      return legacyUsers.length === 0 || user.explicitlyUserAuthored;
+    }),
+  ];
+  for (const user of selectedUsers) {
+    if (!latestTs || user.timestamp >= latestTs) {
+      latestTs = user.timestamp;
+      latestText = user.text.slice(0, 200);
+    }
+  }
+
   return {
     ...candidate,
     provider: 'codex',
@@ -292,7 +329,7 @@ function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): Co
     model,
     last_user_snippet: latestText,
     seconds_ago: secondsAgoFromMs(candidate.mtimeMs),
-    min_turns_ok: userTurns >= 2,
+    min_turns_ok: selectedUsers.length >= 2,
   };
 }
 
