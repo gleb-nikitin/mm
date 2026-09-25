@@ -1,17 +1,18 @@
 # Handoff — mm_git
 
 ## Current Status
-- No active task after chain `zcv-5` completes.
-- Current HEAD contains the mm-native git role workflow adapted from the read-only `ac` donor.
-- Chain `zcv-5` authorizes immediate PR publication through the role-local helper.
+- HEAD contains the second post-merge release batch and the CTO production-checkout safety note.
+- One operator-authorized PR is ready to publish from local `main`; the operator will merge it.
+- `agent/roles/find/state.md` is unrelated stale state and remains outside the release.
 
-## Included in HEAD
-- Compact role, procedures, and branch-flow docs distinguish work, integration, and publish branches.
-- Commit helpers retain milestone automation while adding detached-HEAD refusal, explicit staging, safety filters, and version-free attribution.
-- Publish, direct-push, merge-cleanup, review-check, branch-report, and helper-test scripts are available under `agent/roles/git/`.
-- Preflight reports `origin/main`, unpushed commits, active publish anchors, and relevant Codex review comments.
+## Release Range
+- Atomic one-time notes FTS migration.
+- Codex mixed-turn normalization and session identity fixes.
+- Append-retaining chunks with hashed note provenance.
+- Notes integrated into hybrid retrieval.
+- CTO operational lessons about production checkout safety.
 
-## Verification
-- All role shell scripts passed `bash -n`; commit helpers passed disposable-repository behavioral tests.
-- The donor repository remained untouched.
-- HEAD, stash state, and tree cleanliness are verified before PR publication; the publish helper returns to clean local `main`.
+## Publish State
+- Publish only through `push-pr.sh --operator-authorized`.
+- Park only `agent/roles/find/state.md` during publication and restore it byte-identically afterward.
+- Do not merge the PR; `u_gleb` owns the merge step.

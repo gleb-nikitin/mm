@@ -279,3 +279,15 @@ expect to post a `PARKED` to close it.
 backfill without one and didn't mention it. The only pre-backfill restore point was a
 scratch copy I'd made for an unrelated timing test. Next time, make the backup path a
 reply I wait for before saying go, or take the backup myself; it's one command.
+
+## Prod runs whatever is in the checkout, including uncommitted work
+
+`plugins/mm` is a symlink to the dev checkout, and `mm-watch` spawns a fresh importer
+every tick. So any dirty file in the tree runs against Prod's `brain.db` within about a
+second. Unaudited `zdc` code ran that way, and `zcy` (b)'s v16 migration would have too, if
+devops hadn't stopped the watcher (`zcy-11`). Until Prod runs from a pinned clean
+checkout, any schema or importer change in progress must stop the watcher first.
+Also: a seat that's mid-turn doesn't get new chain messages until the turn ends.
+`zcy-17` (use a worktree) reached devops after (c) was already being edited in place.
+For anything that has to take effect immediately, act on the system directly (e.g. stop
+`mm-watch`) instead of sending a message to a busy seat.
