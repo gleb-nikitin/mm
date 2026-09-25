@@ -30,6 +30,7 @@ for (const p of [PATHS.raw, PATHS.wiki, PATHS.meta]) {
 
 // --- Database ---
 export const db = new Database(PATHS.db);
+const NOTES_FTS_REBUILD_MIGRATION = '2026-09-25-notes-fts-atomic-rebuild';
 try {
   db.exec('PRAGMA busy_timeout = 5000;');
   db.exec('PRAGMA journal_mode = WAL;');
@@ -38,6 +39,10 @@ try {
 
 export function initDb() {
   db.run(`CREATE TABLE IF NOT EXISTS schema_version (id INTEGER PRIMARY KEY CHECK(id = 1), version INTEGER NOT NULL);`);
+  db.run(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    name       TEXT PRIMARY KEY,
+    applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );`);
   
   let currentVersion = 0;
   try {
@@ -298,11 +303,10 @@ export function initDb() {
   db.run(`CREATE INDEX IF NOT EXISTS idx_session_events_id ON session_events(id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_session_events_project_role ON session_events(project_role, id)`);
 
-  // v15: distilled notes for intent-driven librarian extraction. Additive only:
-  // no existing tables are altered, and embeddings are populated later by
-  // `brain embed`. source_chunk_id records the chunks_virtual.id consumed by
-  // the librarian, but does not FK to that ephemeral queue row: re-importing
-  // a grown raw_event deletes stale chunks_virtual rows before rechunking.
+  // v15: distilled notes for intent-driven librarian extraction. Embeddings
+  // are populated later by `brain embed`. source_chunk_id retains the queue
+  // identity consumed by the librarian; v16 snapshots durable event/span
+  // provenance independently of that queue row.
   db.run(`CREATE TABLE IF NOT EXISTS notes (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     project         TEXT NOT NULL,
@@ -327,6 +331,9 @@ export function initDb() {
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_note_hashes_project ON note_title_hashes(project, title_hash)`);
 
+  const notesFtsExisted = Boolean(db.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'notes_fts'`
+  ).get());
   try {
     db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
       note_id        UNINDEXED,
@@ -337,10 +344,12 @@ export function initDb() {
       body
     )`);
   } catch (e) {}
-  healStaleNotesSourceChunkFk();
-  rebuildNotesFtsFromNotes();
-
-  db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 15)');
+  const notesFtsRecreated = healStaleNotesSourceChunkFk();
+  if (!notesFtsExisted || notesFtsRecreated) {
+    db.prepare('DELETE FROM schema_migrations WHERE name = ?').run(NOTES_FTS_REBUILD_MIGRATION);
+  }
+  migrateNotesFtsOnce();
+  migrateNotesProvenanceV16(currentVersion);
 }
 
 // --- Common Logic ---
@@ -684,11 +693,17 @@ export type SearchResult = {
   title: string;
   score: number;
   snippet: string;
-  source: 'wiki' | 'raw' | 'event';
+  source: 'wiki' | 'raw' | 'event' | 'note';
   source_type?: string;
   project?: string;
   external_id?: string;
+  note_id?: number;
+  source_segment_start?: number | null;
+  source_segment_end?: number | null;
+  source_provenance_status?: NoteProvenanceStatus;
 };
+
+export type NoteProvenanceStatus = 'valid' | 'stale' | 'missing' | 'unresolved';
 
 export type SearchOpts = {
   sourceTypes?: string[];
@@ -752,6 +767,35 @@ function applyEventLane(results: SearchResult[], limit: number): SearchResult[] 
   return selected;
 }
 
+function noteProvenanceStatus(row: any): NoteProvenanceStatus {
+  if (
+    !row.source_external_id
+    || !Number.isInteger(row.source_segment_start)
+    || !Number.isInteger(row.source_segment_end)
+    || !row.source_span_hash
+  ) return 'unresolved';
+  if (typeof row.source_content !== 'string') return 'missing';
+  const currentSpan = row.source_content.slice(row.source_segment_start, row.source_segment_end);
+  return getHash(currentSpan) === row.source_span_hash ? 'valid' : 'stale';
+}
+
+function noteSearchResult(row: any, title: string, text: string): SearchResult {
+  return {
+    slug: null,
+    title,
+    score: 0,
+    snippet: text.length > 400 ? `${text.substring(0, 400)}...` : text,
+    source: 'note',
+    source_type: 'note',
+    project: row.project || undefined,
+    external_id: row.source_external_id || undefined,
+    note_id: row.note_id,
+    source_segment_start: row.source_segment_start ?? null,
+    source_segment_end: row.source_segment_end ?? null,
+    source_provenance_status: noteProvenanceStatus(row),
+  };
+}
+
 export async function hybridSearch(query: string, limit: number = 10, opts: SearchOpts = {}): Promise<SearchResult[]> {
   const sourceTypes = opts.sourceTypes && opts.sourceTypes.length > 0 ? opts.sourceTypes : null;
   const projects    = opts.projects    && opts.projects.length    > 0 ? opts.projects    : null;
@@ -763,7 +807,10 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
   const hasEmbeddedChunks = (db.prepare(
     `SELECT 1 FROM chunks WHERE embedding IS NOT NULL LIMIT 1`
   ).get() as unknown) !== null;
-  const queryEmbedding = hasEmbeddedChunks ? await embed(query) : null;
+  const hasEmbeddedNotes = (db.prepare(
+    `SELECT 1 FROM notes WHERE embedding IS NOT NULL LIMIT 1`
+  ).get() as unknown) !== null;
+  const queryEmbedding = hasEmbeddedChunks || hasEmbeddedNotes ? await embed(query) : null;
 
   // FTS runs over the wiki search_index. Skip only when source_types is set
   // and 'wiki' is not among them; project filters don't apply to wiki pages.
@@ -771,6 +818,34 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
   const ftsResults: any[] = wikiExcluded
     ? []
     : db.prepare(`SELECT slug, title, content, bm25(search_index) as rank FROM search_index WHERE search_index MATCH ? ORDER BY rank LIMIT 50`).all(ftsQuery) as any[];
+
+  // Distilled notes are their own retrieval source. Source filters use the
+  // literal `note`; project filters apply to the note's project.
+  const notesExcluded = sourceTypes !== null && !sourceTypes.includes('note');
+  let noteFtsResults: any[] = [];
+  if (!notesExcluded) {
+    let noteFtsSql = `SELECT nf.note_id, nf.title, nf.body, nf.summary, n.artifacts,
+                             n.project, n.source_external_id, n.source_segment_start,
+                             n.source_segment_end, n.source_span_hash,
+                             re.content AS source_content, bm25(notes_fts) AS rank
+                      FROM notes_fts nf
+                      JOIN notes n ON n.id = nf.note_id
+                      LEFT JOIN raw_events re ON re.external_id = n.source_external_id
+                      WHERE notes_fts MATCH ?`;
+    const noteFtsParams: any[] = [ftsQuery];
+    if (projects) {
+      noteFtsSql += ` AND n.project IN (${projects.map(() => '?').join(',')})`;
+      noteFtsParams.push(...projects);
+    }
+    noteFtsSql += ` ORDER BY rank LIMIT 50`;
+    const seen = new Set<number>();
+    noteFtsResults = (db.prepare(noteFtsSql).all(...noteFtsParams) as any[])
+      .filter(row => {
+        if (seen.has(row.note_id)) return false;
+        seen.add(row.note_id);
+        return true;
+      });
+  }
 
   let vectorResults: any[] = [];
   if (queryEmbedding) {
@@ -819,6 +894,28 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
     }).sort((a, b) => b.cos_score - a.cos_score).slice(0, 50);
   }
 
+  let noteVectorResults: any[] = [];
+  if (queryEmbedding && !notesExcluded) {
+    const queryBuffer = Buffer.from(queryEmbedding.buffer);
+    let noteVectorSql = `SELECT n.id AS note_id, n.summary, n.artifacts, n.embedding,
+                                n.project, n.source_external_id, n.source_segment_start,
+                                n.source_segment_end, n.source_span_hash,
+                                re.content AS source_content
+                         FROM notes n
+                         LEFT JOIN raw_events re ON re.external_id = n.source_external_id
+                         WHERE n.embedding IS NOT NULL`;
+    const noteVectorParams: any[] = [];
+    if (projects) {
+      noteVectorSql += ` AND n.project IN (${projects.map(() => '?').join(',')})`;
+      noteVectorParams.push(...projects);
+    }
+    const notes = db.prepare(noteVectorSql).all(...noteVectorParams) as any[];
+    noteVectorResults = notes.map(note => ({
+      ...note,
+      cos_score: cosine_sim(note.embedding, queryBuffer),
+    })).sort((a, b) => b.cos_score - a.cos_score).slice(0, 50);
+  }
+
   // Events FTS — raw-tier provenance-scoped streaming data (sessions, chains).
   // Always participates; honors source_type and project filters when set.
   let eventSql = `SELECT external_id, title, content, source_type, project, bm25(events_fts) as rank
@@ -848,6 +945,15 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
     rrfScores.get(uid)!.score += score;
   });
 
+  noteFtsResults.forEach((r, index) => {
+    const uid = `note:${r.note_id}`;
+    const score = 1 / (60 + index + 1);
+    if (!rrfScores.has(uid)) {
+      rrfScores.set(uid, noteSearchResult(r, r.title || `Note ${r.note_id}`, [r.summary, r.body].filter(Boolean).join('\n')));
+    }
+    rrfScores.get(uid)!.score += score;
+  });
+
   vectorResults.forEach((r, index) => {
     const uid = getUid(r.owner_type, r.page_slug, r.raw_id);
     const score = 1 / (60 + index + 1);
@@ -865,6 +971,16 @@ export async function hybridSearch(query: string, limit: number = 10, opts: Sear
     const current = rrfScores.get(uid)!;
     current.score += score;
     if (index === 0 || current.snippet.length > 300) current.snippet = r.text;
+  });
+
+  noteVectorResults.forEach((r, index) => {
+    const uid = `note:${r.note_id}`;
+    const score = 1 / (60 + index + 1);
+    if (!rrfScores.has(uid)) {
+      const artifacts = parseNoteArtifacts(r.artifacts);
+      rrfScores.set(uid, noteSearchResult(r, artifacts[0]?.title || `Note ${r.note_id}`, r.summary));
+    }
+    rrfScores.get(uid)!.score += score;
   });
 
   eventResults.forEach((r, index) => {
@@ -975,12 +1091,16 @@ export async function runGeminiInteractive(prompt: string, yolo: boolean = false
 }
 
 export async function queryBrain(question: string, opts: SearchOpts = {}) {
-  const hasEmbeddings = (db.prepare('SELECT COUNT(*) as count FROM chunks WHERE embedding IS NOT NULL').get() as any).count > 0;
+  const hasHybridData = (db.prepare(
+    `SELECT EXISTS(SELECT 1 FROM chunks WHERE embedding IS NOT NULL)
+          OR EXISTS(SELECT 1 FROM notes) AS present`
+  ).get() as any).present > 0;
   let context = "";
-  if (hasEmbeddings) {
+  if (hasHybridData) {
     const results = await hybridSearch(question, 10, opts);
     const wikiHits = results.filter(r => r.source === 'wiki');
     const rawHits = results.filter(r => r.source === 'raw');
+    const noteHits = results.filter(r => r.source === 'note');
     if (wikiHits.length > 0) {
       context += "## RELEVANT WIKI PAGES\n\n";
       for (let i = 0; i < Math.min(wikiHits.length, 3); i++) {
@@ -993,6 +1113,16 @@ export async function queryBrain(question: string, opts: SearchOpts = {}) {
     if (rawHits.length > 0) {
       context += "\n## RAW EVIDENCE\n\n";
       for (let i = 0; i < Math.min(rawHits.length, 5); i++) context += `### ${rawHits[i].title}\n${rawHits[i].snippet}\n---\n`;
+    }
+    if (noteHits.length > 0) {
+      context += "\n## DISTILLED NOTES\n\n";
+      for (let i = 0; i < Math.min(noteHits.length, 5); i++) {
+        const note = noteHits[i];
+        const provenance = note.source_provenance_status === 'valid' && note.external_id
+          ? `Source: event:${note.external_id} (characters ${note.source_segment_start}-${note.source_segment_end})`
+          : `Source provenance: ${note.source_provenance_status || 'unresolved'}; do not cite as current evidence.`;
+        context += `### ${note.title}\n${note.snippet}\n${provenance}\n---\n`;
+      }
     }
   } else {
     const results = db.prepare('SELECT slug, title FROM search_index WHERE search_index MATCH ? LIMIT 5').all(`"${question}"`) as any[];
@@ -1017,6 +1147,11 @@ export async function validateClaim(claim: string, opts: SearchOpts = {}) {
     if (r.source === 'wiki' && r.slug) {
       const body = fs.readFileSync(path.join(PATHS.wiki, `${r.slug}.md`), 'utf-8');
       context += `### [[${r.slug}|${r.title}]]\n${body}\n---\n`;
+    } else if (r.source === 'note') {
+      const provenance = r.source_provenance_status === 'valid' && r.external_id
+        ? `Source: event:${r.external_id} (characters ${r.source_segment_start}-${r.source_segment_end})`
+        : `Source provenance: ${r.source_provenance_status || 'unresolved'}; do not cite as current evidence.`;
+      context += `### ${r.title}\n${r.snippet}\n${provenance}\n---\n`;
     } else {
       context += `### ${r.title}\n${r.snippet}\n---\n`;
     }
@@ -1357,6 +1492,13 @@ export type NoteListRow = {
   id: number;
   project: string;
   source_chunk_id: number;
+  source_event_id: number | null;
+  source_external_id: string | null;
+  source_segment_start: number | null;
+  source_segment_end: number | null;
+  source_filter_version: number | null;
+  source_span_hash: string | null;
+  source_provenance_status: NoteProvenanceStatus;
   summary: string;
   artifact_count: number;
   created_at: string;
@@ -1427,6 +1569,13 @@ function noteListRow(row: any): NoteListRow {
     id: row.id,
     project: row.project,
     source_chunk_id: row.source_chunk_id,
+    source_event_id: row.source_event_id ?? null,
+    source_external_id: row.source_external_id ?? null,
+    source_segment_start: row.source_segment_start ?? null,
+    source_segment_end: row.source_segment_end ?? null,
+    source_filter_version: row.source_filter_version ?? null,
+    source_span_hash: row.source_span_hash ?? null,
+    source_provenance_status: noteProvenanceStatus(row),
     summary: row.summary,
     artifact_count: artifacts.length,
     created_at: row.created_at,
@@ -1452,25 +1601,104 @@ function boundedOffset(offset: number | undefined): number {
   return Math.floor(offset);
 }
 
-function rebuildNotesFtsFromNotes() {
-  try {
+function migrateNotesFtsOnce() {
+  const notesFtsAvailable = Boolean(db.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'notes_fts'`
+  ).get());
+  if (!notesFtsAvailable) return;
+
+  // The immediate transaction serializes concurrent initDb callers. Readers
+  // see the complete old or new index, never the rebuild in between.
+  const migrate = db.transaction(() => {
+    const applied = db.prepare('SELECT 1 FROM schema_migrations WHERE name = ?')
+      .get(NOTES_FTS_REBUILD_MIGRATION);
+    if (applied) return;
+
     db.prepare('DELETE FROM notes_fts').run();
     const rows = db.prepare('SELECT id, project, summary, artifacts FROM notes ORDER BY id ASC').all() as any[];
+    const insert = db.prepare(
+      `INSERT INTO notes_fts (note_id, project, artifact_index, summary, title, body)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    );
     for (const row of rows) {
-      syncNoteFts(row.id, row.project, row.summary, parseNoteArtifacts(row.artifacts));
+      parseNoteArtifacts(row.artifacts).forEach((artifact, index) => {
+        insert.run(row.id, row.project, index, row.summary, artifact.title, artifact.body);
+      });
     }
-  } catch (e) { /* FTS optional */ }
+    db.prepare('INSERT INTO schema_migrations (name) VALUES (?)').run(NOTES_FTS_REBUILD_MIGRATION);
+  });
+  migrate.immediate();
 }
 
-function healStaleNotesSourceChunkFk() {
+function migrateNotesProvenanceV16(currentVersion: number) {
+  const requiredColumns = [
+    'source_event_id',
+    'source_external_id',
+    'source_segment_start',
+    'source_segment_end',
+    'source_filter_version',
+    'source_span_hash',
+  ];
+  const existingColumns = new Set(
+    (db.prepare('PRAGMA table_info(notes)').all() as Array<{ name: string }>).map(c => c.name)
+  );
+  if (currentVersion >= 16 && requiredColumns.every(name => existingColumns.has(name))) return;
+
+  const migrate = db.transaction(() => {
+    const columns = new Set((db.prepare('PRAGMA table_info(notes)').all() as Array<{ name: string }>).map(c => c.name));
+    const additions: Array<[string, string]> = [
+      ['source_event_id', 'INTEGER'],
+      ['source_external_id', 'TEXT'],
+      ['source_segment_start', 'INTEGER'],
+      ['source_segment_end', 'INTEGER'],
+      ['source_filter_version', 'INTEGER'],
+      ['source_span_hash', 'TEXT'],
+    ];
+    for (const [name, type] of additions) {
+      if (!columns.has(name)) db.run(`ALTER TABLE notes ADD COLUMN ${name} ${type}`);
+    }
+
+    const rows = db.prepare(
+      `SELECT n.id AS note_id, cv.source_event_id, re.external_id,
+              cv.segment_start, cv.segment_end, cv.filter_version, re.content
+       FROM notes n
+       JOIN chunks_virtual cv ON cv.id = n.source_chunk_id
+       JOIN raw_events re ON re.id = cv.source_event_id
+       WHERE n.source_span_hash IS NULL`
+    ).all() as any[];
+    const update = db.prepare(
+      `UPDATE notes
+       SET source_event_id = ?, source_external_id = ?,
+           source_segment_start = ?, source_segment_end = ?,
+           source_filter_version = ?, source_span_hash = ?
+       WHERE id = ?`
+    );
+    for (const row of rows) {
+      const span = String(row.content).slice(row.segment_start, row.segment_end);
+      update.run(
+        row.source_event_id,
+        row.external_id,
+        row.segment_start,
+        row.segment_end,
+        row.filter_version,
+        getHash(span),
+        row.note_id,
+      );
+    }
+    db.run('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 16)');
+  });
+  migrate.immediate();
+}
+
+function healStaleNotesSourceChunkFk(): boolean {
   let stale = false;
   try {
     const fks = db.prepare('PRAGMA foreign_key_list(notes)').all() as any[];
     stale = fks.some(fk => fk.from === 'source_chunk_id');
   } catch (e) {
-    return;
+    return false;
   }
-  if (!stale) return;
+  if (!stale) return false;
 
   const previousForeignKeys = (db.prepare('PRAGMA foreign_keys').get() as any)?.foreign_keys === 1;
   db.exec('PRAGMA foreign_keys = OFF');
@@ -1531,16 +1759,40 @@ function healStaleNotesSourceChunkFk() {
   } finally {
     db.exec(`PRAGMA foreign_keys = ${previousForeignKeys ? 'ON' : 'OFF'}`);
   }
+  return true;
 }
 
-function resolveChunkProject(sourceChunkId: number): string {
+type NoteSourceProvenance = {
+  project: string;
+  source_event_id: number;
+  source_external_id: string;
+  source_segment_start: number;
+  source_segment_end: number;
+  source_filter_version: number;
+  source_span_hash: string;
+};
+
+function resolveChunkProvenance(sourceChunkId: number): NoteSourceProvenance {
   const row = db.prepare(
-    `SELECT project
-     FROM chunks_virtual
-     WHERE id = ?`
-  ).get(sourceChunkId) as { project: string } | undefined;
+    `SELECT cv.project, cv.source_event_id, re.external_id,
+            cv.segment_start, cv.segment_end, cv.filter_version, re.content
+     FROM chunks_virtual cv
+     JOIN raw_events re ON re.id = cv.source_event_id
+     WHERE cv.id = ?`
+  ).get(sourceChunkId) as any;
   if (!row) throw new NoteValidationError({ error: 'source_chunk_not_found', source_chunk_id: sourceChunkId });
-  return row.project || 'unknown';
+  // Chunk coordinates and append detection both use raw_events.content. The
+  // narrative filter is applied only after slicing in readChunk().
+  const span = String(row.content).slice(row.segment_start, row.segment_end);
+  return {
+    project: row.project || 'unknown',
+    source_event_id: row.source_event_id,
+    source_external_id: row.external_id,
+    source_segment_start: row.segment_start,
+    source_segment_end: row.segment_end,
+    source_filter_version: row.filter_version,
+    source_span_hash: getHash(span),
+  };
 }
 
 function validateNoteInput(input: unknown): NoteAddInput {
@@ -1582,78 +1834,97 @@ function validateNoteInput(input: unknown): NoteAddInput {
 
 export function addNote(rawInput: unknown): NoteAddResult {
   const input = validateNoteInput(rawInput);
-  const project = resolveChunkProject(input.source_chunk_id);
-  const existing = db.prepare('SELECT id FROM notes WHERE project = ? AND source_chunk_id = ?')
-    .get(project, input.source_chunk_id) as { id: number } | undefined;
-  if (existing) {
-    throw new NoteValidationError({ error: 'duplicate_chunk', existing_note_id: existing.id });
-  }
-
-  const candidates = input.artifacts.map((artifact, inputIndex) => ({
-    artifact,
-    inputIndex,
-    title_hash: noteTitleHash(artifact.title),
-  }));
-  const seenInRequest = new Set<string>();
-  const surviving: Array<{ artifact: NoteArtifactInput; inputIndex: number; title_hash: string }> = [];
-  let skipped = 0;
-  for (const candidate of candidates) {
-    if (seenInRequest.has(candidate.title_hash)) {
-      skipped++;
-      continue;
+  const add = db.transaction((): NoteAddResult => {
+    const source = resolveChunkProvenance(input.source_chunk_id);
+    const existing = db.prepare('SELECT id FROM notes WHERE project = ? AND source_chunk_id = ?')
+      .get(source.project, input.source_chunk_id) as { id: number } | undefined;
+    if (existing) {
+      throw new NoteValidationError({ error: 'duplicate_chunk', existing_note_id: existing.id });
     }
-    seenInRequest.add(candidate.title_hash);
-    const duplicate = db.prepare('SELECT 1 FROM note_title_hashes WHERE project = ? AND title_hash = ?')
-      .get(project, candidate.title_hash);
-    if (duplicate) {
-      skipped++;
-      continue;
+
+    const candidates = input.artifacts.map((artifact, inputIndex) => ({
+      artifact,
+      inputIndex,
+      title_hash: noteTitleHash(artifact.title),
+    }));
+    const seenInRequest = new Set<string>();
+    const surviving: Array<{ artifact: NoteArtifactInput; inputIndex: number; title_hash: string }> = [];
+    let skipped = 0;
+    for (const candidate of candidates) {
+      if (seenInRequest.has(candidate.title_hash)) {
+        skipped++;
+        continue;
+      }
+      seenInRequest.add(candidate.title_hash);
+      const duplicate = db.prepare('SELECT 1 FROM note_title_hashes WHERE project = ? AND title_hash = ?')
+        .get(source.project, candidate.title_hash);
+      if (duplicate) {
+        skipped++;
+        continue;
+      }
+      surviving.push(candidate);
     }
-    surviving.push(candidate);
-  }
 
-  if (surviving.length === 0) {
-    return {
-      note_id: null,
-      inserted_artifact_count: 0,
-      skipped_count: input.artifacts.length,
-      reason: 'all_artifacts_deduped',
-    };
-  }
+    if (surviving.length === 0) {
+      return {
+        note_id: null,
+        inserted_artifact_count: 0,
+        skipped_count: input.artifacts.length,
+        reason: 'all_artifacts_deduped',
+      };
+    }
 
-  return db.transaction(() => {
     const noteRes = db.prepare(
-      'INSERT INTO notes (project, source_chunk_id, summary, artifacts) VALUES (?, ?, ?, ?)'
-    ).run(project, input.source_chunk_id, input.summary, JSON.stringify(surviving.map(s => s.artifact)));
+      `INSERT INTO notes
+       (project, source_chunk_id, source_event_id, source_external_id,
+        source_segment_start, source_segment_end, source_filter_version, source_span_hash,
+        summary, artifacts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      source.project,
+      input.source_chunk_id,
+      source.source_event_id,
+      source.source_external_id,
+      source.source_segment_start,
+      source.source_segment_end,
+      source.source_filter_version,
+      source.source_span_hash,
+      input.summary,
+      JSON.stringify(surviving.map(s => s.artifact)),
+    );
     const noteId = Number(noteRes.lastInsertRowid);
     const hashInsert = db.prepare(
       'INSERT INTO note_title_hashes (note_id, artifact_index, title_hash, project) VALUES (?, ?, ?, ?)'
     );
     surviving.forEach((survivor, index) => {
-      hashInsert.run(noteId, index, survivor.title_hash, project);
+      hashInsert.run(noteId, index, survivor.title_hash, source.project);
     });
-    syncNoteFts(noteId, project, input.summary, surviving.map(s => s.artifact));
+    syncNoteFts(noteId, source.project, input.summary, surviving.map(s => s.artifact));
     return {
       note_id: noteId,
       inserted_artifact_count: surviving.length,
       skipped_count: skipped,
     };
-  })();
+  });
+  return add.immediate();
 }
 
 export function listNotes(opts: NoteListOpts = {}): NoteListRow[] {
   const clauses: string[] = [];
   const params: any[] = [];
-  if (opts.project) { clauses.push('project = ?'); params.push(opts.project); }
-  if (opts.source_chunk_id) { clauses.push('source_chunk_id = ?'); params.push(opts.source_chunk_id); }
+  if (opts.project) { clauses.push('n.project = ?'); params.push(opts.project); }
+  if (opts.source_chunk_id) { clauses.push('n.source_chunk_id = ?'); params.push(opts.source_chunk_id); }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const limit = boundedLimit(opts.limit);
   const offset = boundedOffset(opts.offset);
   const rows = db.prepare(
-    `SELECT id, project, source_chunk_id, summary, artifacts, created_at
-     FROM notes
+    `SELECT n.id, n.project, n.source_chunk_id, n.source_event_id, n.source_external_id,
+            n.source_segment_start, n.source_segment_end, n.source_filter_version, n.source_span_hash,
+            n.summary, n.artifacts, n.created_at, re.content AS source_content
+     FROM notes n
+     LEFT JOIN raw_events re ON re.external_id = n.source_external_id
      ${where}
-     ORDER BY id DESC
+     ORDER BY n.id DESC
      LIMIT ? OFFSET ?`
   ).all(...params, limit, offset) as any[];
   return rows.map(noteListRow);
@@ -1661,9 +1932,12 @@ export function listNotes(opts: NoteListOpts = {}): NoteListRow[] {
 
 export function getNote(id: number): NoteDetailRow | null {
   const row = db.prepare(
-    `SELECT id, project, source_chunk_id, summary, artifacts, created_at
-     FROM notes
-     WHERE id = ?`
+    `SELECT n.id, n.project, n.source_chunk_id, n.source_event_id, n.source_external_id,
+            n.source_segment_start, n.source_segment_end, n.source_filter_version, n.source_span_hash,
+            n.summary, n.artifacts, n.created_at, re.content AS source_content
+     FROM notes n
+     LEFT JOIN raw_events re ON re.external_id = n.source_external_id
+     WHERE n.id = ?`
   ).get(id) as any;
   return row ? noteDetailRow(row) : null;
 }
@@ -1699,9 +1973,12 @@ export function searchNotes(query: string, opts: NoteSearchOpts = {}): NoteSearc
     }
     if (selected.length === 0) return [];
     const get = db.prepare(
-      `SELECT id, project, source_chunk_id, summary, artifacts, created_at
-       FROM notes
-       WHERE id = ?`
+      `SELECT n.id, n.project, n.source_chunk_id, n.source_event_id, n.source_external_id,
+              n.source_segment_start, n.source_segment_end, n.source_filter_version, n.source_span_hash,
+              n.summary, n.artifacts, n.created_at, re.content AS source_content
+       FROM notes n
+       LEFT JOIN raw_events re ON re.external_id = n.source_external_id
+       WHERE n.id = ?`
     );
     return selected.flatMap(match => {
       const row = get.get(match.note_id) as any;
@@ -2023,8 +2300,8 @@ export type UpsertRawEventResult = 'inserted' | 'updated' | 'unchanged';
 function upsertRawEventInner(e: RawEventInput): UpsertRawEventResult {
   const content_hash = getHash(e.content);
   const existing = db.prepare(
-    `SELECT id, content_hash FROM raw_events WHERE external_id = ?`
-  ).get(e.external_id) as { id: number; content_hash: string | null } | undefined;
+    `SELECT id, content, content_hash FROM raw_events WHERE external_id = ?`
+  ).get(e.external_id) as { id: number; content: string; content_hash: string | null } | undefined;
 
   if (!existing) {
     db.prepare(
@@ -2047,14 +2324,15 @@ function upsertRawEventInner(e: RawEventInput): UpsertRawEventResult {
   // Compute + store the hash; if content really matches, return 'unchanged'
   // after writing just the hash (no chunks_virtual clear, no processed reset).
   if (!existing.content_hash) {
-    const current = db.prepare(`SELECT content FROM raw_events WHERE id = ?`).get(existing.id) as any;
-    if (current && current.content === e.content) {
+    if (existing.content === e.content) {
       db.prepare(`UPDATE raw_events SET content_hash = ? WHERE id = ?`).run(content_hash, existing.id);
       return 'unchanged';
     }
   } else if (existing.content_hash === content_hash) {
     return 'unchanged';
   }
+
+  const isPrefixAppend = e.content.startsWith(existing.content);
 
   // Hash differs — re-classify + reset pipeline state. processed=0 so the
   // chunker/ingester sees this as fresh work.
@@ -2070,8 +2348,17 @@ function upsertRawEventInner(e: RawEventInput): UpsertRawEventResult {
     content_hash, existing.id,
   );
 
-  // Clear stale narrative chunks so the chunker re-emits against new content.
-  db.prepare(`DELETE FROM chunks_virtual WHERE source_event_id = ?`).run(existing.id);
+  // Chunk coordinates index raw_events.content. Exact prefix growth leaves all
+  // existing spans valid, so the chunker can append only the new suffix while
+  // retaining stable IDs and processed state. A rewrite invalidates every span.
+  if (isPrefixAppend) {
+    // Project classification may improve as a session grows. Keep the retained
+    // partition in the same project as its raw event and future suffix chunks.
+    db.prepare(`UPDATE chunks_virtual SET project = ? WHERE source_event_id = ?`)
+      .run(e.project, existing.id);
+  } else {
+    db.prepare(`DELETE FROM chunks_virtual WHERE source_event_id = ?`).run(existing.id);
+  }
 
   // Refresh events_fts projection — if this throws, tx rolls back the UPDATE.
   db.prepare(`DELETE FROM events_fts WHERE external_id = ?`).run(e.external_id);

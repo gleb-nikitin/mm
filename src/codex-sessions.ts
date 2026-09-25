@@ -41,26 +41,92 @@ export function isCodexInjectedUserContext(text: string, beforeFirstTurn = false
   return beforeFirstTurn && !trimmed.includes('## My request for Codex:');
 }
 
+type CodexLegacyUserRecord = {
+  timestamp: string;
+  text: string;
+  recordIndex: number;
+};
+
+type CodexCurrentUserRecord = CodexLegacyUserRecord & {
+  explicitlyUserAuthored: boolean;
+};
+
+function normalizeCodexUserText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+export function selectCodexCurrentUserRecords<T extends CodexCurrentUserRecord>(
+  legacyUsers: CodexLegacyUserRecord[],
+  currentUsers: T[],
+  firstTurnBoundary: number,
+): T[] {
+  const pairedLegacyRecords = new Set<number>();
+  const pairedCurrentRecords = new Set<number>();
+
+  for (const user of currentUsers) {
+    const exactLegacy = legacyUsers.find(legacy =>
+      !pairedLegacyRecords.has(legacy.recordIndex)
+      && legacy.timestamp === user.timestamp
+      && legacy.text === user.text
+    );
+    if (exactLegacy) {
+      pairedLegacyRecords.add(exactLegacy.recordIndex);
+      pairedCurrentRecords.add(user.recordIndex);
+    }
+  }
+
+  for (const user of currentUsers) {
+    if (pairedCurrentRecords.has(user.recordIndex)) continue;
+
+    const adjacentLegacy = legacyUsers.find(legacy =>
+      !pairedLegacyRecords.has(legacy.recordIndex)
+      && Math.abs(legacy.recordIndex - user.recordIndex) === 1
+      && normalizeCodexUserText(legacy.text) === normalizeCodexUserText(user.text)
+    );
+    if (adjacentLegacy) {
+      pairedLegacyRecords.add(adjacentLegacy.recordIndex);
+      pairedCurrentRecords.add(user.recordIndex);
+    }
+  }
+
+  return currentUsers.filter(user => {
+    if (pairedCurrentRecords.has(user.recordIndex)) return false;
+    return user.explicitlyUserAuthored || !isCodexInjectedUserContext(
+      user.text,
+      firstTurnBoundary >= 0 && user.recordIndex < firstTurnBoundary,
+    );
+  });
+}
+
 export function readCodexSessionId(sourcePath: string): string | null {
   const fd = fs.openSync(sourcePath, 'r');
   try {
+    const chunks: Buffer[] = [];
     const buffer = Buffer.allocUnsafe(64 * 1024);
-    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
-    for (const line of buffer.toString('utf8', 0, bytesRead).split('\n')) {
-      if (!line.trim()) continue;
-      let record: any;
-      try {
-        record = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (
-        record?.type === 'session_meta'
-        && typeof record?.payload?.id === 'string'
-        && record.payload.id
-      ) return record.payload.id;
+    let position = 0;
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, position);
+      if (bytesRead === 0) break;
+      const newline = buffer.indexOf(0x0a, 0);
+      const chunkEnd = newline >= 0 && newline < bytesRead ? newline : bytesRead;
+      chunks.push(Buffer.from(buffer.subarray(0, chunkEnd)));
+      if (newline >= 0 && newline < bytesRead) break;
+      position += bytesRead;
     }
-    return null;
+
+    const line = Buffer.concat(chunks).toString('utf8').replace(/\r$/, '');
+    if (!line.trim()) return null;
+    let record: any;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      return null;
+    }
+    return record?.type === 'session_meta'
+      && typeof record?.payload?.id === 'string'
+      && record.payload.id
+      ? record.payload.id
+      : null;
   } finally {
     fs.closeSync(fd);
   }
@@ -70,8 +136,20 @@ export function identifyCodexSessionId(sourcePath: string): string | null {
   const filenameMatch = path.basename(sourcePath).match(
     /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i,
   );
-  if (filenameMatch) return filenameMatch[1];
-  return readCodexSessionId(sourcePath);
+  const filenameId = filenameMatch?.[1] ?? null;
+  let metadataId: string | null = null;
+  try {
+    metadataId = readCodexSessionId(sourcePath);
+  } catch (error) {
+    if (!filenameId) throw error;
+  }
+  if (metadataId && filenameId && metadataId.toLowerCase() !== filenameId.toLowerCase()) {
+    console.warn(
+      `Codex rollout session ID mismatch: ${sourcePath} `
+      + `(session_meta=${metadataId}, filename=${filenameId}); using session_meta`,
+    );
+  }
+  return metadataId ?? filenameId;
 }
 
 function expandLeadingHome(value: string): string {

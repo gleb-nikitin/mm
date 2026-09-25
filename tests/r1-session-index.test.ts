@@ -917,6 +917,39 @@ describe('R1 session linkage index', () => {
     db.close();
   });
 
+  test('Codex importer keeps a distinct mixed-format turn without inflating an adjacent skewed duplicate', () => {
+    const codexDir = path.join(tmpRoot, 'codex-mixed-transition');
+    const sessionFile = path.join(codexDir, '2026', '09', '24', 'rollout.jsonl');
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(sessionFile, [
+      { timestamp: '2026-09-24T10:00:00Z', type: 'session_meta', payload: { id: 'sess-codex-mixed-transition', cwd: '/Users/test/work/mm' } },
+      { timestamp: '2026-09-24T10:00:00.500Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'future host bootstrap shape' }] } },
+      { timestamp: '2026-09-24T10:00:00.600Z', type: 'event_msg', payload: { type: 'task_started' } },
+      { timestamp: '2026-09-24T10:00:01.000Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'legacy prompt' }] } },
+      { timestamp: '2026-09-24T10:00:01.010Z', type: 'event_msg', payload: { type: 'user_message', message: 'legacy prompt' } },
+      { timestamp: '2026-09-24T10:00:02Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'distinct transition prompt' }] } },
+      { timestamp: '2026-09-24T10:00:03Z', type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'reply' }] } },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+
+    const imported = Bun.spawnSync({
+      cmd: ['bun', 'scripts/import-codex.ts', '--sessions-dir', codexDir, '--days', '365', '--force', '--min-turns', '2'],
+      cwd: REPO,
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot, MT_AC_DB_PATH: acDbPath },
+      stdout: 'pipe', stderr: 'pipe',
+    });
+    expect(imported.exitCode).toBe(0);
+
+    const db = openBrainDb();
+    const row = db.prepare(
+      `SELECT content, metadata FROM raw_events WHERE external_id = 'codex:sess-codex-mixed-transition'`
+    ).get() as { content: string; metadata: string };
+    expect(JSON.parse(row.metadata).user_turn_count).toBe(2);
+    expect(row.content.match(/User: legacy prompt/g)).toHaveLength(1);
+    expect(row.content).toContain('User: distinct transition prompt');
+    expect(row.content).not.toContain('future host bootstrap shape');
+    db.close();
+  });
+
   test('Codex importer excludes unannotated host context from the user-turn threshold', () => {
     const codexDir = path.join(tmpRoot, 'codex-unannotated-context');
     const sessionFile = path.join(codexDir, '2026', '09', '24', 'rollout.jsonl');
@@ -1015,6 +1048,7 @@ describe('R1 session linkage index', () => {
       stdout: 'pipe', stderr: 'pipe',
     });
     expect(imported.exitCode).toBe(0);
+    expect(imported.stderr.toString()).not.toContain('session ID mismatch');
     const db = openBrainDb();
     expect(db.prepare(`SELECT external_id FROM raw_events WHERE external_id LIKE 'codex:01a09%'`).all()).toEqual([
       { external_id: `codex:${firstSessionId}` },
@@ -1022,6 +1056,32 @@ describe('R1 session linkage index', () => {
     expect(db.prepare(`SELECT session_id FROM session_index WHERE vendor = 'codex'`).all()).toEqual([
       { session_id: firstSessionId },
     ]);
+    db.close();
+  });
+
+  test('Codex importer falls back to the filename UUID when session metadata is unreadable', () => {
+    const codexDir = path.join(tmpRoot, 'codex-filename-fallback');
+    const sessionId = '01a095ee-d2ad-7283-8398-90b17447b415';
+    const sessionFile = path.join(codexDir, '2026', '09', '24', `rollout-2026-09-24T10-00-00-${sessionId}.jsonl`);
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(sessionFile, [
+      '{malformed session metadata}',
+      JSON.stringify({ timestamp: '2026-09-24T10:00:01Z', type: 'turn_context', payload: { cwd: '/Users/test/work/mm' } }),
+      JSON.stringify({ timestamp: '2026-09-24T10:00:02Z', type: 'event_msg', payload: { type: 'user_message', message: 'first prompt' } }),
+      JSON.stringify({ timestamp: '2026-09-24T10:00:03Z', type: 'event_msg', payload: { type: 'user_message', message: 'second prompt' } }),
+    ].join('\n') + '\n');
+
+    const imported = Bun.spawnSync({
+      cmd: ['bun', 'scripts/import-codex.ts', '--sessions-dir', codexDir, '--days', '365', '--force', '--min-turns', '2'],
+      cwd: REPO,
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot, MT_AC_DB_PATH: acDbPath },
+      stdout: 'pipe', stderr: 'pipe',
+    });
+    expect(imported.exitCode).toBe(0);
+    const db = openBrainDb();
+    expect(db.prepare(`SELECT external_id FROM raw_events WHERE external_id = 'codex:${sessionId}'`).get()).toEqual({
+      external_id: `codex:${sessionId}`,
+    });
     db.close();
   });
 

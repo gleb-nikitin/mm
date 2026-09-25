@@ -21,6 +21,7 @@ const BRAIN_TS = path.join(REPO, 'src', 'brain.ts');
 const API_TS   = path.join(REPO, 'src', 'api.ts');
 const IMPORT_CLAUDE_TS = path.join(REPO, 'scripts', 'import-claude.ts');
 const CHUNK_EVENTS_TS = path.join(REPO, 'scripts', 'chunk-events.ts');
+const REPAIR_NOTE_PROVENANCE_TS = path.join(REPO, 'scripts', 'repair-note-provenance.ts');
 
 let tmpRoot: string;
 let shimDir: string;
@@ -166,16 +167,16 @@ function seedNote(project: string, sourceChunkId: number, summary: string, artif
 // ---------- SCHEMA ----------
 
 describe.serial('schema migration', () => {
-  test.serial('fresh root bootstraps to v15', async () => {
+  test.serial('fresh root bootstraps to v16', async () => {
     await brain(['queue']);
     const db = openDb();
     const version = (db.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any).version;
-    expect(version).toBe(15);
+    expect(version).toBe(16);
     const tbls = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r: any) => r.name);
     for (const name of [
       'raw_entries', 'raw_events', 'wiki_pages', 'claims', 'claim_sources', 'claim_sources_event', 'import_state',
       'artifacts', 'artifact_sources', 'chunks_virtual', 'session_index', 'session_message_links', 'session_usage', 'session_events',
-      'notes', 'note_title_hashes', 'notes_fts',
+      'notes', 'note_title_hashes', 'notes_fts', 'schema_migrations',
     ]) {
       expect(tbls).toContain(name);
     }
@@ -204,7 +205,11 @@ describe.serial('schema migration', () => {
       expect(eventCols).toContain(name);
     }
     const noteCols = db.prepare("PRAGMA table_info(notes)").all().map((c: any) => c.name);
-    for (const name of ['id', 'project', 'source_chunk_id', 'summary', 'artifacts', 'embedding']) {
+    for (const name of [
+      'id', 'project', 'source_chunk_id', 'summary', 'artifacts', 'embedding',
+      'source_event_id', 'source_external_id', 'source_segment_start', 'source_segment_end',
+      'source_filter_version', 'source_span_hash',
+    ]) {
       expect(noteCols).toContain(name);
     }
     const noteHashCols = db.prepare("PRAGMA table_info(note_title_hashes)").all().map((c: any) => c.name);
@@ -268,6 +273,121 @@ describe.serial('schema migration', () => {
     } finally {
       healed.close();
     }
+  });
+
+  test.serial('v16 migration snapshots provenance for notes whose source chunks still exist', async () => {
+    await brain(['queue']);
+    const db = openDb();
+    const content = 'User: migration source\n\nAssistant: migration answer';
+    const eventId = Number(db.prepare(
+      `INSERT INTO raw_events (source_type, project, external_id, timestamp, content)
+       VALUES ('llm_chat', 'mm', 'event:v16-migration', '2026-09-25T00:00:00Z', ?)`
+    ).run(content).lastInsertRowid);
+    const chunkId = Number(db.prepare(
+      `INSERT INTO chunks_virtual
+       (project, source_event_id, chunk_index, chunk_total, segment_start, segment_end, filter_version)
+       VALUES ('mm', ?, 1, 1, 0, ?, 2)`
+    ).run(eventId, content.length).lastInsertRowid);
+    const noteId = Number(db.prepare(
+      `INSERT INTO notes (project, source_chunk_id, summary, artifacts)
+       VALUES ('mm', ?, 'Migration note.', '[{"title":"Migration Note","body":"Body."}]')`
+    ).run(chunkId).lastInsertRowid);
+    db.prepare('UPDATE schema_version SET version = 15 WHERE id = 1').run();
+    db.close();
+
+    const migrated = await brain(['queue']);
+    expect(migrated.code).toBe(0);
+    const after = openDb();
+    const row = after.prepare(
+      `SELECT source_event_id, source_external_id, source_segment_start, source_segment_end,
+              source_filter_version, source_span_hash
+       FROM notes WHERE id = ?`
+    ).get(noteId) as any;
+    expect(row).toMatchObject({
+      source_event_id: eventId,
+      source_external_id: 'event:v16-migration',
+      source_segment_start: 0,
+      source_segment_end: content.length,
+      source_filter_version: 2,
+    });
+    expect(row.source_span_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect((after.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any).version).toBe(16);
+    after.close();
+  });
+
+  test.serial('notes FTS rebuild runs once and later initDb calls leave it untouched', async () => {
+    await brain(['queue']);
+    seedNote('mm', 101, 'First migration summary.', [
+      { title: 'First migration artifact', body: 'Atomic rebuild alpha.' },
+    ]);
+    seedNote('mm', 102, 'Second migration summary.', [
+      { title: 'Second migration artifact', body: 'Atomic rebuild beta.' },
+    ]);
+
+    const before = openDb();
+    before.exec(`
+      DELETE FROM schema_migrations
+      WHERE name = '2026-09-25-notes-fts-atomic-rebuild';
+      DELETE FROM notes_fts;
+    `);
+    before.close();
+
+    const migrated = await brain(['queue']);
+    expect(migrated.code).toBe(0);
+
+    const afterMigration = openDb();
+    expect((afterMigration.prepare('SELECT COUNT(*) AS c FROM notes_fts').get() as any).c).toBe(2);
+    expect((afterMigration.prepare(
+      `SELECT COUNT(*) AS c FROM schema_migrations
+       WHERE name = '2026-09-25-notes-fts-atomic-rebuild'`
+    ).get() as any).c).toBe(1);
+    afterMigration.exec('DELETE FROM notes_fts');
+    afterMigration.close();
+
+    const repeated = await brain(['queue']);
+    expect(repeated.code).toBe(0);
+    const afterRepeat = openDb();
+    expect((afterRepeat.prepare('SELECT COUNT(*) AS c FROM notes_fts').get() as any).c).toBe(0);
+    afterRepeat.close();
+  });
+
+  test.serial('notes FTS migration rolls back the delete when a rebuild row fails', async () => {
+    await brain(['queue']);
+    seedNote('mm', 201, 'First rollback summary.', [
+      { title: 'First rollback artifact', body: 'Must not replace the old index alone.' },
+    ]);
+    const rejectedNoteId = seedNote('mm', 202, 'Second rollback summary.', [
+      { title: 'Second rollback artifact', body: 'Forces the simulated migration failure.' },
+    ]);
+
+    const setup = openDb();
+    setup.exec(`
+      DELETE FROM schema_migrations
+      WHERE name = '2026-09-25-notes-fts-atomic-rebuild';
+      DROP TABLE notes_fts;
+      CREATE TABLE notes_fts (
+        note_id INTEGER CHECK(note_id != ${rejectedNoteId}),
+        project TEXT,
+        artifact_index INTEGER,
+        summary TEXT,
+        title TEXT,
+        body TEXT
+      );
+      INSERT INTO notes_fts (note_id, project, artifact_index, summary, title, body)
+      VALUES (999, 'mm', 0, 'old complete index', 'sentinel', 'must survive rollback');
+    `);
+    setup.close();
+
+    const failed = await brain(['queue']);
+    expect(failed.code).not.toBe(0);
+
+    const after = openDb();
+    expect(after.prepare('SELECT note_id FROM notes_fts').all()).toEqual([{ note_id: 999 }]);
+    expect((after.prepare(
+      `SELECT COUNT(*) AS c FROM schema_migrations
+       WHERE name = '2026-09-25-notes-fts-atomic-rebuild'`
+    ).get() as any).c).toBe(0);
+    after.close();
   });
 });
 
@@ -383,6 +503,64 @@ describe.serial('hybridSearch — events surface via reserved lane', () => {
     const res = await brain(['search', 'provenance']);
     expect(res.code).toBe(0);
     expect(res.stdout).toContain('[EVENT]');
+  });
+});
+
+describe.serial('hybridSearch — distilled notes join RRF', () => {
+  test.serial('fuses note FTS/vector hits, honors filters, and exposes verified source provenance', async () => {
+    const proc = Bun.spawn(['bun', '-e', `
+      globalThis.fetch = async () => new Response(JSON.stringify({ embedding: [1, 0] }), {
+        headers: { 'content-type': 'application/json' },
+      });
+      const core = await import('${path.join(REPO, 'src', 'core.ts')}');
+      core.initDb();
+      const content = 'User: semantic compass evidence\\n\\nAssistant: captured';
+      core.upsertRawEvent({
+        source_type: 'llm_chat', project: 'mm', external_id: 'evt-note-search',
+        timestamp: '2026-09-25T00:00:00Z', content, title: 'Search source',
+      });
+      const event = core.db.prepare('SELECT id FROM raw_events WHERE external_id = ?').get('evt-note-search');
+      const chunkId = core.insertChunkVirtual({
+        project: 'mm', source_event_id: event.id, chunk_index: 1, chunk_total: 1,
+        segment_start: 0, segment_end: content.length,
+      });
+      const added = core.addNote({
+        source_chunk_id: chunkId,
+        summary: 'The semantic compass keeps retrieval grounded.',
+        artifacts: [{ type: 'decision', title: 'Semantic Compass', body: 'Prefer distilled evidence.' }],
+      });
+      core.db.prepare('UPDATE notes SET embedding = ? WHERE id = ?')
+        .run(Buffer.from(new Float32Array([1, 0]).buffer), added.note_id);
+
+      const all = await core.hybridSearch('semantic compass', 10);
+      const noteOnly = await core.hybridSearch('semantic compass', 10, { sourceTypes: ['note'], projects: ['mm'] });
+      const excluded = await core.hybridSearch('semantic compass', 10, { sourceTypes: ['event'] });
+      const wrongProject = await core.hybridSearch('semantic compass', 10, { sourceTypes: ['note'], projects: ['other'] });
+      core.upsertRawEvent({
+        source_type: 'llm_chat', project: 'mm', external_id: 'evt-note-search',
+        timestamp: '2026-09-25T00:01:00Z', content: 'rewritten source', title: 'Search source',
+      });
+      const stale = await core.hybridSearch('semantic compass', 10, { sourceTypes: ['note'] });
+      console.log(JSON.stringify({ all, noteOnly, excluded, wrongProject, stale }));
+    `], {
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
+      stdout: 'pipe', stderr: 'pipe',
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+    ]);
+    expect(code || 0).toBe(0);
+    expect(stderr).toBe('');
+    const result = JSON.parse(stdout.trim());
+    const note = result.all.find((row: any) => row.source === 'note');
+    expect(note).toBeDefined();
+    expect(note.score).toBeGreaterThan(0.03); // one RRF contribution from each arm
+    expect(note.external_id).toBe('evt-note-search');
+    expect(note.source_provenance_status).toBe('valid');
+    expect(result.noteOnly.map((row: any) => row.source)).toEqual(['note']);
+    expect(result.excluded.some((row: any) => row.source === 'note')).toBe(false);
+    expect(result.wrongProject.some((row: any) => row.source === 'note')).toBe(false);
+    expect(result.stale.find((row: any) => row.source === 'note').source_provenance_status).toBe('stale');
   });
 });
 
@@ -551,7 +729,7 @@ describe.serial('chunk-events — raw_events to chunks_virtual (v11)', () => {
     expect(res.stdout).not.toContain('ls -la');
   });
 
-  test.serial('session grown after chunking: stale chunks cleared on next chunker run (no --rechunk)', async () => {
+  test.serial('append-grown session retains chunk ids and queues only suffix chunks under its current project', async () => {
     await brain(['queue']);
     const baseTurn = (t: string) => `User: ${t}\n\nAssistant: reply ${t}`;
     const initial = baseTurn('Q1');
@@ -567,34 +745,82 @@ describe.serial('chunk-events — raw_events to chunks_virtual (v11)', () => {
     const first = await chunker(['--project', 'growtest']);
     expect(first.code).toBe(0);
 
-    // Capture pre-grow chunk ids — the bug's signature is these specific rows surviving.
+    // Mark the original partition processed: append growth must not queue it again.
     const db2 = openDb();
     const preGrowIds = (db2.prepare(
       'SELECT id FROM chunks_virtual WHERE source_event_id = ?'
     ).all(evtId) as any[]).map((r: any) => r.id);
     expect(preGrowIds.length).toBeGreaterThan(0);
-
-    // Mimic upsertRawEvent's chunked-reset on content-hash drift.
-    db2.prepare('UPDATE raw_events SET content = ?, chunked = 0 WHERE id = ?').run(grown, evtId);
+    db2.prepare('UPDATE chunks_virtual SET processed = 1 WHERE source_event_id = ?').run(evtId);
     db2.close();
 
-    // Default-path chunker (no --rechunk). This is the bug path.
-    const second = await chunker(['--project', 'growtest']);
+    const update = Bun.spawn(['bun', '-e', `
+      import { initDb, upsertRawEvent } from '${path.join(REPO, 'src', 'core.ts')}';
+      initDb();
+      console.log(upsertRawEvent({
+        source_type: 'llm_chat', project: 'growtest-renamed', external_id: 'evt-grow-1',
+        timestamp: '2026-04-18T13:05:00Z', content: ${JSON.stringify(grown)}, title: 'Test',
+      }));
+    `], { env: { ...process.env, MT_BRAIN_ROOT: tmpRoot }, stdout: 'pipe', stderr: 'pipe' });
+    const [updateOut, updateErr, updateCode] = await Promise.all([
+      new Response(update.stdout).text(), new Response(update.stderr).text(), update.exited,
+    ]);
+    expect(updateCode || 0).toBe(0);
+    expect(updateErr).toBe('');
+    expect(updateOut).toContain('updated');
+
+    const second = await chunker(['--project', 'growtest-renamed']);
     expect(second.code).toBe(0);
 
     const db3 = openDb();
     const placeholders = preGrowIds.map(() => '?').join(',');
-    const staleCount = (db3.prepare(
+    const retainedCount = (db3.prepare(
       `SELECT COUNT(*) as c FROM chunks_virtual
        WHERE source_event_id = ? AND id IN (${placeholders})`
     ).get(evtId, ...preGrowIds) as any).c;
-    const finalCount = (db3.prepare(
-      'SELECT COUNT(*) as c FROM chunks_virtual WHERE source_event_id = ?'
-    ).get(evtId) as any).c;
+    const counts = db3.prepare(
+      `SELECT COUNT(*) as total, SUM(processed = 1) as processed, SUM(processed = 0) as pending
+       FROM chunks_virtual WHERE source_event_id = ?`
+    ).get(evtId) as any;
+    const oldStates = db3.prepare(
+      `SELECT id, processed, project FROM chunks_virtual
+       WHERE source_event_id = ? AND id IN (${placeholders}) ORDER BY id`
+    ).all(evtId, ...preGrowIds) as any[];
+    const projects = db3.prepare(
+      `SELECT project, COUNT(*) AS count
+       FROM chunks_virtual WHERE source_event_id = ? GROUP BY project`
+    ).all(evtId) as any[];
+    const oldProjectPending = (db3.prepare(
+      `SELECT COUNT(*) AS count FROM chunks_virtual
+       WHERE source_event_id = ? AND project = 'growtest' AND processed = 0`
+    ).get(evtId) as any).count;
+    const currentProjectPending = (db3.prepare(
+      `SELECT COUNT(*) AS count FROM chunks_virtual
+       WHERE source_event_id = ? AND project = 'growtest-renamed' AND processed = 0`
+    ).get(evtId) as any).count;
     db3.close();
 
-    expect(staleCount).toBe(0);
-    expect(finalCount).toBeGreaterThan(0);
+    expect(retainedCount).toBe(preGrowIds.length);
+    expect(oldStates.every(row => row.processed === 1)).toBe(true);
+    expect(oldStates.every(row => row.project === 'growtest-renamed')).toBe(true);
+    expect(projects).toEqual([{ project: 'growtest-renamed', count: counts.total }]);
+    expect(oldProjectPending).toBe(0);
+    expect(counts.total).toBeGreaterThan(preGrowIds.length);
+    expect(counts.processed).toBe(preGrowIds.length);
+    expect(counts.pending).toBe(counts.total - preGrowIds.length);
+    expect(currentProjectPending).toBe(counts.pending);
+
+    const explicit = await chunker(['--project', 'growtest-renamed', '--rechunk']);
+    expect(explicit.code).toBe(0);
+    const afterExplicit = openDb();
+    expect((afterExplicit.prepare(
+      `SELECT COUNT(*) AS c FROM chunks_virtual
+       WHERE source_event_id = ? AND id IN (${placeholders})`
+    ).get(evtId, ...preGrowIds) as any).c).toBe(0);
+    expect((afterExplicit.prepare(
+      'SELECT COUNT(*) AS c FROM chunks_virtual WHERE source_event_id = ?'
+    ).get(evtId) as any).c).toBeGreaterThan(0);
+    afterExplicit.close();
   });
 });
 
@@ -735,6 +961,12 @@ describe.serial('notes — add CLI + dedup', () => {
       const note = db.prepare('SELECT * FROM notes WHERE id = ?').get(parsed.note_id) as any;
       expect(note.project).toBe('mm');
       expect(note.source_chunk_id).toBe(chunkId);
+      expect(typeof note.source_event_id).toBe('number');
+      expect(note.source_external_id).toContain('note-source-');
+      expect(note.source_segment_start).toBe(0);
+      expect(note.source_segment_end).toBe('chunk text for notes'.length);
+      expect(note.source_filter_version).toBe(2);
+      expect(note.source_span_hash).toMatch(/^[0-9a-f]{64}$/);
       expect(JSON.parse(note.artifacts).length).toBe(2);
       const hashes = (db.prepare('SELECT COUNT(*) as c FROM note_title_hashes WHERE note_id = ?').get(parsed.note_id) as any).c;
       expect(hashes).toBe(2);
@@ -742,6 +974,17 @@ describe.serial('notes — add CLI + dedup', () => {
       expect(fts.map(r => r.note_id)).toContain(parsed.note_id);
     } finally {
       db.close();
+    }
+
+    const api = await startApi();
+    try {
+      const response = await fetch(`${api.base}/note/${parsed.note_id}`);
+      expect(response.ok).toBe(true);
+      const detail = await response.json() as any;
+      expect(detail.source_external_id).toContain('note-source-');
+      expect(detail.source_provenance_status).toBe('valid');
+    } finally {
+      await api.stop();
     }
   });
 
@@ -803,7 +1046,7 @@ describe.serial('notes — add CLI + dedup', () => {
 
   test.serial('raw event update can clear stale virtual chunks after note add', async () => {
     const proc = Bun.spawn(['bun', '-e', `
-      import { initDb, db, upsertRawEvent, insertChunkVirtual, addNote } from '${path.join(REPO, 'src', 'core.ts')}';
+      import { initDb, db, upsertRawEvent, insertChunkVirtual, addNote, getNote } from '${path.join(REPO, 'src', 'core.ts')}';
       initDb();
       upsertRawEvent({
         source_type: 'llm_chat', project: 'mm',
@@ -827,10 +1070,10 @@ describe.serial('notes — add CLI + dedup', () => {
       const update = upsertRawEvent({
         source_type: 'llm_chat', project: 'mm',
         external_id: 'note-rechunk', timestamp: '2026-04-18T10:05:00Z',
-        content: 'first content for distill plus later growth',
+        content: 'rewritten content with different provenance',
       });
       const chunks = db.prepare('SELECT COUNT(*) as c FROM chunks_virtual WHERE source_event_id = ?').get(evt.id);
-      const row = db.prepare('SELECT id, source_chunk_id FROM notes WHERE id = ?').get(note.note_id);
+      const row = getNote(note.note_id);
       console.log(JSON.stringify({ update, chunks: chunks.c, note: row }));
     `], {
       env: { ...process.env, MT_BRAIN_ROOT: tmpRoot },
@@ -848,6 +1091,8 @@ describe.serial('notes — add CLI + dedup', () => {
     expect(parsed.chunks).toBe(0);
     expect(typeof parsed.note.id).toBe('number');
     expect(parsed.note.source_chunk_id).toBeGreaterThan(0);
+    expect(parsed.note.source_external_id).toBe('note-rechunk');
+    expect(parsed.note.source_provenance_status).toBe('stale');
   });
 });
 
@@ -955,8 +1200,90 @@ describe.serial('notes API', () => {
   });
 });
 
+describe.serial('note provenance repair', () => {
+  test.serial('dry-run and apply recover exact and relocated backup spans without guessing', async () => {
+    await brain(['queue']);
+    const backupPath = path.join(tmpRoot, 'meta', 'pre-repair.db');
+    const csvPath = path.join(tmpRoot, 'meta', 'provenance.csv');
+    const sameContent = 'User: stable source text\n\nAssistant: stable answer';
+    const movedSpan = 'User: relocate this exact source span';
+    const movedOldContent = `${movedSpan}\n\nAssistant: old answer`;
+    const missingOldContent = 'User: source removed by normalization';
+
+    const db = openDb();
+    db.prepare(`INSERT INTO raw_events (source_type, project, external_id, timestamp, content)
+                VALUES ('llm_chat', 'mm', 'event:same', '2026-09-25T00:00:00Z', ?)`).run(sameContent);
+    db.prepare(`INSERT INTO raw_events (source_type, project, external_id, timestamp, content)
+                VALUES ('llm_chat', 'mm', 'event:moved', '2026-09-25T00:00:00Z', ?)`).run(movedOldContent);
+    db.prepare(`INSERT INTO raw_events (source_type, project, external_id, timestamp, content)
+                VALUES ('llm_chat', 'mm', 'event:missing', '2026-09-25T00:00:00Z', ?)`).run(missingOldContent);
+    const sameNote = seedNote('mm', 701, 'Same-offset repair.', [{ title: 'Repair Same', body: 'Body.' }]);
+    const movedNote = seedNote('mm', 702, 'Relocated repair.', [{ title: 'Repair Moved', body: 'Body.' }]);
+    const missingNote = seedNote('mm', 703, 'Missing repair.', [{ title: 'Repair Missing', body: 'Body.' }]);
+    const blankNote = seedNote('mm', 704, 'No coordinates.', [{ title: 'Repair Blank', body: 'Body.' }]);
+    const escapedBackup = backupPath.replaceAll("'", "''");
+    db.exec(`VACUUM INTO '${escapedBackup}'`);
+    db.prepare(`UPDATE raw_events SET content = ? WHERE external_id = 'event:moved'`)
+      .run(`Header added later\n\n${movedOldContent}`);
+    db.prepare(`UPDATE raw_events SET content = 'Assistant: normalized content only' WHERE external_id = 'event:missing'`).run();
+    db.close();
+
+    fs.writeFileSync(csvPath, [
+      'note_id,project,source_chunk_id,external_id,chunk_index,chunk_total,segment_start,segment_end,filter_version',
+      `${sameNote},mm,701,event:same,1,1,0,${sameContent.length},2`,
+      `${movedNote},mm,702,event:moved,1,1,0,${movedSpan.length},2`,
+      `${missingNote},mm,703,event:missing,1,1,0,${missingOldContent.length},2`,
+      `${blankNote},mm,704,,,,,,`,
+    ].join('\n') + '\n');
+
+    const runRepair = async (apply: boolean) => {
+      const proc = Bun.spawn([
+        'bun', REPAIR_NOTE_PROVENANCE_TS,
+        '--db', path.join(tmpRoot, 'meta', 'brain.db'),
+        '--backup-db', backupPath,
+        '--csv', csvPath,
+        ...(apply ? ['--apply'] : []),
+      ], { stdout: 'pipe', stderr: 'pipe' });
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+      ]);
+      return { stdout, stderr, code: code || 0 };
+    };
+
+    const dryRun = await runRepair(false);
+    expect(dryRun.code).toBe(0);
+    expect(dryRun.stderr).toBe('');
+    const dry = JSON.parse(dryRun.stdout);
+    expect(dry).toMatchObject({
+      mode: 'dry-run', notes: 4, csv_rows: 4, resolved: 2,
+      same_offset: 1, relocated: 1, unresolved: 2,
+      unresolved_by_reason: { span_not_found: 1, backup_coordinates_missing: 1 },
+    });
+
+    const applied = await runRepair(true);
+    if (applied.code !== 0) throw new Error(applied.stderr || applied.stdout);
+    expect(applied.code).toBe(0);
+    expect(applied.stderr).toBe('');
+    expect(JSON.parse(applied.stdout).mode).toBe('apply');
+
+    const after = openDb();
+    const rows = after.prepare(
+      `SELECT id, source_external_id, source_segment_start, source_segment_end, source_span_hash
+       FROM notes ORDER BY id`
+    ).all() as any[];
+    expect(rows[0].source_external_id).toBe('event:same');
+    expect(rows[0].source_segment_start).toBe(0);
+    expect(rows[0].source_span_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(rows[1].source_external_id).toBe('event:moved');
+    expect(rows[1].source_segment_start).toBe('Header added later\n\n'.length);
+    expect(rows[2].source_external_id).toBeNull();
+    expect(rows[3].source_external_id).toBeNull();
+    after.close();
+  });
+});
+
 describe.serial('brain backup — WAL checkpoint + VACUUM INTO', () => {
-  test.serial('produces a valid SQLite file readable at schema_version=15', async () => {
+  test.serial('produces a valid SQLite file readable at schema_version=16', async () => {
     await brain(['queue']);
     const target = path.join(tmpRoot, 'meta', 'snap.db');
     const res = await brain(['backup', '--target', target]);
@@ -964,7 +1291,7 @@ describe.serial('brain backup — WAL checkpoint + VACUUM INTO', () => {
     expect(fs.existsSync(target)).toBe(true);
     const snap = new Database(target, { readonly: true });
     const v = (snap.prepare('SELECT version FROM schema_version WHERE id = 1').get() as any).version;
-    expect(v).toBe(15);
+    expect(v).toBe(16);
     snap.close();
   });
 });

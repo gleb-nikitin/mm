@@ -42,3 +42,8 @@
 - **2026-09-25**: fix(codex): filter unannotated host context
 - **2026-09-25**: fix(codex): retain first session metadata identity
 - **2026-09-25**: docs(cto): capture coordination and backup lessons
+- **2026-09-25**: fix(notes): migrate FTS rebuild once atomically
+- **2026-09-25**: fix(codex): normalize mixed turns and session identity
+- **2026-09-25**: feat(notes): retain chunks and hash source provenance
+- **2026-09-25**: feat(notes): add notes to hybrid retrieval
+- **2026-09-25**: docs(cto): capture production checkout safety lessons
