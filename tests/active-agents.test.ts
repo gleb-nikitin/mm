@@ -427,6 +427,39 @@ describe('getActiveAgentsLive', () => {
     expect(rows).toHaveLength(0);
   });
 
+  test('codex: unannotated host context does not become the live user snippet', () => {
+    const codexDir = path.join(probeTmp, 'codex-context-only');
+    const sessionFile = path.join(codexDir, '2026-04-22', 'rollout.jsonl');
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(sessionFile, [
+      {
+        type: 'session_meta', timestamp: new Date().toISOString(),
+        payload: { id: 'sess-codex-context-only', cwd: '/test-cwd/mm', model: 'gpt-5' },
+      },
+      {
+        type: 'response_item', timestamp: new Date().toISOString(),
+        payload: {
+          type: 'message', role: 'user',
+          content: [{ type: 'input_text', text: '# AGENTS.md instructions for /test-cwd/mm\n<INSTRUCTIONS>host context</INSTRUCTIONS>' }],
+        },
+      },
+      {
+        type: 'response_item', timestamp: new Date().toISOString(),
+        payload: {
+          type: 'message', role: 'user',
+          content: [{ type: 'input_text', text: '<environment_context>\n<cwd>/test-cwd/mm</cwd>\n</environment_context>' }],
+        },
+      },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+
+    const rows = getActiveAgentsLive({
+      claudeProjectsDir: path.join(probeTmp, 'nope-claude'),
+      codexSessionsDir: codexDir,
+      geminiSessionsDir: path.join(probeTmp, 'nope-gemini'),
+    });
+    expect(rows).toHaveLength(0);
+  });
+
   test('gemini: confirmation test — one row from JSON session file', () => {
     const geminiDir = path.join(probeTmp, 'gemini');
     writeGeminiSession(geminiDir, 'mm', 'session-g1.json',

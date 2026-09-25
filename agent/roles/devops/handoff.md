@@ -1,6 +1,6 @@
 # Devops Handoff
 
-Current state: the `ywu` current Codex prompt parser follow-up landed at HEAD (`d14565a`); production reload/backfill remains.
+Current state: the final `ywu` host-context filter passed audit at `ywu-38` and is included in HEAD; production cleanup/re-backfill remains.
 
 Contract implemented:
 - `MT_CODEX_SESSIONS_DIR` is an ordered `:` list with leading `~/` expansion and default `~/.codex/sessions`.
@@ -12,22 +12,25 @@ Contract implemented:
 - Watch uses `process.execPath` and emits child stderr only when diagnostics change.
 - Both managed processes receive `$AURORA_DATA/data/codex-home/sessions:~/.codex/sessions`.
 - Current Codex `response_item` user messages with `input_text` are parsed alongside legacy `event_msg` prompts.
+- Classified non-`user.text` and recognizable unannotated AGENTS/environment/plugin context records are excluded symmetrically by importer and probe.
 
-Incremental audit/commit scope:
-- `scripts/import-codex.ts`, `src/session-probe.ts`
-- `tests/active-agents.test.ts`, `tests/r1-session-index.test.ts`, this handoff
+Current audit/commit scope:
+- `src/codex-sessions.ts`, `scripts/import-codex.ts`, `src/session-probe.ts`
+- `tests/codex-sessions.test.ts`, `tests/active-agents.test.ts`, `tests/r1-session-index.test.ts`
+- this handoff
 
 Verification:
-- `bun test`: 147 pass, 0 fail, 721 expectations.
-- Targeted tests: 46 pass, 0 fail, 179 expectations.
+- `bun test`: 150 pass, 0 fail, 729 expectations.
+- Targeted tests: 52 pass, 0 fail, 191 expectations.
 - `bun run typecheck`: passed.
 - `git diff --check`: passed.
 - Real-root live probe over both stores: 14.4 ms, below the documented 50 ms target.
 - Minimal-PATH watcher test proves children start without `bun` on PATH and repeated missing-root stderr is emitted once.
 
 Production state:
-- Root-manifest reconciliation replaced both old processes; exactly one API and watcher run with the ordered env, and the plugin symlink remains intact.
-- First backfill found 180 winners / 4 shadowed copies but exposed the current-format gap: 179 skipped for min-turns. Do not treat that run as complete.
-- Reload HEAD, rerun the measured backfill range, and verify post-switch codex-home rows, four duplicate IDs, and `01a0adda…` in `meta/brain.db`.
+- Exactly one API and watcher run with the ordered env; the plugin symlink remains intact.
+- Full-history measurement found 1,928 winners, 4 shadowed copies, and 1,639 initially eligible sessions; 1,173 lacked raw events, including 1,101 before September 12.
+- The first full backfill imported 1,172 before verification exposed unannotated host-context inflation: filtering known host records makes 896 sessions fall below min-turns.
+- Reload HEAD in both processes, remove only false rows introduced by the bad backfill, rerun `--days 0 --force`, and verify coverage plus the required duplicate/post-switch rows in `meta/brain.db`.
 
 Unrelated dirty files belong to CTO/git work and must be excluded from this commit.

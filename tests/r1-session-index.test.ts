@@ -917,6 +917,85 @@ describe('R1 session linkage index', () => {
     db.close();
   });
 
+  test('Codex importer excludes unannotated host context from the user-turn threshold', () => {
+    const codexDir = path.join(tmpRoot, 'codex-unannotated-context');
+    const sessionFile = path.join(codexDir, '2026', '09', '24', 'rollout.jsonl');
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(sessionFile, [
+      {
+        timestamp: '2026-09-24T10:00:00Z',
+        type: 'session_meta',
+        payload: { id: 'sess-codex-unannotated-context', cwd: '/Users/test/work/mm' },
+      },
+      {
+        timestamp: '2026-09-24T10:00:01Z',
+        type: 'response_item',
+        payload: {
+          type: 'message', role: 'user',
+          content: [{ type: 'input_text', text: '# AGENTS.md instructions for /Users/test/work/mm\n<INSTRUCTIONS>host context</INSTRUCTIONS>' }],
+        },
+      },
+      {
+        timestamp: '2026-09-24T10:00:01.5Z',
+        type: 'event_msg',
+        payload: { type: 'task_started' },
+      },
+      {
+        timestamp: '2026-09-24T10:00:02Z',
+        type: 'response_item',
+        payload: {
+          type: 'message', role: 'user',
+          content: [{ type: 'input_text', text: 'one genuine prompt' }],
+        },
+      },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+
+    const imported = Bun.spawnSync({
+      cmd: [
+        'bun', 'scripts/import-codex.ts', '--sessions-dir', codexDir,
+        '--days', '365', '--force', '--min-turns', '2',
+      ],
+      cwd: REPO,
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot, MT_AC_DB_PATH: acDbPath },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    expect(imported.exitCode).toBe(0);
+    const db = openBrainDb();
+    expect(db.prepare(
+      `SELECT id FROM raw_events WHERE external_id = 'codex:sess-codex-unannotated-context'`
+    ).get()).toBeNull();
+    expect(db.prepare(
+      `SELECT min_turns_ok, last_user_snippet FROM import_state
+       WHERE provider = 'codex' AND external_id = 'sess-codex-unannotated-context'`
+    ).get()).toEqual({ min_turns_ok: 0, last_user_snippet: 'one genuine prompt' });
+    db.close();
+  });
+
+  test('Codex importer structurally excludes unknown pre-turn bootstrap text', () => {
+    const codexDir = path.join(tmpRoot, 'codex-unknown-bootstrap');
+    const sessionFile = path.join(codexDir, '2026', '09', '24', 'rollout.jsonl');
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(sessionFile, [
+      { timestamp: '2026-09-24T10:00:00Z', type: 'session_meta', payload: { id: 'sess-codex-unknown-bootstrap', cwd: '/Users/test/work/mm' } },
+      { timestamp: '2026-09-24T10:00:01Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'future host bootstrap shape' }] } },
+      { timestamp: '2026-09-24T10:00:02Z', type: 'event_msg', payload: { type: 'task_started' } },
+      { timestamp: '2026-09-24T10:00:03Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'one genuine prompt' }] } },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+
+    const imported = Bun.spawnSync({
+      cmd: ['bun', 'scripts/import-codex.ts', '--sessions-dir', codexDir, '--days', '365', '--force', '--min-turns', '2'],
+      cwd: REPO,
+      env: { ...process.env, MT_BRAIN_ROOT: tmpRoot, MT_AC_DB_PATH: acDbPath },
+      stdout: 'pipe', stderr: 'pipe',
+    });
+    expect(imported.exitCode).toBe(0);
+    const db = openBrainDb();
+    expect(db.prepare(`SELECT id FROM raw_events WHERE external_id = 'codex:sess-codex-unknown-bootstrap'`).get()).toBeNull();
+    db.close();
+  });
+
   test('Codex importer does not promote a recent fallback when the primary copy is outside the days window', () => {
     const primaryDir = path.join(tmpRoot, 'codex-primary');
     const fallbackDir = path.join(tmpRoot, 'codex-fallback');

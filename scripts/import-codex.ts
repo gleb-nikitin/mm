@@ -22,7 +22,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { initDb, db, upsertRawEvent } from '../src/core.ts';
 import {
+  codexFirstTurnBoundary,
   codexRootPriorityForPath,
+  isCodexInjectedUserContext,
   readCodexSessionId,
   resolveCodexSessionRoots,
   selectCodexSessionWinners,
@@ -211,8 +213,12 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
   let model: string | null = null;
   const turns: Turn[] = [];
   const legacyUserTurns: Turn[] = [];
-  const currentUserTurns: { turn: Turn; explicitlyUserAuthored: boolean }[] = [];
+  const currentUserTurns: { turn: Turn; explicitlyUserAuthored: boolean; recordIndex: number }[] = [];
   const pendingThinking: Block[] = [];
+  let recordIndex = -1;
+  let firstCurrentUserRecord = -1;
+  let firstTaskStartedRecord = -1;
+  let firstTurnContextRecord = -1;
 
   const flushPendingThinking = () => {
     pendingThinking.length = 0;
@@ -228,6 +234,7 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
     } catch {
       continue;
     }
+    recordIndex++;
 
     const recordType = rec?.type;
     const timestamp = getRecordTimestamp(rec);
@@ -241,8 +248,14 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
     }
 
     if (recordType === 'turn_context') {
+      if (firstTurnContextRecord < 0) firstTurnContextRecord = recordIndex;
       if (!cwd && typeof payload.cwd === 'string' && payload.cwd) cwd = payload.cwd;
       if (!model && typeof payload.model === 'string' && payload.model) model = payload.model;
+      continue;
+    }
+
+    if (recordType === 'event_msg' && payload.type === 'task_started') {
+      if (firstTaskStartedRecord < 0) firstTaskStartedRecord = recordIndex;
       continue;
     }
 
@@ -262,7 +275,9 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
     if (recordType === 'response_item' && payload.type === 'message' && payload.role === 'user') {
       const message = extractUserText(payload.content);
       const contentKinds = payload?.internal_chat_message_metadata_passthrough?.content_item_kinds;
-      const isUserAuthored = !Array.isArray(contentKinds) || contentKinds.includes('user.text');
+      const explicitlyClassified = Array.isArray(contentKinds);
+      if (message && firstCurrentUserRecord < 0) firstCurrentUserRecord = recordIndex;
+      const isUserAuthored = !explicitlyClassified || contentKinds.includes('user.text');
       if (message && isUserAuthored) {
         flushPendingThinking();
         currentUserTurns.push({
@@ -271,7 +286,8 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
             timestamp,
             blocks: [{ kind: 'text', text: message }],
           },
-          explicitlyUserAuthored: Array.isArray(contentKinds),
+          explicitlyUserAuthored: explicitlyClassified,
+          recordIndex,
         });
       }
       continue;
@@ -302,11 +318,23 @@ function parseRolloutFile(filePath: string, includeThinking: boolean): Session |
 
   if (!sessionId) return null;
   const legacyKeys = new Set(legacyUserTurns.map(turn => `${turn.timestamp}\0${turn.blocks[0]?.text ?? ''}`));
+  const firstTurnBoundary = codexFirstTurnBoundary(
+    firstCurrentUserRecord,
+    firstTaskStartedRecord,
+    firstTurnContextRecord,
+  );
   turns.push(...legacyUserTurns);
   for (const current of currentUserTurns) {
     const key = `${current.turn.timestamp}\0${current.turn.blocks[0]?.text ?? ''}`;
     if (legacyKeys.has(key)) continue;
     if (legacyUserTurns.length > 0 && !current.explicitlyUserAuthored) continue;
+    if (
+      !current.explicitlyUserAuthored
+      && isCodexInjectedUserContext(
+        current.turn.blocks[0]?.text ?? '',
+        firstTurnBoundary >= 0 && current.recordIndex < firstTurnBoundary,
+      )
+    ) continue;
     turns.push(current.turn);
   }
   turns.sort((a, b) => (a.timestamp > b.timestamp ? 1 : a.timestamp < b.timestamp ? -1 : 0));

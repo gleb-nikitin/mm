@@ -9,6 +9,38 @@ export type CodexSessionCandidate = {
   mtimeMs: number;
 };
 
+const CODEX_INJECTED_USER_PREFIXES = [
+  '# AGENTS.md instructions for ',
+  '<environment_context>',
+  '<recommended_plugins>',
+  '<permissions instructions>',
+  '<apps_instructions>',
+  '<skills_instructions>',
+  '<plugins_instructions>',
+];
+
+export function codexFirstTurnBoundary(
+  firstUserRecord: number,
+  firstTaskStartedRecord: number,
+  firstTurnContextRecord: number,
+): number {
+  if (firstTaskStartedRecord >= 0) {
+    return firstUserRecord >= 0 && firstUserRecord < firstTaskStartedRecord
+      ? firstTaskStartedRecord
+      : firstTurnContextRecord >= 0
+        ? firstTurnContextRecord
+        : firstTaskStartedRecord;
+  }
+  return firstTurnContextRecord;
+}
+
+export function isCodexInjectedUserContext(text: string, beforeFirstTurn = false): boolean {
+  const trimmed = text.trimStart();
+  if (CODEX_INJECTED_USER_PREFIXES.some(prefix => trimmed.startsWith(prefix))) return true;
+  // Older IDE rollouts wrap a real prompt in a pre-turn context record; its explicit request marker distinguishes it.
+  return beforeFirstTurn && !trimmed.includes('## My request for Codex:');
+}
+
 export function readCodexSessionId(sourcePath: string): string | null {
   const fd = fs.openSync(sourcePath, 'r');
   try {

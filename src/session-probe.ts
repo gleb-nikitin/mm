@@ -12,7 +12,9 @@
 import type { ActiveAgentRow, ActiveAgentsResult } from './core';
 import { resolveParticipantIdsWithStatus } from './core';
 import {
+  codexFirstTurnBoundary,
   identifyCodexSessionId,
+  isCodexInjectedUserContext,
   resolveCodexSessionRoots,
   selectCodexSessionWinners,
   type CodexSessionCandidate,
@@ -251,9 +253,13 @@ function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): Co
   let cwd: string | null = null;
   let model: string | null = null;
   const legacyUsers: { timestamp: string; text: string }[] = [];
-  const currentUsers: { timestamp: string; text: string; explicitlyUserAuthored: boolean }[] = [];
+  const currentUsers: { timestamp: string; text: string; explicitlyUserAuthored: boolean; recordIndex: number }[] = [];
   let latestTs = '';
   let latestText: string | null = null;
+  let recordIndex = -1;
+  let firstCurrentUserRecord = -1;
+  let firstTaskStartedRecord = -1;
+  let firstTurnContextRecord = -1;
 
   for (const line of content.split('\n')) {
     const trimmed = line.trim();
@@ -264,6 +270,7 @@ function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): Co
     } catch {
       continue;
     }
+    recordIndex++;
     const recordType = rec?.type;
     const ts = typeof rec?.timestamp === 'string' ? rec.timestamp : '';
     const payload = rec?.payload || {};
@@ -271,6 +278,18 @@ function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): Co
     if (recordType === 'session_meta') {
       if (typeof payload.cwd === 'string' && payload.cwd) cwd = payload.cwd;
       if (typeof payload.model === 'string' && payload.model) model = payload.model;
+      continue;
+    }
+
+    if (recordType === 'turn_context') {
+      if (firstTurnContextRecord < 0) firstTurnContextRecord = recordIndex;
+      if (!cwd && typeof payload.cwd === 'string' && payload.cwd) cwd = payload.cwd;
+      if (!model && typeof payload.model === 'string' && payload.model) model = payload.model;
+      continue;
+    }
+
+    if (recordType === 'event_msg' && payload.type === 'task_started') {
+      if (firstTaskStartedRecord < 0) firstTaskStartedRecord = recordIndex;
       continue;
     }
 
@@ -285,12 +304,15 @@ function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): Co
     if (recordType === 'response_item' && payload.type === 'message' && payload.role === 'user') {
       const text = extractCodexUserText(payload.content);
       const contentKinds = payload?.internal_chat_message_metadata_passthrough?.content_item_kinds;
-      const isUserAuthored = !Array.isArray(contentKinds) || contentKinds.includes('user.text');
+      const explicitlyClassified = Array.isArray(contentKinds);
+      if (text && firstCurrentUserRecord < 0) firstCurrentUserRecord = recordIndex;
+      const isUserAuthored = !explicitlyClassified || contentKinds.includes('user.text');
       if (text && isUserAuthored) {
         currentUsers.push({
           timestamp: ts,
           text,
-          explicitlyUserAuthored: Array.isArray(contentKinds),
+          explicitlyUserAuthored: explicitlyClassified,
+          recordIndex,
         });
       }
       continue;
@@ -306,11 +328,20 @@ function probeCodex(candidate: CodexSessionCandidate, maxAgeSeconds: number): Co
   }
 
   const legacyKeys = new Set(legacyUsers.map(user => `${user.timestamp}\0${user.text}`));
+  const firstTurnBoundary = codexFirstTurnBoundary(
+    firstCurrentUserRecord,
+    firstTaskStartedRecord,
+    firstTurnContextRecord,
+  );
   const selectedUsers = [
     ...legacyUsers,
     ...currentUsers.filter(user => {
       if (legacyKeys.has(`${user.timestamp}\0${user.text}`)) return false;
-      return legacyUsers.length === 0 || user.explicitlyUserAuthored;
+      if (legacyUsers.length > 0 && !user.explicitlyUserAuthored) return false;
+      return user.explicitlyUserAuthored || !isCodexInjectedUserContext(
+        user.text,
+        firstTurnBoundary >= 0 && user.recordIndex < firstTurnBoundary,
+      );
     }),
   ];
   for (const user of selectedUsers) {
